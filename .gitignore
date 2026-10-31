@@ -1,0 +1,23 @@
+# Lean / Lake build output
+/.lake/
+/build/
+*.olean
+*.ilean
+*.trace
+*.hash
+*.c.o
+
+# lake-manifest.json is the lockfile and is deliberately tracked:
+# it pins the exact Mathlib (and transitive) revs these proofs were checked against.
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Scratch and logs
+*.log
+/tmp/
+/scratch/

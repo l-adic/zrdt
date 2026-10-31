@@ -1,0 +1,22 @@
+name = "zrdt"
+version = "0.1.0"
+# axiom_check MUST stay in defaultTargets: the #guard_msgs axiom gate in
+# Test/Axioms.lean only fires when that module is elaborated, and a plain
+# `lake build` must run it so drift cannot land silently.
+defaultTargets = ["Crdt", "axiom_check"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.35.0"
+
+[[lean_lib]]
+name = "Crdt"
+
+[[lean_lib]]
+name = "Test"
+globs = ["Test.+"]
+
+[[lean_exe]]
+name = "axiom_check"
+root = "Test.Axioms"
