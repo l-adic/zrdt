@@ -440,8 +440,9 @@ Touchpoints **(paths verified; line numbers from the review)**: **[amendment]**
    **Wave 2 finding** **[amendment]**: on one machine the fast path is so quick that "relayed by
    Bob" is replaced by "confirmed by Alice" before anyone (or `demo/smoke.ts`) sees it; the
    status records `wasRelayed: true` with provenance `live`. Beat 2 needs the relayed label on
-   screen for a moment; wave 3 fixes this in the fork (TODO: hold the fast path for the demo
-   delay, or show "relayed by Bob, confirmed by Alice").
+   screen for a moment. Wave 3: the receiver waits `ZRDT_AUTHOR_FASTPATH_DELAY_MS` (default 0;
+   3000 in the demo harness) before asking the author, and skips the ask if the live copy came
+   meanwhile; "relayed by Bob" then shows for about 3 s.
 10. **Upgrade, never drop.** If the author's live copy arrives later (fast path or a delayed
     original), it upgrades the provenance of the same digest to `live`. Desktop's
     `(sent_at, sourceServiceId)` dedupe (`handleDataMessage.preload.ts:124-145`) must never silently

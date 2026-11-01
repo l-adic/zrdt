@@ -19,10 +19,11 @@ hash links to the messages its sender had seen, and a verified Lean core checks 
 **[amendment]**
 
 > A server cannot make a member's app accept a history with a hole in it: if any later message
-> builds on one you lack, you are told and it is fetched. Two members can confirm with one code
-> that they hold the same set of messages; once the server splits a group it can never merge it
-> back without the gap showing. The server can still delay, hold back the newest messages until
-> someone replies or members compare, and deliver concurrent messages in different orders.
+> builds on one you lack, you are told, and your app asks for it. Two members can confirm with
+> one code that they hold the same set of messages; once the server splits a group it can never
+> merge it back without the gap showing. The server can still delay, hold back the newest
+> messages until someone replies or members compare, and deliver concurrent messages in
+> different orders.
 
 Signal provides confidentiality and sender authentication. zrdt provides completeness and
 consistency of the history. The core is written in Lean without Mathlib, proved in Lean with
@@ -923,8 +924,13 @@ The beats total ≤ 4 minutes (235 s), leaving time for the intro and the proof 
 
 ## 10. Status snapshot (2026-11-01, wave 3) **[amendment]**
 
-**zrdt repo** (branch `review/2026-11-01-plan-amendments`, `7f327ff`): `lake build` is clean and
-runs the gate; `lake exe axiom_check` prints `axiom gate passed`.
+**zrdt repo** (branch `review/2026-11-01-plan-amendments`, `7f327ff`, plus wave 3 on
+`build/w3-merge`): `lake build` is clean and runs the gate; `lake exe axiom_check` prints
+`axiom gate passed`. Wave 3 Lean lane: `abs_accept` (`AcceptMeans`) also says outright that an
+accepted record's links were all held and the record is in the new store; `Api.lean` has an
+`agree` example across two accept orders; `committedBytes_idem` and `commitWithOpening_matches`
+(`core/Zrdt/Commit.lean`) prove that `COMMIT`'s opening always passes the opening check; the gate
+also pins these and some spec obligations.
 
 - **Spec** (`Crdt/Merkle/`): `Defs`, `Integrity` (`fetched_agree`, `fetched_of_build`; the
   `_global` forms are gone), `Chat` (`fetched_build`, `fetched_union`, `acceptBuilt_union`,
@@ -939,9 +945,14 @@ runs the gate; `lake exe axiom_check` prints `axiom gate passed`.
   (`CheckedStore`), `Commit`, `Provenance`, `Proto` (protocol 2: `ACCEPT` returns the record
   bytes, `COMMIT` the opening, `ACCEPT_RECORD` `0x10` with `BAD_OPENING`; blob count limit),
   `Vectors` (checked in `lake build`), and `zrdtd`. The closure check passes on the `zrdtd`
-  built at `79e3dfa` (`core/` is unchanged since).
-- **Not written**: `Test/Differential.lean` (rung 5), `Comparator/` and `make comparator`
-  (rung 9; wave 3 Lean lane), `proxy/` (stretch).
+  built at `79e3dfa` and again on `build/w3-merge`. Wave 3 changed `core/` (the `COMMIT` lemmas),
+  so `zrdtd`'s `VERSION` build id is now `26a279935e388ed8`; the fork's submodule is still at
+  `79e3dfa`.
+- **Comparator** (rung 9): `Comparator/Challenge.lean` (the 11 statements with `sorry`, not a
+  default target), `comparator.json`, `make comparator`, `make check` and `make comparator-local`
+  are written and have **not been run**. They re-check all of Mathlib and ran out of memory on
+  the 63 GB Linux box; they run once, as the last step, with kejace's approval.
+- **Not written**: `Test/Differential.lean` (rung 5), `proxy/` (stretch).
 
 **Fork** (`l-adic/signal-desktop-zrdt`, branch `zrdt`, `eb895b411`; Mac checkout with the zrdt
 submodule at `79e3dfa`): `ts/zrdt/` (service, backends daemon/stub/codec, scope, send, receive,
@@ -960,7 +971,11 @@ still to write.
   the fast path, or have the test accept a recorded relayed state). Beats 4 and 5 are not in the
   smoke test yet.
 - Wave 3 (2–3 h): the beat 2 fix, beats 4 and 5 in the smoke test, `DEMO.md`, Comparator, this
-  README and these documents.
+  README and these documents. Results: the fork holds the author fast path for
+  `ZRDT_AUTHOR_FASTPATH_DELAY_MS` (3 s in the demo harness), and beats 1 to 3 pass 26/26 with it;
+  `demo/smoke.ts` covers beats 4 and 5 and passed 41/41 on its branch; `demo/DEMO.md` and a
+  MacBook kit (`demo/pack.sh`, `demo/run-demo.sh`) are written. The merged fork branch is checked
+  again before the demo. Comparator is written, not run.
 
 History: phase 1 is `06192c1`; the plan documents `383a9fb`..`690ae65`; the review `52d9e15`
 (merged in `e135eff`, PR #1); lanes L1 (`567c2be`), L2/L3 (`e2b3160`), T5 (`dcc2982`) and proofs

@@ -332,7 +332,7 @@ theorem fetched_build (h : AcceptBuilt hash s) :
 Each incoming record gets one answer:
 
 - **accepted**: the store grows exactly as the spec's `accept` says, and the digest returned is the
-  record's hash;
+  record's hash; every link of the record was already held, and the record is now in the store;
 - **missing** (some links do not resolve; the answer names them), **collision** (a different record
   with the same hash is already there), **wrong chat**, or **too large**: the store is unchanged,
   and the stated reason is true.
@@ -344,7 +344,8 @@ record from another chat fails and leaves the store as it was.
 ```lean
 theorem CheckedStore.abs_accept (c) (r) : AcceptMeans c r (c.accept r)
   -- AcceptMeans (Refine.lean), one case per result:
-  -- accepted d ⇒ abs c' = accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
+  -- accepted d ⇒ abs c' = accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r ∧
+  --   (toSpec r).links ⊆ digests hashSpec (abs c) ∧ toSpec r ∈ abs c'
   -- missing / collision / wrongChat / tooLarge ⇒ c' = c ∧ (the stated reason holds)
 theorem CheckedStore.abs_merge (h : c.merge d = .ok e) : abs e = abs c ∪ abs d
 ```
