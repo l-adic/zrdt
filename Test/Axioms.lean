@@ -4,6 +4,7 @@ Released under the MIT license as described in the file LICENSE.
 Authors: crdt-lean contributors
 -/
 import Crdt
+import Zrdt.Proto
 
 /-!
 # Axiom footprint gate
@@ -240,6 +241,30 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.encode_injective' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.encode_injective
+
+-- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
+-- above stand on (`Crdt/Merkle/Chat.lean`), and the two checks of lane T5 in the shipped code
+-- (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
+-- axiom in them fails the build too; they are not part of what docs/PLAN.md §3.2 promises, and
+-- `comparator.json` does not list them.
+
+/-- info: 'Crdt.Merkle.authorConfirmed_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.authorConfirmed_sound
+
+/-- info: 'Crdt.Merkle.salvage_maximal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.salvage_maximal
+
+/-- info: 'Crdt.Merkle.confirmed_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.confirmed_exact
+
+/-- info: 'Crdt.Merkle.fetched_union' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.fetched_union
+
+/-- info: 'Zrdt.Proto.acceptRecord_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptRecord_accepted
+
+/-- info: 'Zrdt.openingMatches_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.openingMatches_spec
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

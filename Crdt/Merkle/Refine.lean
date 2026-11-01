@@ -15,10 +15,11 @@ set_option linter.unusedSectionVars false
 what each operation of `Zrdt.CheckedStore` does to `abs c`, in the words of the spec
 (`Crdt.Merkle`):
 
-* `accept` (`abs_accept_accepted`, `abs_accept_missing`, `abs_accept_collision`,
+* `accept` (`abs_accept_accepted`, `accepted_mem`, `abs_accept_missing`, `abs_accept_collision`,
   `abs_accept_wrongChat`, `abs_accept_tooLarge`; together `accept_means`, read by `AcceptMeans`):
-  an accepted record is the spec's `accept`; any other result leaves the store as it was, and
-  says why. The `missing` list is exactly the links the spec store does not hold.
+  an accepted record is the spec's `accept`, its links were all in the store, and it is in the
+  new store; any other result leaves the store as it was, and says why. The `missing` list is
+  exactly the links the spec store does not hold.
 * `acceptAll` (`abs_acceptAll`): a batch adds only its own records, keeps the store's, and each
   record left over is refused by the spec's `accept` (or by a collision, the chat, or size).
 * `merge` (`merge_abs`): a merged store holds the records of both stores.
@@ -494,6 +495,23 @@ theorem abs_accept_accepted {c c' : CheckedStore} {r : Rec} {d : Digest}
     rw [mem_toSpec_links] at hl
     exact c.built.mem_digests_abs.mpr (hlinks l hl)
 
+/-- **Accepted, the record is in.** In the `accepted` case every link of the record is the digest
+of a record of the old spec store, and the record is in the new spec store. -/
+theorem accepted_mem {c c' : CheckedStore} {r : Rec} {d : Digest}
+    (h : c.accept r = (.accepted d, c')) :
+    (toSpec r).links ⊆ digests hashSpec (abs c) ∧ toSpec r ∈ abs c' := by
+  have hraw : rawAccept c.raw r = (.accepted d, c'.raw) := by
+    have e : rawAccept c.raw r = ((c.accept r).1, (c.accept r).2.raw) := rfl
+    rw [e, h]
+  have hlinks := rawAccept_accepted_links c.built hraw
+  have hsub : (toSpec r).links ⊆ digests hashSpec (abs c) := by
+    intro l hl
+    rw [mem_toSpec_links] at hl
+    exact c.built.mem_digests_abs.mpr (hlinks l hl)
+  refine ⟨hsub, ?_⟩
+  rw [(abs_accept_accepted h).1]
+  simp [Crdt.Merkle.accept, hsub]
+
 /-- **Missing.** The store is unchanged, and so is the spec store under the spec's `accept`. The
 list is exactly the links of the record that no spec record has as digest (sound and
 complete), it is not empty, and it is sorted. -/
@@ -573,8 +591,9 @@ example : abs Examples.s1 = Crdt.Merkle.accept hashSpec
 /-- **What the result of `accept c r` means**, for the new store `c'` (advertised through
 `abs_accept` in `Api.lean`):
 
-* `accepted d`: the spec store of `c'` is the spec's `accept` of `toSpec r` (the record is added,
-  since its links resolve; it may have been there already), and `d` is the record's digest.
+* `accepted d`: the spec store of `c'` is the spec's `accept` of `toSpec r`, and `d` is the
+  record's digest. Also said outright: every link of `r` is the digest of a record of the old
+  store, and `toSpec r` is in the new store (it is added; it may have been there already).
 * `missing ds`: nothing changed; `ds` is not empty, and it is exactly the links of `r` that are
   not the digest of any record in the store.
 * `collision d`: nothing changed; `d` is the digest of `r`, and the store holds a different
@@ -583,7 +602,8 @@ example : abs Examples.s1 = Crdt.Merkle.accept hashSpec
 * `tooLarge`: nothing changed; `r` has too many links, or it is new and the store is full. -/
 def _root_.Zrdt.AcceptMeans (c : CheckedStore) (r : Rec) : AcceptResult × CheckedStore → Prop
   | (.accepted d, c') =>
-    abs c' = Crdt.Merkle.accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
+    abs c' = Crdt.Merkle.accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r ∧
+      (toSpec r).links ⊆ digests hashSpec (abs c) ∧ toSpec r ∈ abs c'
   | (.missing ds, c') =>
     c' = c ∧ ds ≠ #[] ∧ ∀ x, x ∈ ds ↔ x ∈ (toSpec r).links ∧ x ∉ digests hashSpec (abs c)
   | (.collision d, c') =>
@@ -600,7 +620,9 @@ example (c : CheckedStore) (r : Rec) : ¬ AcceptMeans c r (.missing #[], c) := b
 theorem accept_means (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) := by
   rcases h : c.accept r with ⟨res, c'⟩
   cases res with
-  | accepted d => exact abs_accept_accepted h
+  | accepted d =>
+    obtain ⟨h1, h2⟩ := abs_accept_accepted h
+    exact ⟨h1, h2, accepted_mem h⟩
   | missing ds =>
     obtain ⟨h1, -, h2, h3, -⟩ := abs_accept_missing h
     exact ⟨h1, h2, h3⟩

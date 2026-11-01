@@ -99,6 +99,31 @@ example : abs Examples.storeAB = abs Examples.storeAB ∨
     CollisionIn hashSpec (abs Examples.storeAB ∪ abs Examples.storeAB) :=
   Examples.storeAB.agree Examples.storeAB rfl
 
+/-- Alice's store: her message `a1`, then Bob's reply `b1`, then Carol's reply `c1`. -/
+def Examples.aliceStore : CheckedStore :=
+  ((((CheckedStore.empty Examples.group).accept Examples.a1).2.accept Examples.b1).2.accept
+    Examples.c1).2
+
+/-- Bob's store: the same three records, the two replies in the other order. -/
+def Examples.bobStore : CheckedStore :=
+  ((((CheckedStore.empty Examples.group).accept Examples.a1).2.accept Examples.c1).2.accept
+    Examples.b1).2
+
+/-- The two stores were built in different orders, and they have the same heads (`b1` and
+`c1`). The kernel computes both lists of heads; equal lists give equal sets. -/
+theorem Examples.aliceStore_heads_eq_bobStore : Examples.aliceStore.heads = Examples.bobStore.heads := by
+  have hl : Examples.aliceStore.heads.toList = Examples.bobStore.heads.toList := by
+    decide +kernel
+  apply Std.ExtTreeSet.ext_mem
+  intro x
+  rw [← Std.ExtTreeSet.mem_toList, ← Std.ExtTreeSet.mem_toList, hl]
+
+-- `agree` on two stores built in different orders: same heads, so the same records (or a
+-- collision).
+example : abs Examples.aliceStore = abs Examples.bobStore ∨
+    CollisionIn hashSpec (abs Examples.aliceStore ∪ abs Examples.bobStore) :=
+  CheckedStore.agree _ _ Examples.aliceStore_heads_eq_bobStore
+
 /-! ## The statements reject bad stores
 
 A store that holds a reply but not the message it links is not fetched from its heads: the link
@@ -153,8 +178,9 @@ example : ¬ (({toSpec Examples.first} : SpecStore) = {toSpec Examples.a1} ∨
 /-! ## Part 2: accept, merge, open, salvage, encode, confirmation -/
 
 /-- **`accept`, in the spec model.** Every result of `accept` means what `AcceptMeans` says: an
-accepted record is the spec's `accept`; any other result leaves the store as it was and gives
-the reason. The `missing` list is exact. -/
+accepted record is the spec's `accept`, every link of it is the digest of a record the store
+already held, and the record is in the new store; any other result leaves the store as it was
+and gives the reason. The `missing` list is exact. -/
 theorem CheckedStore.abs_accept (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) :=
   CheckedStore.accept_means c r
 
