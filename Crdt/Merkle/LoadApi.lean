@@ -121,6 +121,20 @@ theorem not_collisionIn_specOf {u : Array Rec} (h : NoCollision u) :
   simp only [hashSpec_toSpec] at hh
   exact hne (congrArg toSpec (h x hx y hy hh))
 
+/-- The model's condition rejects a bad blob: `b1` alone (its link, `a1`, cut out) is not
+accept-built, so by `open_iff` no blob holding exactly `b1` opens. -/
+example : ¬ AcceptBuilt hashSpec (specOf #[Examples.b1]) := by
+  rintro ⟨l, -, hb⟩
+  have hc : Closed hashSpec (specOf #[Examples.b1]) := hb ▸ closed_build hashSpec l
+  obtain ⟨R, hR, he⟩ := hc (toSpec Examples.b1) (toSpec_mem_specOf.mpr (by simp))
+    (hashRecord Examples.a1) (by simp [Examples.b1])
+  obtain ⟨r, hr, rfl⟩ := mem_specOf.mp hR
+  simp only [List.mem_toArray, List.mem_cons, List.not_mem_nil, or_false] at hr
+  subst hr
+  rw [hashSpec_toSpec] at he
+  revert he
+  decide +kernel
+
 /-- **`salvage`, over the model.** If `salvage g b` loads `s`, and `b` holds the records `u`, then
 the records have no collision, the store holds exactly what the model's salvage `buildRetry`
 keeps, it is of chat `g`, and `dropped` is sorted and holds exactly the digests of the other
