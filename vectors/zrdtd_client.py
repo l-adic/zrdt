@@ -20,9 +20,9 @@ import time
 
 OP = {name: i + 1 for i, name in enumerate(
     "VERSION NEW OPEN SALVAGE COMMIT HASH ACCEPT HEADS HAS GET REACH_SET MERGE CLASSIFY "
-    "ENCODE CLOSE ACCEPT_RECORD".split())}
+    "ENCODE CLOSE ACCEPT_RECORD AUDIENCE SERVE ADDRESSED".split())}
 (OK, MISSING, COLLISION, WRONG_CHAT, TOO_LARGE, MALFORMED, UNVERIFIABLE, NOT_FOUND,
- BAD_OPENING) = range(9)
+ BAD_OPENING, NO_AUDIENCE) = range(10)
 
 
 def u32(n):
@@ -139,7 +139,7 @@ def smoke(path, n):
     for i in range(n):
         commit = hashlib.sha256(b"message %d" % i).digest()
         links = [prev] if prev else []
-        body = chat("bench") + parts(group, commit, links, author)
+        body = chat("bench") + parts(group, commit, links, author) + b"\x00"  # no opening
         t0 = time.perf_counter()
         reply = z.call("ACCEPT", body)
         spent += time.perf_counter() - t0

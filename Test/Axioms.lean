@@ -5,6 +5,7 @@ Authors: crdt-lean contributors
 -/
 import Crdt
 import Zrdt.Proto
+import Zrdt.Serve
 
 /-!
 # Axiom footprint gate
@@ -275,6 +276,48 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
+
+-- SERVE (docs/JOIN_PLAN.md §5, §7.1; `core/Zrdt/Serve.lean`, `core/Zrdt/Proto.lean`). Not
+-- advertised yet: JOIN_PLAN §7.3 adds `serve_content` to `Api.lean` with the relative store.
+
+/-- info: 'Zrdt.Serve.serveOpening_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serveOpening_spec
+
+/-- info: 'Zrdt.Serve.serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_content
+
+/-- info: 'Zrdt.Serve.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_content_complete
+
+/-- info: 'Zrdt.Serve.serve_authorCopy' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_authorCopy
+
+/-- info: 'Zrdt.Serve.serve_strict' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_strict
+
+/-- info: 'Zrdt.Serve.serve_export' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_export
+
+/-- info: 'Zrdt.Serve.serve_after' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_after
+
+/-- info: 'Zrdt.Serve.serve_boundary' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_boundary
+
+/-- info: 'Zrdt.Serve.audience_bound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.audience_bound
+
+/-- info: 'Zrdt.Proto.accept_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.accept_accepted
+
+/-- info: 'Zrdt.Proto.run_serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_serve_content
+
+/-- info: 'Zrdt.Proto.run_audience' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_audience
+
+/-- info: 'Zrdt.Proto.run_addressed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_addressed
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
