@@ -2,8 +2,9 @@
 """A small frame client for zrdtd (layouts: core/Zrdt/Proto.lean).
 
     zrdtd_client.py vectors ZRDTD [VECTORS_JSON]   rung 6: every session step gives its reply
-    zrdtd_client.py smoke ZRDTD [N]                NEW, N chained ACCEPTs, HEADS, ENCODE, CLOSE,
-                                                   OPEN of that blob; prints round-trip times
+    zrdtd_client.py smoke ZRDTD [N]                NEW, N chained ACCEPT_RECORDs (structure only),
+                                                   HEADS, ENCODE, CLOSE, OPEN of that blob; prints
+                                                   round-trip times
     zrdtd_client.py framing ZRDTD                  short writes, pipelining, end of input
 
 ZRDTD is the path of the zrdtd binary. It is started with LEAN_ABORT_ON_PANIC=1.
@@ -140,19 +141,21 @@ def smoke(path, n):
     for i in range(n):
         commit = hashlib.sha256(b"message %d" % i).digest()
         links = [prev] if prev else []
-        body = chat("bench") + parts(group, commit, links, author) + b"\x00"  # no opening
+        # ACCEPT always takes an opening (protocol 4); a record without one goes in with
+        # ACCEPT_RECORD, whose reply has the same layout.
+        enc = record_encoding(group, commit, links, author)
+        body = chat("bench") + bstr(enc) + b"\x00"  # no opening: structure only
         t0 = time.perf_counter()
-        reply = z.call("ACCEPT", body)
+        reply = z.call("ACCEPT_RECORD", body)
         spent += time.perf_counter() - t0
         if i == n // 10 - 1:
             first_tenth = spent
         if reply[0] != OK:
-            print("ACCEPT %d: status %d" % (i, reply[0]))
+            print("ACCEPT_RECORD %d: status %d" % (i, reply[0]))
             return False
         # Check the digest and the record bytes against an independent encoding and hashlib.
-        enc = record_encoding(group, commit, links, author)
         if reply[1:33] != hashlib.sha256(enc).digest() or reply[33:] != bstr(enc):
-            print("ACCEPT %d: digest or record bytes differ from hashlib" % i)
+            print("ACCEPT_RECORD %d: digest or record bytes differ from hashlib" % i)
             ok = False
         prev = reply[1:33]
     accept_us = spent / n * 1e6
@@ -180,7 +183,7 @@ def smoke(path, n):
     ok &= code == 0
     print("smoke: %s" % ("pass" if ok else "FAIL"))
     print("  VERSION round trip: %.1f us (mean of 1000)" % version_us)
-    print("  ACCEPT round trip, %d chained records: %.1f us each (first tenth: %.1f us each)" % (
+    print("  ACCEPT_RECORD round trip, %d chained records: %.1f us each (first tenth: %.1f us each)" % (
         n, accept_us, first_us))
     print("  ENCODE of %d records (%d bytes): %.1f ms; OPEN of that blob: %.1f ms" % (
         n, len(blob), encode_ms, open_ms))

@@ -308,6 +308,18 @@ def m1 : Rec := Rec.make group m1Opened.1 #[hashRecord a1] alice
 /-- The same commit and links in Bob's name: Alice's opening does not belong to it. -/
 def m1AsBob : Rec := Rec.make group m1Opened.1 #[hashRecord a1] bob
 
+/-- `m1Message` committed in another group: its commitment and its opening. -/
+def m1ForeignOpened : Digest × ByteArray :=
+  (commitWithOpening otherGroup alice nonce m1Message).getD (Digest.zero, .empty)
+
+/-- A record of another group whose opening (`m1ForeignOpened`) matches it. -/
+def m1Foreign : Rec := Rec.make otherGroup m1ForeignOpened.1 #[] alice
+
+/-- `m1`'s commit with 4097 links: too large, though its opening matches. -/
+def m1TooLarge : Rec := Rec.make group m1Opened.1 tooManyLinks.links alice
+
+#guard openingMatches otherGroup alice m1Foreign.commit m1ForeignOpened.2 &&
+  openingMatches group alice m1TooLarge.commit m1Opened.2 && !m1TooLarge.WellSized
 #guard openingMatches group alice m1.commit m1Opened.2 && m1Opened.2.size == 32 + 20 + 67
 #guard (Serve.audienceOf m1Opened.2).isSome && (Serve.audienceOf m0Opened.2).isNone
 
@@ -345,22 +357,22 @@ def tour : Array Step := #[
   ask "HASH with links 03 01 03 02: sorted, repeat dropped (= reply)"
     (.hash ⟨group, dig 0xc1, #[dig 3, dig 1, dig 3, dig 2], alice⟩) .ok
     (some (.digest (hashRecord reply))),
-  ask "ACCEPT a1: its digest and encoding" (.accept "camping" (.ofRec a1) none) .ok
-    (some (.accept a1 (.accepted (hashRecord a1)))),
-  ask "ACCEPT a1 again: accepted, nothing changes" (.accept "camping" (.ofRec a1) none) .ok
-    (some (.accept a1 (.accepted (hashRecord a1)))),
-  ask "ACCEPT a2 before b1 and c1: missing both, sorted" (.accept "camping" (.ofRec a2) none)
+  ask "ACCEPT_RECORD a1 (structure only): its digest and encoding"
+    (.acceptRecord "camping" (encode a1) none) .ok (some (.accept a1 (.accepted (hashRecord a1)))),
+  ask "ACCEPT_RECORD a1 again: accepted, nothing changes" (.acceptRecord "camping" (encode a1) none)
+    .ok (some (.accept a1 (.accepted (hashRecord a1)))),
+  ask "ACCEPT_RECORD a2 before b1 and c1: missing both, sorted"
+    (.acceptRecord "camping" (encode a2) none)
     .missing (some (.accept a2 (.missing (sorted #[hashRecord b1, hashRecord c1])))),
   ask "HEADS: a1" (.heads "camping") .ok (some (.digests #[hashRecord a1])),
-  ask "ACCEPT b1" (.accept "camping" (.ofRec b1) none) .ok,
-  ask "ACCEPT c1, its link given twice: the canonical encoding comes back" (.accept "camping"
-    ⟨group, dig 0xc1, #[hashRecord a1, hashRecord a1], carol⟩ none) .ok
+  ask "ACCEPT_RECORD b1" (.acceptRecord "camping" (encode b1) none) .ok,
+  ask "ACCEPT_RECORD c1" (.acceptRecord "camping" (encode c1) none) .ok
     (some (.accept c1 (.accepted (hashRecord c1)))),
   ask "HEADS: b1 and c1, sorted" (.heads "camping") .ok
     (some (.digests (sorted #[hashRecord b1, hashRecord c1]))),
-  ask "ACCEPT a2" (.accept "camping" (.ofRec a2) none) .ok,
-  ask "ACCEPT a record of another group: wrong chat" (.accept "camping" (.ofRec foreign) none)
-    .wrongChat,
+  ask "ACCEPT_RECORD a2" (.acceptRecord "camping" (encode a2) none) .ok,
+  ask "ACCEPT_RECORD a record of another group: wrong chat"
+    (.acceptRecord "camping" (encode foreign) none) .wrongChat,
   ask "HEADS: a2" (.heads "camping") .ok (some (.digests #[hashRecord a2])),
   ask "HAS a1" (.has "camping" (hashRecord a1)) .ok (some (.has true)),
   ask "HAS a digest that is not stored" (.has "camping" (dig 9)) .ok (some (.has false)),
@@ -379,10 +391,10 @@ def tour : Array Step := #[
   ask "COMMIT a malformed DataMessage" (.commit group alice nonce (bodyField ++ bytesOf [0x0b]))
     .malformed,
   ask "ENCODE camping (a1 b1 c1 a2)" (.encode "camping") .ok (some (.blob (s3 all4.encode))),
-  ask "ACCEPT f1 (a fake in Bob's name)" (.accept "camping" (.ofRec f1) none) .ok,
-  ask "ACCEPT a3" (.accept "camping" (.ofRec a3) none) .ok,
-  ask "ACCEPT b2" (.accept "camping" (.ofRec b2) none) .ok,
-  ask "ACCEPT c2" (.accept "camping" (.ofRec c2) none) .ok,
+  ask "ACCEPT_RECORD f1 (a fake in Bob's name)" (.acceptRecord "camping" (encode f1) none) .ok,
+  ask "ACCEPT_RECORD a3" (.acceptRecord "camping" (encode a3) none) .ok,
+  ask "ACCEPT_RECORD b2" (.acceptRecord "camping" (encode b2) none) .ok,
+  ask "ACCEPT_RECORD c2" (.acceptRecord "camping" (encode c2) none) .ok,
   ask "CLASSIFY: a3, b2 live (b2 disowns f1), c2 relayed, f1 imported"
     (.classify "camping" tourFacts) .ok (some (.classified tourStatuses)),
   ask "CLASSIFY with no facts: all unconfirmed" (.classify "camping" #[]) .ok
@@ -442,7 +454,7 @@ def tour : Array Step := #[
   ask "HEADS kept: b1 and c1" (.heads "kept") .ok
     (some (.digests (sorted #[hashRecord b1, hashRecord c1]))),
   ask "MERGE into a chat that is not open" (.merge "nochat" (s3 storeAB.encode)) .noChat,
-  ask "ACCEPT into a chat that is not open" (.accept "nochat" (.ofRec a1) none) .noChat,
+  ask "ACCEPT into a chat that is not open" (.accept "nochat" (.ofRec m1) m1Opened.2) .noChat,
   ask "HAS in a chat that is not open" (.has "nochat" (dig 1)) .noChat,
   ask "GET in a chat that is not open" (.get "nochat" (dig 1)) .noChat,
   ask "REACH_SET in a chat that is not open" (.reachSet "nochat" #[]) .noChat,
@@ -457,7 +469,8 @@ def tour : Array Step := #[
 /-- A record with 4097 links, one more than allowed (`Zrdt.Examples.tooManyLinks`). -/
 def tooLargeSteps : Array Step := #[
   ask "NEW big" (.new "big" group) .ok,
-  ask "ACCEPT a record with 4097 links" (.accept "big" (.ofRec tooManyLinks) none) .tooLarge,
+  ask "ACCEPT a record with 4097 links, with its opening" (.accept "big" (.ofRec m1TooLarge)
+    m1Opened.2) .tooLarge,
   ask "HEADS big: still empty" (.heads "big") .ok (some (.digests #[])),
   ask "OPEN a list holding a record with 4097 links" (.open "big2" group
     (.records #[encode tooManyLinks])) .tooLarge]
@@ -482,9 +495,9 @@ def acceptRecordSteps : Array Step := #[
     (.acceptRecord "r" (encode m1AsBob) (some m1Opened.2)) .badOpening,
   ask "ACCEPT_RECORD m0 with its opening, which has no audience (field 201): no audience"
     (.acceptRecord "r" (encode m0) (some m0Opened.2)) .noAudience,
-  ask "ACCEPT m0 with its opening: no audience" (.accept "r" (.ofRec m0) (some m0Opened.2))
+  ask "ACCEPT m0 with its opening: no audience" (.accept "r" (.ofRec m0) m0Opened.2)
     .noAudience,
-  ask "ACCEPT m1 with the opening of m0: bad opening" (.accept "r" (.ofRec m1) (some m0Opened.2))
+  ask "ACCEPT m1 with the opening of m0: bad opening" (.accept "r" (.ofRec m1) m0Opened.2)
     .badOpening,
   ask "HEADS r: still a1" (.heads "r") .ok (some (.digests #[hashRecord a1])),
   ask "ACCEPT_RECORD m1 with its opening" (.acceptRecord "r" (encode m1) (some m1Opened.2)) .ok
@@ -502,7 +515,20 @@ def acceptRecordSteps : Array Step := #[
     .tooLarge,
   ask "ACCEPT_RECORD m1 into a chat that is not open" (.acceptRecord "nochat" (encode m1)
     (some m1Opened.2)) .noChat,
-  ask "HEADS r: still m1" (.heads "r") .ok (some (.digests #[hashRecord m1]))]
+  ask "HEADS r: still m1" (.heads "r") .ok (some (.digests #[hashRecord m1])),
+  ask "NEW live (ACCEPT: a live record, always with its opening)" (.new "live" group) .ok,
+  ask "ACCEPT m1 with its opening, before a1: missing a1" (.accept "live" (.ofRec m1) m1Opened.2)
+    .missing (some (.accept m1 (.missing #[hashRecord a1]))),
+  ask "ACCEPT with an empty opening: bad opening" (.accept "live" (.ofRec m1) .empty) .badOpening,
+  ask "ACCEPT_RECORD a1 (structure only)" (.acceptRecord "live" (encode a1) none) .ok,
+  ask "ACCEPT m1 with its opening, its link given twice: the canonical encoding comes back"
+    (.accept "live" ⟨group, m1.commit, #[hashRecord a1, hashRecord a1], alice⟩ m1Opened.2) .ok
+    (some (.accept m1 (.accepted (hashRecord m1)))),
+  ask "ADDRESSED bob in live: m1, its audience recorded" (.addressed "live" bob keyBob) .ok
+    (some (.digests #[hashRecord m1])),
+  ask "ACCEPT a record of another group, with its opening: wrong chat"
+    (.accept "live" (.ofRec m1Foreign) m1ForeignOpened.2) .wrongChat,
+  ask "HEADS live: m1" (.heads "live") .ok (some (.digests #[hashRecord m1]))]
 
 
 /-! ### `AUDIENCE`, `SERVE`, `ADDRESSED` (docs/JOIN_PLAN.md §3–§5)
@@ -527,17 +553,21 @@ def serveFrom (to : Aci) (key : ByteArray) (wanted : Option (Array Digest) := no
     live := #[hashRecord welcome.1, hashRecord later.1, hashRecord timed.1], disown := #[],
     held := records.map fun (r, o) => (hashRecord r, o) }
 
-/-- The `SERVE` reply computed from `Serve.serve` directly, for a store holding `records` with
-the audiences of their openings recorded. -/
-def expectServe (sr : ServeRequest) (records : Array (Rec × ByteArray) := joinRecords) : Reply :=
+/-- The entries of a `SERVE` reply computed from `Serve.serve` directly, for a closed store
+holding `records` with the audiences of their openings recorded. -/
+def serveEntries (sr : ServeRequest) (records : Array (Rec × ByteArray) := joinRecords) :
+    List Serve.Entry :=
   let c := ((CheckedStore.empty group).acceptAll (records.map (·.1))).1
   let auds : Std.ExtTreeMap Digest (Array Serve.Seat) compare :=
     records.foldl (init := ∅) fun m (r, o) =>
       match Serve.audienceOf o with
       | some a => m.insert (hashRecord r) a
       | none => m
-  .served ⟨sr.requester, Serve.keyTag sr.key, sr.rid⟩
-    (Serve.serve c.raw sr.me (sr.heldMap auds) sr.query)
+  Serve.serve c.raw sr.me (sr.heldMap auds) sr.query
+
+/-- The `SERVE` reply computed from `Serve.serve` directly (`serveEntries`). -/
+def expectServe (sr : ServeRequest) (records : Array (Rec × ByteArray) := joinRecords) : Reply :=
+  .served ⟨sr.requester, Serve.keyTag sr.key, sr.rid⟩ (serveEntries sr records)
 
 /-- Whether `needle` occurs in `hay`. -/
 def containsBytes (hay needle : ByteArray) : Bool :=
@@ -584,13 +614,13 @@ def joinSteps : Array Step := #[
     (.commit group carol (Serve.Examples.nonceOf 1) (Serve.Examples.message "pre-join secret" AC))
     .ok (some (.committed pre.1.commit pre.2)),
   ask "ACCEPT pre with its opening: its audience is recorded" (.accept "g" (.ofRec pre.1)
-    (some pre.2)) .ok (some (.accept pre.1 (.accepted (hashRecord pre.1)))),
-  ask "ACCEPT welcome with its opening" (.accept "g" (.ofRec welcome.1) (some welcome.2)) .ok,
-  ask "ACCEPT stale with its opening" (.accept "g" (.ofRec stale.1) (some stale.2)) .ok,
+    pre.2) .ok (some (.accept pre.1 (.accepted (hashRecord pre.1)))),
+  ask "ACCEPT welcome with its opening" (.accept "g" (.ofRec welcome.1) welcome.2) .ok,
+  ask "ACCEPT stale with its opening" (.accept "g" (.ofRec stale.1) stale.2) .ok,
   ask "ACCEPT_RECORD later with its opening" (.acceptRecord "g" (encode later.1) (some later.2))
     .ok,
   ask "ACCEPT later with the opening of welcome: bad opening" (.accept "g" (.ofRec later.1)
-    (some welcome.2)) .badOpening,
+    welcome.2) .badOpening,
   ask "ACCEPT_RECORD of a message without field 201, with its opening: no audience"
     (.acceptRecord "g" (encode noAudience.1) (some noAudience.2)) .noAudience,
   ask "ADDRESSED bob under his key: welcome and later" (.addressed "g" bob keyBob) .ok
@@ -616,8 +646,8 @@ def joinSteps : Array Step := #[
     (.serve "g" (serveFrom carol keyCarol (strict := true))) .ok
     (some (expectServe (serveFrom carol keyCarol (strict := true)))),
   ask "ACCEPT a disappearing message to alice, bob and carol, with its opening"
-    (.accept "g" (.ofRec timed.1) (some timed.2)) .ok,
-  ask "SERVE an export to bob: the disappearing message goes without content"
+    (.accept "g" (.ofRec timed.1) timed.2) .ok,
+  ask "SERVE an export for bob, built on Alice's device (requester bob, export flag): the disappearing message goes without content"
     (.serve "g" (serveFrom bob keyBob (forExport := true) (records := joinRecords.push timed))) .ok
     (some (expectServe (serveFrom bob keyBob (forExport := true) (records := joinRecords.push timed))
       (joinRecords.push timed))),
@@ -639,6 +669,11 @@ def joinSteps : Array Step := #[
   ask "OPEN g3 from g's blob" (.open "g3" group (.blob gBlob)) .ok,
   ask "ADDRESSED bob in g3: the audiences came back with the blob" (.addressed "g3" bob keyBob) .ok
     (some (.digests (digestsOf [welcome, later, timed]))),
+  ask "MERGE g's blob into g2: the blob's audiences are recorded where none is"
+    (.merge "g2" gBlob) .ok,
+  ask "ADDRESSED bob in g2: the merged audiences too (later, and the new disappearing message)"
+    (.addressed "g2" bob keyBob) .ok (some (.digests (digestsOf [welcome, later, timed]))),
+  ask "ENCODE g2: the same blob as g's" (.encode "g2") .ok (some (.blob gBlob)),
   ask "CLOSE g" (.close "g") .ok,
   ask "NEW g again: no audiences" (.new "g" group) .ok,
   ask "ADDRESSED carol in the new g: nothing" (.addressed "g" carol keyCarol) .ok
@@ -658,8 +693,8 @@ def joinChecks (out : List (Step × ByteArray)) : Bool :=
     pre.2 &&
   containsBytes (reply "SERVE to carol in strict mode: content only for Alice's own (welcome, later)")
     welcome.2 &&
-  !containsBytes (reply "SERVE an export to bob: the disappearing message goes without content")
-    timed.2 &&
+  !containsBytes (reply ("SERVE an export for bob, built on Alice's device (requester bob, " ++
+    "export flag): the disappearing message goes without content")) timed.2 &&
   containsBytes (reply "SERVE a relay to bob: the disappearing message goes with content") timed.2 &&
   -- The reply header: bob's ACI, the tag of his key, the request id; then pre as a digest only.
   reply "SERVE per-digest to bob, asking for pre: pre as a digest only" ==
@@ -708,7 +743,7 @@ def allTaken (es : List Serve.Entry) : Reply :=
 
 /-- Bob's chat after the catch-up. -/
 def bobChat : Chat :=
-  (acceptView { store := .relative (.empty group) } alice false
+  (acceptView { store := .relative (.empty group) } alice false false
     (aliceToBob.map toView).toArray).2
 
 /-- Bob's blob. -/
@@ -732,6 +767,19 @@ def bobToCarol : List Serve.Entry :=
 #guard Serve.Examples.afterOf bobToCarol == [stale.1]
 #guard Serve.Examples.boundaryOf bobToCarol == [hashRecord pre.1]
 
+/-- The export Alice's device builds for Bob's account (JOIN_PLAN §4.5): `SERVE` with Bob as the
+requester, under the key Alice holds for him, with the export flag. Only what Bob is seated in
+comes with content; `pre` comes as a digest, the disappearing message without content. -/
+def aliceExportForBob : List Serve.Entry :=
+  serveEntries (serveFrom bob keyBob (forExport := true) (records := joinRecords.push timed))
+    (joinRecords.push timed)
+
+#guard Serve.Examples.contentOf aliceExportForBob == [welcome.1, later.1] ||
+  Serve.Examples.contentOf aliceExportForBob == [later.1, welcome.1]
+#guard Serve.Examples.boundaryOf aliceExportForBob == [hashRecord pre.1]
+#guard !containsBytes (Write.entries aliceExportForBob) pre.2 &&
+  !containsBytes (Write.entries aliceExportForBob) timed.2
+
 /-- `CLASSIFY` of Bob's relative store with no facts: every record unconfirmed. -/
 def bobStatuses : Array (Digest × Status) :=
   (digestsOf [welcome, stale, later]).map fun d => (d, .unconfirmed)
@@ -741,9 +789,9 @@ def viewSteps : Array Step := #[
   ask "NEW_RELATIVE bob" (.newRelative "bob" group) .ok,
   ask "NEW_RELATIVE bob again: already open" (.newRelative "bob" group) .chatOpen,
   ask "HEADS of an empty relative store" (.heads "bob") .ok (some (.digests #[])),
-  { name := "ACCEPT_VIEW bob, vouched by alice: the entries of Alice's SERVE reply, byte for byte"
-    request := Write.u8 0x14 ++ Write.str "bob" ++ alice.bytes ++ Write.u8 0 ++
-      Write.entries aliceToBob
+  { name := "ACCEPT_VIEW bob, vouched by alice, catch-up mode: the entries of Alice's SERVE reply, byte for byte, no pending"
+    request := Write.u8 0x14 ++ Write.str "bob" ++ alice.bytes ++ Write.u8 0 ++ Write.u8 0 ++
+      Write.entries aliceToBob ++ u32be 0
     expect := .ok, reply? := some (allTaken aliceToBob).write },
   ask "HEADS bob: Alice's heads (later)" (.heads "bob") .ok
     (some (.digests storeG.headsArray)),
@@ -771,48 +819,58 @@ def viewSteps : Array Step := #[
     (.serve "bob" bobServe) .ok
     (some (.served ⟨carol, Serve.keyTag keyCarol, rid⟩ bobToCarol)),
   ask "NEW_RELATIVE carol2 (a second-generation newcomer)" (.newRelative "carol2" group) .ok,
-  ask "ACCEPT_VIEW carol2 vouched by bob" (.acceptView "carol2" bob false
-    (bobToCarol.map toView).toArray) .ok (some (allTaken bobToCarol)),
+  ask "ACCEPT_VIEW carol2 vouched by bob" (.acceptView "carol2" bob false false
+    (bobToCarol.map toView).toArray #[]) .ok (some (allTaken bobToCarol)),
   ask "HEADS carol2: the same heads again" (.heads "carol2") .ok
     (some (.digests storeG.headsArray)),
   ask "NEW closed" (.new "closed" group) .ok,
   ask "ACCEPT_VIEW into a closed store: pre ignored, so nothing resolves"
-    (.acceptView "closed" alice false (aliceToBob.map toView).toArray) .ok,
+    (.acceptView "closed" alice false false (aliceToBob.map toView).toArray #[]) .ok,
   ask "HEADS closed: still empty" (.heads "closed") .ok (some (.digests #[])),
   ask "MERGE Bob's relative blob into the closed store: unverifiable, pre missing"
     (.merge "closed" bobBlob) .unverifiable
     (some (.opened (.error (.unverifiable (digestsOf [welcome, stale, later])
       #[hashRecord pre.1])))),
   ask "ACCEPT_VIEW pre's record into the closed store, then Alice's view: all taken"
-    (.acceptView "closed" alice false
-      (#[.after (encode pre.1)] ++ (aliceToBob.map toView).toArray)) .ok,
+    (.acceptView "closed" alice false false
+      (#[.after (encode pre.1)] ++ (aliceToBob.map toView).toArray) #[]) .ok,
   ask "LINKABLE of a closed store: its heads" (.linkable "closed" #[]) .ok
     (some (.digests storeG.headsArray)),
-  ask "ACCEPT_VIEW bob: pre's record arrives (promotion)" (.acceptView "bob" carol false
-    #[.after (encode pre.1)]) .ok (some (.viewed #[.record (.accepted (hashRecord pre.1))])),
+  ask "ACCEPT_VIEW bob, per-digest from carol: pre's record arrives (promotion)"
+    (.acceptView "bob" carol false true #[.after (encode pre.1)] #[]) .ok (some (.viewed #[.record (.accepted (hashRecord pre.1))])),
   ask "HAS bob pre: now a record" (.has "bob" (hashRecord pre.1)) .ok (some (.has true)),
   ask "HEADS bob: unchanged" (.heads "bob") .ok (some (.digests storeG.headsArray)),
-  ask "ACCEPT_VIEW bob: later with welcome's opening" (.acceptView "bob" alice false
-    #[.addressed (encode later.1) true (some welcome.2)]) .ok
+  ask "ACCEPT_VIEW bob: later with welcome's opening" (.acceptView "bob" alice false false
+    #[.addressed (encode later.1) true (some welcome.2)] #[]) .ok
     (some (.viewed #[.code .badOpening])),
-  ask "ACCEPT_VIEW bob: bytes that are not a record" (.acceptView "bob" alice false
-    #[.after ((encode later.1).push 0)]) .ok (some (.viewed #[.code .malformed])),
-  ask "ACCEPT_VIEW bob: an opening without field 201" (.acceptView "bob" alice false
-    #[.addressed (encode noAudience.1) false (some noAudience.2)]) .ok
+  ask "ACCEPT_VIEW bob: bytes that are not a record" (.acceptView "bob" alice false false
+    #[.after ((encode later.1).push 0)] #[]) .ok (some (.viewed #[.code .malformed])),
+  ask "ACCEPT_VIEW bob: an opening without field 201" (.acceptView "bob" alice false false
+    #[.addressed (encode noAudience.1) false (some noAudience.2)] #[]) .ok
     (some (.viewed #[.code .noAudience])),
   ask "ACCEPT_VIEW bob, an import: a disappearing message is refused" (.acceptView "bob" alice
-    true #[.addressed (encode timed.1) false (some timed.2)]) .ok
+    true false #[.addressed (encode timed.1) false (some timed.2)] #[]) .ok
     (some (.viewed #[.code .ephemeral])),
   ask "ACCEPT_VIEW bob, a relay: the disappearing message is taken" (.acceptView "bob" alice
-    false #[.addressed (encode timed.1) false (some timed.2)]) .ok
+    false false #[.addressed (encode timed.1) false (some timed.2)] #[]) .ok
     (some (.viewed #[.record (.accepted (hashRecord timed.1))])),
   ask "ACCEPT_VIEW bob: a record of another chat, and one whose link is unknown"
-    (.acceptView "bob" alice false #[.after (encode foreign), .after (encode b1)]) .ok
+    (.acceptView "bob" alice false false #[.after (encode foreign), .after (encode b1)] #[]) .ok
     (some (.viewed #[.record .wrongChat, .record (.missing #[hashRecord a1])])),
-  ask "ACCEPT_VIEW in a chat that is not open" (.acceptView "nochat" alice false #[]) .noChat,
+  ask "ACCEPT_VIEW in a chat that is not open" (.acceptView "nochat" alice false false #[] #[])
+    .noChat,
   ask "LINKABLE in a chat that is not open" (.linkable "nochat" #[]) .noChat,
   ask "MERGE a closed store's blob into bob" (.merge "bob" (s3 storeAB.encode)) .ok,
-  ask "HAS bob b1" (.has "bob" (hashRecord b1)) .ok (some (.has true))]
+  ask "HAS bob b1" (.has "bob" (hashRecord b1)) .ok (some (.has true)),
+  ask "NEW_RELATIVE bobx: Bob's device imports the export Alice built for his account"
+    (.newRelative "bobx" group) .ok,
+  ask "ACCEPT_VIEW bobx, an import (catch-up mode, vouched by alice): all taken"
+    (.acceptView "bobx" alice true false (aliceExportForBob.map toView).toArray #[]) .ok
+    (some (allTaken aliceExportForBob)),
+  ask "ADDRESSED bob in bobx: welcome and later; the disappearing message came without content"
+    (.addressed "bobx" bob keyBob) .ok (some (.digests (digestsOf [welcome, later]))),
+  ask "HAS bobx pre: a boundary digest only" (.has "bobx" (hashRecord pre.1)) .ok
+    (some (.has false))]
 
 /-- The checks on the `view` session's replies. -/
 def viewChecks (out : List (Step × ByteArray)) : Bool :=
@@ -829,6 +887,115 @@ def viewChecks (out : List (Step × ByteArray)) : Bool :=
       | .addressed r _ _ | .after r => .record (.accepted (hashRecord r))).toArray)).write
 
 #guard viewChecks (viewSteps.toList.zip (session (viewSteps.map (·.request)).toList))
+
+/-! ### Boundary admission: a per-digest reply adds no stray head (docs/JOIN_PLAN.md §4.4)
+
+Chat `s` at Alice: Carol's `older` and `newer` (before Bob joined: audience Alice and Carol), then
+Alice's `hi` (Bob seated), which links `newer`. Bob catches up from Alice: `hi` with content,
+`newer` as a boundary digest; his heads are Alice's (`hi`). Then Bob asks Alice by name for
+`older`, as beat 6 of the smoke does: the reply carries `older` as a digest only, and no record of
+Bob's links it. Taken in per-digest mode it is dropped (`IGNORED`) and his heads stay Alice's.
+Taken as protocol 3 took it (every boundary entry, here catch-up mode on a copy of his store),
+`older` becomes a head that no record will ever link: the stray head of the round-2 review. Then
+Carol's late message `lateC`, written from an old view, links `older`: Bob's `ACCEPT` of it is
+`MISSING older`; he asks Alice for `older` again and passes `lateC` as pending with her reply: both
+are taken, and his heads are Alice's again. -/
+
+/-- Carol, long before Bob joined. -/
+def older : Rec × ByteArray := Serve.Examples.mk carol 40 "older pre-join" AC #[]
+/-- Carol, before Bob joined. -/
+def newer : Rec × ByteArray := Serve.Examples.mk carol 41 "newer pre-join" AC #[hashRecord older.1]
+/-- Alice, after the add: Bob seated. -/
+def hi : Rec × ByteArray := Serve.Examples.mk alice 42 "hi bob" ABC #[hashRecord newer.1]
+/-- Carol after the add, from an old view: Bob seated, but it links `older`. -/
+def lateC : Rec × ByteArray :=
+  Serve.Examples.mk carol 43 "late, from an old view" ABC #[hashRecord older.1]
+
+/-- Chat `s` at Alice before `lateC`. -/
+def strayRecords : Array (Rec × ByteArray) := #[older, newer, hi]
+
+/-- Alice's catch-up reply to Bob. -/
+def strayCatchUp : List Serve.Entry :=
+  serveEntries (serveFrom bob keyBob (records := strayRecords)) strayRecords
+
+/-- Alice's per-digest reply to Bob, who asks for `older`: the digest only. -/
+def strayOlder : List Serve.Entry :=
+  serveEntries (serveFrom bob keyBob (wanted := some #[hashRecord older.1]) (records := strayRecords))
+    strayRecords
+
+#guard Write.entries strayOlder == Write.entries [.boundary (hashRecord older.1)]
+#guard Serve.Examples.boundaryOf strayCatchUp == [hashRecord newer.1] &&
+  Serve.Examples.contentOf strayCatchUp == [hi.1]
+
+/-- A record of another chat that links digest `77…`. -/
+def foreignLinking : Rec := Rec.make otherGroup (dig 0xd2) #[dig 0x77] alice
+
+/-- A record that links digests `78…` and `79…`. -/
+def twoUnknown : Rec := Rec.make group (dig 0xd3) #[dig 0x78, dig 0x79] alice
+
+/-- The session. -/
+def boundarySteps : Array Step := #[
+  ask "NEW s (Alice's store)" (.new "s" group) .ok,
+  ask "ACCEPT older" (.accept "s" (.ofRec older.1) older.2) .ok,
+  ask "ACCEPT newer" (.accept "s" (.ofRec newer.1) newer.2) .ok,
+  ask "ACCEPT hi" (.accept "s" (.ofRec hi.1) hi.2) .ok,
+  ask "HEADS s: hi" (.heads "s") .ok (some (.digests #[hashRecord hi.1])),
+  ask "SERVE catch-up to bob: hi with content, newer as a digest"
+    (.serve "s" (serveFrom bob keyBob (records := strayRecords))) .ok
+    (some (expectServe (serveFrom bob keyBob (records := strayRecords)) strayRecords)),
+  ask "SERVE per-digest to bob, asking for older: older as a digest only"
+    (.serve "s" (serveFrom bob keyBob (wanted := some #[hashRecord older.1])
+      (records := strayRecords))) .ok
+    (some (.served ⟨bob, Serve.keyTag keyBob, rid⟩ strayOlder)),
+  ask "NEW_RELATIVE b (Bob)" (.newRelative "b" group) .ok,
+  ask "ACCEPT_VIEW b, catch-up mode: all taken"
+    (.acceptView "b" alice false false (strayCatchUp.map toView).toArray #[]) .ok
+    (some (allTaken strayCatchUp)),
+  ask "HEADS b: Alice's (hi)" (.heads "b") .ok (some (.digests #[hashRecord hi.1])),
+  ask "NEW_RELATIVE b3 (a copy of Bob's store, for the rule of protocol 3)"
+    (.newRelative "b3" group) .ok,
+  ask "ACCEPT_VIEW b3, catch-up mode" (.acceptView "b3" alice false false
+    (strayCatchUp.map toView).toArray #[]) .ok (some (allTaken strayCatchUp)),
+  ask "ACCEPT_VIEW b, per-digest mode, the reply for older: no record links it, so it is ignored"
+    (.acceptView "b" alice false true (strayOlder.map toView).toArray #[]) .ok
+    (some (.viewed #[.code .ignored])),
+  ask "HEADS b: still Alice's (hi)" (.heads "b") .ok (some (.digests #[hashRecord hi.1])),
+  ask "ACCEPT_VIEW b3 with every boundary entry kept (catch-up mode, the rule of protocol 3)"
+    (.acceptView "b3" alice false false (strayOlder.map toView).toArray #[]) .ok
+    (some (.viewed #[.known (hashRecord older.1)])),
+  ask "HEADS b3: older is a head no record links (the round-2 stray head)" (.heads "b3") .ok
+    (some (.digests (sorted #[hashRecord hi.1, hashRecord older.1]))),
+  ask "ACCEPT lateC at Alice" (.accept "s" (.ofRec lateC.1) lateC.2) .ok,
+  ask "HEADS s: hi and lateC" (.heads "s") .ok
+    (some (.digests (sorted #[hashRecord hi.1, hashRecord lateC.1]))),
+  ask "ACCEPT lateC at Bob, with its opening: missing older"
+    (.accept "b" (.ofRec lateC.1) lateC.2) .missing
+    (some (.accept lateC.1 (.missing #[hashRecord older.1]))),
+  ask "SERVE per-digest to bob, asking for older again: older as a digest only"
+    (.serve "s" (serveFrom bob keyBob (wanted := some #[hashRecord older.1])
+      (records := strayRecords.push lateC))) .ok
+    (some (.served ⟨bob, Serve.keyTag keyBob, rid⟩ strayOlder)),
+  ask "ACCEPT_VIEW b, per-digest mode, the reply and lateC as pending: both taken"
+    (.acceptView "b" alice false true (strayOlder.map toView).toArray
+      #[.addressed (encode lateC.1) true (some lateC.2)]) .ok
+    (some (.viewed #[.known (hashRecord older.1), .record (.accepted (hashRecord lateC.1))])),
+  ask "HEADS b: Alice's again (hi and lateC)" (.heads "b") .ok
+    (some (.digests (sorted #[hashRecord hi.1, hashRecord lateC.1]))),
+  ask "ADDRESSED bob in b: hi and lateC, lateC's audience recorded" (.addressed "b" bob keyBob) .ok
+    (some (.digests (digestsOf [hi, lateC]))),
+  ask "ACCEPT_VIEW b, per-digest mode: a pending record of another chat links the digest, but is not taken, so the digest is ignored"
+    (.acceptView "b" alice false true #[.boundary (dig 0x77)] #[.after (encode foreignLinking)]) .ok
+    (some (.viewed #[.code .ignored, .record .wrongChat])),
+  ask "ACCEPT_VIEW b, per-digest mode: a pending record that also lacks another digest is not taken, so the digest is ignored and reported missing again"
+    (.acceptView "b" alice false true #[.boundary (dig 0x78)] #[.after (encode twoUnknown)]) .ok
+    (some (.viewed #[.code .ignored, .record (.missing #[dig 0x78, dig 0x79])])),
+  ask "ACCEPT_VIEW b, per-digest mode: the pending record with both digests answered: all taken"
+    (.acceptView "b" alice false true #[.boundary (dig 0x78), .boundary (dig 0x79)]
+      #[.after (encode twoUnknown)]) .ok
+    (some (.viewed #[.known (dig 0x78), .known (dig 0x79),
+      .record (.accepted (hashRecord twoUnknown))])),
+  ask "HEADS b: hi, lateC and the new record" (.heads "b") .ok
+    (some (.digests (sorted #[hashRecord hi.1, hashRecord lateC.1, hashRecord twoUnknown])))]
 
 /-- `2^32 - 1` as 4 bytes. -/
 def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
@@ -893,10 +1060,12 @@ def fuzz : Array Step := #[
     Write.bytes (encode a1) ++ Write.u8 1 ++ ffff) .badRequest,
   raw "GET with the digest cut short" (Write.u8 0x0A ++ Write.str "c" ++ ⟨Array.replicate 31 1⟩)
     .badRequest,
-  raw "ACCEPT with no opening flag" (Write.u8 0x07 ++ Write.str "c" ++ Write.parts (.ofRec a1))
+  raw "ACCEPT with no opening" (Write.u8 0x07 ++ Write.str "c" ++ Write.parts (.ofRec a1))
     .badRequest,
-  raw "ACCEPT with opening flag 2" (Write.u8 0x07 ++ Write.str "c" ++ Write.parts (.ofRec a1) ++
-    Write.u8 2) .badRequest,
+  raw "ACCEPT whose opening length is 2^32 - 1" (Write.u8 0x07 ++ Write.str "c" ++
+    Write.parts (.ofRec a1) ++ ffff) .badRequest,
+  raw "ACCEPT with the opening flag of protocol 3 (0: none)" (Write.u8 0x07 ++ Write.str "c" ++
+    Write.parts (.ofRec a1) ++ Write.u8 0) .badRequest,
   raw "AUDIENCE whose member count is 2^32 - 1" (Write.u8 0x11 ++ ffff) .badRequest,
   raw "AUDIENCE with key flag 2" (Write.u8 0x11 ++ u32be 1 ++ alice.bytes ++ Write.u8 2)
     .badRequest,
@@ -918,13 +1087,22 @@ def fuzz : Array Step := #[
   ask "SERVE in c: the store is empty, so no entries" (.serve "c" (serveFrom bob keyBob)) .ok
     (some (.served ⟨bob, Serve.keyTag keyBob, rid⟩ [])),
   raw "ACCEPT_VIEW with entry kind 3" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
-    Write.u8 0 ++ u32be 1 ++ Write.u8 3) .badRequest,
+    Write.u8 0 ++ Write.u8 0 ++ u32be 1 ++ Write.u8 3 ++ u32be 0) .badRequest,
   raw "ACCEPT_VIEW with import flag 2" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
-    Write.u8 2 ++ u32be 0) .badRequest,
+    Write.u8 2 ++ Write.u8 0 ++ u32be 0 ++ u32be 0) .badRequest,
+  raw "ACCEPT_VIEW with mode byte 2" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
+    Write.u8 0 ++ Write.u8 2 ++ u32be 0 ++ u32be 0) .badRequest,
+  raw "ACCEPT_VIEW without a mode byte (the layout of protocol 3)" (Write.u8 0x14 ++
+    Write.str "c" ++ alice.bytes ++ Write.u8 0 ++ u32be 0) .badRequest,
+  raw "ACCEPT_VIEW without a pending list" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
+    Write.u8 0 ++ Write.u8 1 ++ u32be 0) .badRequest,
   raw "ACCEPT_VIEW whose entry count is 2^32 - 1" (Write.u8 0x14 ++ Write.str "c" ++
-    alice.bytes ++ Write.u8 0 ++ ffff) .badRequest,
+    alice.bytes ++ Write.u8 0 ++ Write.u8 0 ++ ffff) .badRequest,
+  raw "ACCEPT_VIEW whose pending count is 2^32 - 1" (Write.u8 0x14 ++ Write.str "c" ++
+    alice.bytes ++ Write.u8 0 ++ Write.u8 1 ++ u32be 0 ++ ffff) .badRequest,
   raw "ACCEPT_VIEW with a boundary digest cut short" (Write.u8 0x14 ++ Write.str "c" ++
-    alice.bytes ++ Write.u8 0 ++ u32be 1 ++ Write.u8 2 ++ ⟨Array.replicate 31 1⟩) .badRequest,
+    alice.bytes ++ Write.u8 0 ++ Write.u8 0 ++ u32be 1 ++ Write.u8 2 ++
+    ⟨Array.replicate 31 1⟩ ++ u32be 0) .badRequest,
   raw "LINKABLE whose count is 2^32 - 1" (Write.u8 0x15 ++ Write.str "c" ++ ffff) .badRequest,
   raw "NEW_RELATIVE with the group cut short" ((Request.newRelative "r" group).write.extract 0 20)
     .badRequest,
@@ -933,7 +1111,7 @@ def fuzz : Array Step := #[
 /-- The sessions, each run on a fresh `zrdtd`. -/
 def sessions : Array (String × Array Step) :=
   #[("tour", tour), ("tooLarge", tooLargeSteps), ("acceptRecord", acceptRecordSteps),
-    ("join", joinSteps), ("view", viewSteps), ("fuzz", fuzz)]
+    ("join", joinSteps), ("view", viewSteps), ("boundary", boundarySteps), ("fuzz", fuzz)]
 
 /-- The replies of a session's steps; `build` is the build text of `VERSION`. -/
 def replies (steps : Array Step) (build : String := buildId) : List ByteArray :=

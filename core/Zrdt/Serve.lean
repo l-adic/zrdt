@@ -45,7 +45,9 @@ committed audience seats the requester's ACI with the tag of the requester's key
 mention the audience cache, `since`, the strict flag or any provenance, so no stale cache or host
 mistake can widen it. `serve_content_complete`: the converse; every held opening that
 `serveOpening` accepts is in the reply. `serve_authorCopy`, `serve_strict`, `serve_export`,
-`serve_after`, `serve_boundary`, `serveOpening_spec`, `audience_bound`.
+`serve_after`, `serve_boundary`, `serveOpening_spec`, `audience_bound`. `parseAudience_writeAudience`
+and `valid_of_parseAudience`: every well-formed audience (`validAudience`) reads back, and every
+audience `parseAudience` (so `audienceOf`, `audienceOf_valid`) returns is well-formed.
 
 **Trusted** (JOIN_PLAN §9): the protobuf scan of field 201 (`fieldValue`, `audienceOf`), as for
 the commitment's scan; the key `q.key` is the one Desktop holds for the requester (TOFU), and the
@@ -137,6 +139,208 @@ open Examples in
 #guard (parseAudience (writeAudience ((List.range 257).toArray.map fun i =>
   ⟨⟨⟨Array.replicate 14 0 ++ #[(i / 256).toUInt8, (i % 256).toUInt8]⟩, rfl⟩, zeroTag⟩))).isNone
 
+section RoundTrip
+open Encode
+
+/-- The bytes `writeAudience` writes for a list of seats. -/
+def writeSeats (l : List Seat) : ByteArray :=
+  l.foldl (fun b s => b ++ s.aci.bytes ++ ⟨s.tag⟩) .empty
+
+/-- Writing seats after `p` is `p`, then the seats. -/
+theorem foldl_seats (l : List Seat) (p : ByteArray) :
+    l.foldl (fun b s => b ++ s.aci.bytes ++ ⟨s.tag⟩) p = p ++ writeSeats l := by
+  induction l generalizing p with
+  | nil => simp [writeSeats]
+  | cons s rest ih =>
+    simp only [List.foldl_cons, writeSeats]
+    rw [ih, ih (ByteArray.empty ++ s.aci.bytes ++ ⟨s.tag⟩)]
+    simp [ByteArray.append_assoc]
+
+/-- Writing two lists of seats is writing one, then the other. -/
+theorem writeSeats_append (l₁ l₂ : List Seat) :
+    writeSeats (l₁ ++ l₂) = writeSeats l₁ ++ writeSeats l₂ := by
+  rw [writeSeats, List.foldl_append, foldl_seats]
+  rfl
+
+/-- Writing a seat in front: its ACI, its tag, then the rest. -/
+theorem writeSeats_cons (s : Seat) (l : List Seat) :
+    writeSeats (s :: l) = s.aci.bytes ++ (⟨s.tag⟩ ++ writeSeats l) := by
+  rw [show s :: l = [s] ++ l from rfl, writeSeats_append]
+  simp [writeSeats, ByteArray.append_assoc]
+
+/-- Seats with 16-byte tags take 32 bytes each. -/
+theorem size_writeSeats {l : List Seat} (h : ∀ s ∈ l, s.tag.size = 16) :
+    (writeSeats l).size = 32 * l.length := by
+  induction l with
+  | nil => simp [writeSeats]
+  | cons s rest ih =>
+    rw [writeSeats_cons]
+    have hs := h s List.mem_cons_self
+    have := ih fun x hx => h x (List.mem_cons_of_mem _ hx)
+    have ht : (ByteArray.mk s.tag).size = 16 := hs
+    simp only [ByteArray.size_append, Aci.size_eq, List.length_cons, ht, this]
+    omega
+
+/-- `writeAudience` writes the seats of the array's list. -/
+theorem writeAudience_eq (a : Array Seat) : writeAudience a = writeSeats a.toList := by
+  rw [writeAudience, ← Array.foldl_toList]; rfl
+
+/-- Read seat `i` of a written list. -/
+theorem extract_writeSeats {l : List Seat} (h : ∀ s ∈ l, s.tag.size = 16) {i : Nat}
+    (hi : i < l.length) :
+    (writeSeats l).extract (32 * i) (32 * i + 16) = l[i].aci.bytes ∧
+      (writeSeats l).extract (32 * i + 16) (32 * i + 32) = ⟨l[i].tag⟩ := by
+  have hsplit : l = l.take i ++ (l[i] :: l.drop (i + 1)) := by
+    simp
+  have htake : (writeSeats (l.take i)).size = 32 * i := by
+    rw [size_writeSeats fun s hs => h s (List.mem_of_mem_take hs)]
+    simp [List.length_take]; omega
+  have hw : writeSeats l = writeSeats (l.take i) ++ (l[i].aci.bytes ++
+      (⟨l[i].tag⟩ ++ writeSeats (l.drop (i + 1)))) := by
+    conv => lhs; rw [hsplit]
+    rw [writeSeats_append, writeSeats_cons]
+  have ht : (ByteArray.mk l[i].tag).size = 16 := h _ (List.getElem_mem hi)
+  constructor
+  · rw [hw]
+    exact extract_append_mid htake.symm (by rw [htake, Aci.size_eq])
+  · rw [hw, ← ByteArray.append_assoc]
+    exact extract_append_mid (by simp [ByteArray.size_append, htake, Aci.size_eq])
+      (by simp [ByteArray.size_append, htake, Aci.size_eq, ht])
+
+/-- A well-formed audience: 1 to `maxAudience` entries, each tag 16 bytes, strictly increasing by
+ACI. Exactly what `parseAudience` returns (`valid_of_parseAudience`), and each one reads back
+(`parseAudience_writeAudience`). -/
+def validAudience (a : Array Seat) : Bool :=
+  0 < a.size && a.size ≤ maxAudience && a.all (·.tag.size == 16) &&
+    (a.toList.zip a.toList.tail).all fun (x, y) => compare x.aci y.aci == .lt
+
+open Examples in
+#guard validAudience #[⟨alice, keyTag ⟨#[1]⟩⟩, ⟨bob, zeroTag⟩] &&
+  !validAudience #[⟨bob, zeroTag⟩, ⟨alice, zeroTag⟩] && !validAudience #[] &&
+  !validAudience #[⟨alice, #[1, 2]⟩]
+
+/-- `mapM` over `0, …, a.size - 1` of a function that gives element `i` of `a` gives `a`. -/
+theorem mapM_range_eq {f : Nat → Option Seat} {a : Array Seat}
+    (hf : ∀ i (h : i < a.size), f i = some a[i]) :
+    (List.range a.size).toArray.mapM f = some a := by
+  rw [List.mapM_toArray]
+  let g : Nat → Seat := fun i => (a[i]?).getD ⟨Aci.zero, zeroTag⟩
+  have key : ∀ (l : List Nat), (∀ i ∈ l, i < a.size) → l.mapM f = some (l.map g) := by
+    intro l
+    induction l with
+    | nil => intro _; rfl
+    | cons i rest ih =>
+      intro hl
+      have hi := hl i List.mem_cons_self
+      rw [List.mapM_cons, hf i hi, ih fun j hj => hl j (List.mem_cons_of_mem _ hj)]
+      simp [g, hi]
+  rw [key _ fun i hi => List.mem_range.mp hi]
+  have hl : (List.range a.size).map g = a.toList := by
+    apply List.ext_getElem (by simp)
+    intro j h1 h2
+    have hj : j < a.size := by simpa using h2
+    simp [g, hj]
+  simp [hl]
+
+/-- **Every well-formed audience reads back:** `parseAudience` of what `writeAudience` writes is the
+audience itself. -/
+theorem parseAudience_writeAudience {a : Array Seat} (h : validAudience a = true) :
+    parseAudience (writeAudience a) = some a := by
+  simp only [validAudience, Bool.and_eq_true, decide_eq_true_eq, Array.all_eq_true,
+    beq_iff_eq] at h
+  obtain ⟨⟨⟨hpos, hmax⟩, htag⟩, hsort⟩ := h
+  have htag' : ∀ s ∈ a.toList, s.tag.size = 16 := by
+    intro s hs
+    obtain ⟨i, hi, rfl⟩ := Array.getElem_of_mem (Array.mem_toList_iff.mp hs)
+    exact htag i hi
+  have hsize : (writeAudience a).size = 32 * a.size := by
+    rw [writeAudience_eq, size_writeSeats htag', Array.length_toList]
+  unfold parseAudience
+  have hg : (writeAudience a).size % 32 = 0 ∧ 32 ≤ (writeAudience a).size ∧
+      (writeAudience a).size ≤ 32 * maxAudience := by
+    rw [hsize]; omega
+  have hmap : (List.range ((writeAudience a).size / 32)).toArray.mapM (fun i => do
+      let x ← Aci.ofBytes? ((writeAudience a).extract (32 * i) (32 * i + 16))
+      pure ({ aci := x, tag := ((writeAudience a).extract (32 * i + 16) (32 * i + 32)).data } :
+        Seat)) = some a := by
+    rw [hsize, Nat.mul_div_cancel_left _ (by decide)]
+    apply mapM_range_eq
+    intro i hi
+    obtain ⟨h1, h2⟩ := extract_writeSeats htag' (l := a.toList) (i := i) (by simpa using hi)
+    rw [← writeAudience_eq] at h1 h2
+    rw [h1, h2]
+    simp
+  simp only [guard, hg, and_self, ↓reduceIte]
+  rw [hmap]
+  simp [hsort]
+
+/-- What `List.mapM` in `Option` gives: as many results as inputs, each the value at an input. -/
+theorem mapM_option_spec {α β : Type} {f : α → Option β} :
+    ∀ {l : List α} {l' : List β}, l.mapM f = some l' →
+      l'.length = l.length ∧ ∀ y ∈ l', ∃ x ∈ l, f x = some y
+  | [], l', h => by
+    simp only [List.mapM_nil, Option.pure_def, Option.some.injEq] at h
+    subst h; simp
+  | x :: rest, l', h => by
+    rw [List.mapM_cons] at h
+    simp only [Option.bind_eq_bind, Option.bind_eq_some_iff, Option.pure_def,
+      Option.some.injEq] at h
+    obtain ⟨y, hy, ys, hys, rfl⟩ := h
+    obtain ⟨hlen, hmem⟩ := mapM_option_spec hys
+    refine ⟨by simp [hlen], fun z hz => ?_⟩
+    rcases List.mem_cons.mp hz with rfl | hz
+    · exact ⟨x, List.mem_cons_self, hy⟩
+    · obtain ⟨w, hw, hfw⟩ := hmem z hz
+      exact ⟨w, List.mem_cons_of_mem _ hw, hfw⟩
+
+/-- **Every audience `parseAudience` returns is well-formed**, so it reads back
+(`parseAudience_writeAudience`). -/
+theorem valid_of_parseAudience {b : ByteArray} {a : Array Seat} (h : parseAudience b = some a) :
+    validAudience a = true := by
+  unfold parseAudience at h
+  simp only [guard, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨_, hg, seats, hseats, _, hsort, ha⟩ := h
+  have hg' := Encode.guard_eq_some hg
+  have hsort' := Encode.guard_eq_some hsort
+  simp only [Option.pure_def, Option.some.injEq] at ha
+  subst ha
+  rw [List.mapM_toArray] at hseats
+  cases hl : List.mapM (fun i =>
+      (Aci.ofBytes? (b.extract (32 * i) (32 * i + 16))).bind fun a =>
+        pure ({ aci := a, tag := (b.extract (32 * i + 16) (32 * i + 32)).data } : Seat))
+      (List.range (b.size / 32)) with
+  | none => rw [hl] at hseats; cases hseats
+  | some l' =>
+    rw [hl] at hseats
+    simp only [Functor.map, Option.map_some, Option.some.injEq] at hseats
+    subst hseats
+    obtain ⟨hlen, hmem⟩ := mapM_option_spec hl
+    simp only [List.length_range] at hlen
+    have htags : ∀ x ∈ l', x.tag.size = 16 := by
+      intro y hy
+      obtain ⟨j, hj, hfj⟩ := hmem y hy
+      have hj' := List.mem_range.mp hj
+      simp only [Option.bind_eq_some_iff, Option.pure_def, Option.some.injEq] at hfj
+      obtain ⟨x, -, hx⟩ := hfj
+      rw [← hx]
+      simp only [ByteArray.size_data, ByteArray.size_extract]
+      have : 32 * j + 32 ≤ b.size := by
+        have := Nat.div_mul_le_self b.size 32
+        omega
+      omega
+    have hall : l'.toArray.all (·.tag.size == 16) = true := by
+      rw [List.all_toArray, List.all_eq_true]
+      intro x hx
+      simp [htags x hx]
+    have hsz : l'.toArray.size = b.size / 32 := by simp [hlen]
+    unfold validAudience
+    rw [hall]
+    simp only [Bool.and_true, Bool.and_eq_true, decide_eq_true_eq, hsz]
+    refine ⟨⟨by omega, by simp only [maxAudience] at hg' ⊢; omega⟩, ?_⟩
+    simpa using hsort'
+
+end RoundTrip
+
 /-- The audience committed in an opening: its committed bytes hold exactly one field 201, and its
 value is a well-formed audience. `none` otherwise (no field 201, two of them, or a bad value). -/
 def audienceOf (o : ByteArray) : Option (Array Seat) := do
@@ -145,6 +349,19 @@ def audienceOf (o : ByteArray) : Option (Array Seat) := do
   match (fs.filter (·.num == audienceField)).toList with
   | [f] => parseAudience (← fieldValue m f)
   | _ => none
+
+/-- **Every audience an opening carries is well-formed** (`audienceOf` reads it with
+`parseAudience`), so it reads back from its field-201 bytes. -/
+theorem audienceOf_valid {o : ByteArray} {a : Array Seat} (h : audienceOf o = some a) :
+    validAudience a = true := by
+  unfold audienceOf at h
+  simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨⟨_, m⟩, -, fs, -, h⟩ := h
+  split at h
+  · simp only [Option.bind_eq_some_iff] at h
+    obtain ⟨v, -, hv⟩ := h
+    exact valid_of_parseAudience hv
+  · cases h
 
 /-- `aud` seats the account `aci` whose identity key, as this device holds it, is `key`: an entry
 with that ACI and that key's tag, and the tag is not zero. -/
