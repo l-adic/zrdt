@@ -738,8 +738,10 @@ inductive Status (K : Type*) where
   | confirmedByAuthor
   /-- The foreign marker (`foreignMarked`). -/
   | notConfirmedByAuthor
-  /-- Held by these members, who are not its author (`holders`). -/
-  | heldBy (members : Finset K)
+  /-- Held by `member`, who is not its author: of the members whose live records reach it
+  (`holders`), the smallest. The app shows one name, and the smallest makes the choice the
+  same on every device. -/
+  | heldBy (member : K)
   /-- No live record reaches it. -/
   | unconfirmed
 deriving DecidableEq
@@ -747,11 +749,12 @@ deriving DecidableEq
 /-- The **status** of record `r`, from the store and the live facts. When several labels apply,
 the first wins: confirmed by author, not confirmed by author, held by, unconfirmed. So a fake in
 A's name that member M links live, and that A disowns, shows "not confirmed by A", not "held by
-M". -/
-def status (s : Store α H K) (P : LiveFacts H) (r : Record α H K) : Status K :=
+M". "Held by" names one member: the smallest of the `holders` (for the app, the smallest ACI in
+byte order). -/
+def status [LinearOrder K] (s : Store α H K) (P : LiveFacts H) (r : Record α H K) : Status K :=
   if authorConfirmed hash s P r then .confirmedByAuthor
   else if foreignMarked hash s P r then .notConfirmedByAuthor
-  else if (holders hash s P r).Nonempty then .heldBy (holders hash s P r)
+  else if h : (holders hash s P r).Nonempty then .heldBy ((holders hash s P r).min' h)
   else .unconfirmed
 
 /-! Demo beat 5. Dave imports Bob's dump, onto which two fakes in Bob's name were added on top
@@ -764,7 +767,7 @@ example : liveRecords Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.alice = 
 example : holders Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.me = {Camping.alice} := by decide
 example : status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.tent = .confirmedByAuthor := by
   decide
-example : status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.me = .heldBy {Camping.alice} := by
+example : status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.me = .heldBy Camping.alice := by
   decide
 example : status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.fake1 = .unconfirmed := by decide
 
@@ -778,7 +781,7 @@ example : status Camping.hash Camping.daveB ⟨{5, 6}, ∅⟩ Camping.fake2 = .n
   decide
 -- The same, run by the compiler rather than by the kernel.
 #guard status Camping.hash Camping.daveB ⟨{5, 6}, ∅⟩ Camping.fake1 = .notConfirmedByAuthor
-#guard status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.me = .heldBy {Camping.alice}
+#guard status Camping.hash Camping.daveA ⟨{5}, ∅⟩ Camping.me = .heldBy Camping.alice
 -- A disowned record is never confirmed by its author, even though the author's message
 -- reaches it.
 example : status Camping.hash Camping.bobStore ⟨{5, 6}, {(6, 1)}⟩ Camping.me =
@@ -814,7 +817,13 @@ example : status Camping.hash Camping.relinked ⟨{9, 10}, ∅⟩ Camping.fake1 
     .confirmedByAuthor := by decide
 -- Before Bob writes `b10`, only Mallory's live message reaches the fakes.
 example : status Camping.hash (Camping.relinked.erase Camping.b10) ⟨{9}, ∅⟩ Camping.fake1 =
-    .heldBy {Camping.mallory} := by decide
+    .heldBy Camping.mallory := by decide
+-- Two members hold `me`: Alice (`a5`) and Mallory (`relink` reaches it through the fakes). The
+-- status names the smaller, Alice.
+example : holders Camping.hash (insert Camping.relink Camping.daveA) ⟨{5, 9}, ∅⟩ Camping.me =
+    {Camping.alice, Camping.mallory} := by decide
+example : status Camping.hash (insert Camping.relink Camping.daveA) ⟨{5, 9}, ∅⟩ Camping.me =
+    .heldBy Camping.alice := by decide
 
 /-- **Author confirmation is sound.** Let `s` be your store and `t` the store of member `a`'s
 app. Both are closed, and `a`'s app holds every live record of `a` that you hold. If `a`'s app is
