@@ -24,3 +24,9 @@ globs = ["Test.+"]
 [[lean_exe]]
 name = "axiom_check"
 root = "Test.Axioms"
+
+# The challenge for `lake comparator` (comparator.json): the advertised statements with `sorry`
+# proofs. Not a default target: `lake build` and `lake check` never build it.
+[[lean_lib]]
+name = "Comparator"
+globs = ["Comparator.+"]

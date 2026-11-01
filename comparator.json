@@ -1,0 +1,19 @@
+{
+  "challenge_module": "Comparator.Challenge",
+  "solution_module": "Crdt.Merkle.Api",
+  "theorem_names": [
+    "Zrdt.CheckedStore.fetched",
+    "Zrdt.CheckedStore.no_collision",
+    "Zrdt.CheckedStore.agree",
+    "Zrdt.CheckedStore.abs_accept",
+    "Zrdt.CheckedStore.abs_merge",
+    "Zrdt.CheckedStore.open_iff",
+    "Zrdt.CheckedStore.salvage_spec",
+    "Zrdt.CheckedStore.encode_open",
+    "Zrdt.CheckedStore.confirmed",
+    "Zrdt.CheckedStore.classify_spec",
+    "Zrdt.encode_injective"
+  ],
+  "definition_names": [],
+  "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"]
+}

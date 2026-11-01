@@ -205,9 +205,8 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 -- zrdt: exactly the advertised statements about the shipped store (`Crdt/Merkle/Api.lean`,
 -- docs/PLAN.md §3.2), in the order of §3.2, and `Zrdt.encode_injective`
--- (`Crdt/Merkle/EncodeProofs.lean`). The spec theorems in `Crdt.Merkle` (`fetched_agree`,
--- `fetched_build`, `fetched_union`, `confirmed_exact`, `salvage_maximal`,
--- `authorConfirmed_sound`, ...) are their proof obligations and are not pinned here.
+-- (`Crdt/Merkle/EncodeProofs.lean`), the same names as `comparator.json`. Some of their proof
+-- obligations are pinned in a separate block below; they are not advertised.
 
 /-- info: 'Zrdt.CheckedStore.fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.fetched

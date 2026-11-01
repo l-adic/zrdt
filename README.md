@@ -72,4 +72,11 @@ store with an extra made-up record (not `Tight`) and a store with a record swapp
   not for a stream of single accepts. Holding early records until their links arrive is not
   modelled.
 - **Compaction.** Stores only grow.
-- **Comparator.** Not run yet. It is planned for the end of the project.
+- **Comparator.** `Comparator/Challenge.lean` restates the advertised statements of
+  `Crdt/Merkle/Api.lean` and `Zrdt.encode_injective` with `sorry`; `comparator.json` names them
+  and permits only `propext`, `Classical.choice`, `Quot.sound`. `make comparator` runs
+  `lake comparator` and `make check` runs `lake check`. Both sandbox the project with
+  bubblewrap, which needs unprivileged user namespaces (on Ubuntu 24.04, an AppArmor profile for
+  `/usr/bin/bwrap`); where that is not available, `make comparator-local` compares the
+  statements and axioms in-process and replays our modules with `leanchecker`. That stand-in is
+  not the comparator verdict.

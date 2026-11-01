@@ -17,7 +17,9 @@ set_option linter.unusedSectionVars false
 # What the shipped store guarantees (docs/PLAN.md §3.2)
 
 These are the advertised statements about the shipped code, `Zrdt.CheckedStore`, and nothing
-else is advertised. The axiom gate (`Test/Axioms.lean`) pins exactly these names. Each one is
+else is advertised. The axiom gate (`Test/Axioms.lean`) pins exactly these names, and
+`Comparator/Challenge.lean` restates them word for word for `lake comparator`
+(`comparator.json`): a change to a statement here must be made there too. Each one is
 about `abs c`, the set of records the store holds, seen in the spec model (`Bridge.lean`), with
 `hashSpec` as the hash: the record digest the code computes. Each is a one-line corollary of a
 proof in `Bridge.lean`, `Refine.lean`, `LoadApi.lean`, `EncodeProofs.lean`,
