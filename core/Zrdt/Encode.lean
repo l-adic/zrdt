@@ -70,6 +70,8 @@ example : recordTag.size = 5 := by decide
 def linksBytes (ls : Array Digest) : ByteArray :=
   ls.foldl (fun acc d => acc ++ d.bytes) ByteArray.empty
 
+#guard linksBytes #[Digest.zero, Digest.zero] == ⟨Array.replicate 64 0⟩
+
 /-- The bytes of a record (layout in the module header). -/
 def encode (r : Rec) : ByteArray :=
   recordTag ++ r.group.bytes ++ r.commit.bytes ++ u32be r.links.size ++ linksBytes r.links ++
@@ -78,12 +80,17 @@ def encode (r : Rec) : ByteArray :=
 /-- The size of a record with `n` links: 89 bytes plus 32 per link. -/
 def encodedSize (n : Nat) : Nat := 89 + 32 * n
 
+example : encodedSize 2 = 153 := rfl
+
 /-- Read `k` digests, 32 bytes each, from offset `off`, appending them to `acc`. -/
 def readDigests (b : ByteArray) (off : Nat) (acc : Array Digest) : Nat → Option (Array Digest)
   | 0 => some acc
   | k + 1 => do
     let d ← Digest.ofBytes? (b.extract off (off + 32))
     readDigests b (off + 32) (acc.push d) k
+
+#guard readDigests ⟨Array.replicate 65 0⟩ 1 #[] 2 == some #[Digest.zero, Digest.zero]
+#guard readDigests ⟨Array.replicate 63 0⟩ 0 #[] 2 == none
 
 /-- Decode a record. `none` unless the input is exactly `encode r` for some record `r`.
 
@@ -126,8 +133,12 @@ def readRecords (b : ByteArray) (off : Nat) (acc : Array Rec) : Nat → Option (
     let r ← decode (b.extract (off + 4) (off + 4 + len))
     readRecords b (off + 4 + len) (acc.push r) k
 
+#guard (readRecords (u32be 89 ++ encode Examples.first) 0 #[] 1).map (·.2) == some 93
+
 /-- The smallest entry in a blob: a 4-byte length and a record with no links. -/
 def minEntrySize : Nat := 4 + encodedSize 0
+
+example : minEntrySize = 93 := rfl
 
 /-- Decode a store blob into its group and records. `none` on any framing error, a record that
 does not decode, or bytes left over. The order of the records is not checked. -/
@@ -149,6 +160,8 @@ def maxLinks : Nat := 4096
 
 /-- A store holds fewer than this many records. -/
 def maxRecords : Nat := 2^24
+
+example : maxLinks = 4096 ∧ maxRecords = 16777216 := ⟨rfl, rfl⟩
 
 /-- A record is within the size limit: at most `maxLinks` links. -/
 def Rec.WellSized (r : Rec) : Prop := r.links.size ≤ maxLinks

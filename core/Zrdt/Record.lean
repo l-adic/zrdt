@@ -37,6 +37,8 @@ def isStrictlySortedList : List Digest → Bool
   | a :: b :: rest => compare a b == .lt && isStrictlySortedList (b :: rest)
   | _ => true
 
+#guard isStrictlySortedList [Digest.zero] && !isStrictlySortedList [Digest.zero, Digest.zero]
+
 /-- Comparing neighbours is enough, because the order is transitive. -/
 theorem isStrictlySortedList_iff :
     ∀ l : List Digest, isStrictlySortedList l = true ↔ l.Pairwise (fun a b => compare a b = .lt)
@@ -61,6 +63,8 @@ instance (ds : Array Digest) : Decidable (StrictlySorted ds) :=
 /-- Sort digests increasing and drop repeats. -/
 def canonicalLinks (ds : Array Digest) : Array Digest :=
   (Std.TreeSet.ofList ds.toList compare).toArray
+
+#guard canonicalLinks #[Digest.zero, Digest.zero] == #[Digest.zero]
 
 /-- `canonicalLinks` really is canonical. -/
 theorem canonicalLinks_sorted (ds : Array Digest) : StrictlySorted (canonicalLinks ds) := by

@@ -139,6 +139,7 @@ where
       go rest (acc.push (h * 16 + l))
     | [_], _ => none
 
+#guard hexValue? 'b' == some 11 && hexValue? 'B' == some 11 && hexValue? 'g' == none
 #guard bytesOfHex? "00090aFF" == some ⟨#[0, 9, 10, 255]⟩
 #guard bytesOfHex? "abc" == none
 #guard bytesOfHex? "zz" == none
@@ -269,6 +270,7 @@ instance : Std.LawfulEqOrd GroupId where
 
 #guard (ofBytes? ⟨Array.replicate 32 7⟩).isSome
 #guard (ofBytes? ⟨Array.replicate 16 7⟩).isNone
+#guard (ofHex? zero.toHex) == some zero
 
 end GroupId
 
@@ -330,6 +332,7 @@ instance : Std.LawfulEqOrd Aci where
 #guard (ofHex? "000102030405060708090a0b0c0d0e0f").map toHex ==
   some "000102030405060708090a0b0c0d0e0f"
 #guard (ofBytes? ⟨Array.replicate 32 7⟩).isNone
+#guard zero.toHex == "00000000000000000000000000000000"
 
 end Aci
 

@@ -102,6 +102,11 @@ def compress (h : State) (p : ByteArray) (off : Nat) : State := Id.run do
     s := round s K[i]! w[i]!
   return ⟨h.a + s.a, h.b + s.b, h.c + s.c, h.d + s.d, h.e + s.e, h.f + s.f, h.g + s.g, h.h + s.h⟩
 
+-- FIPS 180-4 example "abc": the working words after the first round.
+#guard
+  let s := round H0 K[0]! (schedule (pad "abc".toUTF8) 0)[0]!
+  s.a == 0x5d6aebcd && s.b == 0x6a09e667 && s.e == 0xfa2a4622 && s.h == 0x1f83d9ab
+
 /-- The 32 output bytes: each word big-endian, `a` first. -/
 def State.toBytes (s : State) : ByteArray :=
   let be (x : UInt32) : List UInt8 :=
@@ -110,6 +115,8 @@ def State.toBytes (s : State) : ByteArray :=
 
 /-- The output always has 32 bytes. -/
 theorem State.size_toBytes (s : State) : s.toBytes.size = 32 := rfl
+
+#guard (H0.toBytes.extract 0 4) == ⟨#[0x6a, 0x09, 0xe6, 0x67]⟩
 
 end Sha256
 
