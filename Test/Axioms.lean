@@ -276,5 +276,27 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
 
+-- Join spec obligations, NOT advertised (docs/JOIN_PLAN.md §7.2, `Crdt/Merkle/Rel.lean`): a
+-- newcomer's relative store, with a boundary of opaque digests, served by a closed or a relative
+-- responder. They are proof obligations for the join work; `comparator.json` does not list them.
+
+/-- info: 'Crdt.Merkle.served_heads'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_heads'
+
+/-- info: 'Crdt.Merkle.served_closed'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_closed'
+
+/-- info: 'Crdt.Merkle.served_tight'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_tight'
+
+/-- info: 'Crdt.Merkle.served_boundary'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_boundary'
+
+/-- info: 'Crdt.Merkle.agree_rel'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.agree_rel'
+
+/-- info: 'Crdt.Merkle.newcomer_agree'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.newcomer_agree'
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
