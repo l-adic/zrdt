@@ -1,3 +1,6 @@
+import Zrdt.Digest
+import Zrdt.Sha256
+
 /-!
 # Zrdt: the shipped code (no Mathlib)
 
