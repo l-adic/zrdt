@@ -669,6 +669,11 @@ def joinSteps : Array Step := #[
   ask "OPEN g3 from g's blob" (.open "g3" group (.blob gBlob)) .ok,
   ask "ADDRESSED bob in g3: the audiences came back with the blob" (.addressed "g3" bob keyBob) .ok
     (some (.digests (digestsOf [welcome, later, timed]))),
+  ask "MERGE g's blob into g2: the blob's audiences are recorded where none is"
+    (.merge "g2" gBlob) .ok,
+  ask "ADDRESSED bob in g2: the merged audiences too (later, and the new disappearing message)"
+    (.addressed "g2" bob keyBob) .ok (some (.digests (digestsOf [welcome, later, timed]))),
+  ask "ENCODE g2: the same blob as g's" (.encode "g2") .ok (some (.blob gBlob)),
   ask "CLOSE g" (.close "g") .ok,
   ask "NEW g again: no audiences" (.new "g" group) .ok,
   ask "ADDRESSED carol in the new g: nothing" (.addressed "g" carol keyCarol) .ok

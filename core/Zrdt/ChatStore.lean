@@ -24,9 +24,10 @@ decides structure only (`Serve.serve_content` does not mention it). The project 
 `OPEN` reads `zrdtS3` only.
 
 **Proved here:** `decodeChat_encodeChat` (the framing reads back what was written) and
-`ChatStore.encode_reopens`: opening a store's blob under its own chat gives back exactly that store, and
-its audience table for stored records, when each audience reads back (`parseAudience` of
-`writeAudience`, true of every audience `ACCEPT` records; checked on examples below).
+`ChatStore.encode_reopens`: opening a store's blob under its own chat gives back exactly that
+store, and its audience table for stored records (every audience reads back,
+`Serve.parseAudience_writeAudience`). `MERGE` records the blob's audiences of the records stored
+in the merged store that have none recorded (`mergeAudiences_spec`).
 -/
 
 namespace Zrdt
@@ -341,9 +342,11 @@ def decodeChat (b : ByteArray) : Option Blob3 := do
   guard (q ≤ b.size)
   pure ⟨relative, bnd, auds, b.extract q b.size⟩
 
-/-- The audiences of stored records only: what a blob carries. -/
+/-- The audiences of stored records only, and only well-formed ones: what a blob carries. Every
+audience `zrdtd` records is well-formed (`Serve.audienceOf_valid`, `Serve.valid_of_parseAudience`),
+so the second test drops nothing; it makes `ChatStore.encode_reopens` hold for every table. -/
 def storedAudiences (s : ChatStore) (auds : AudTable) : AudTable :=
-  auds.filter fun d _ => s.has d
+  auds.filter fun d a => s.has d && Serve.validAudience a
 
 /-- The `zrdtS3` blob of a chat's store and its audience table (`ENCODE`). Only audiences of
 stored records are written. -/
@@ -411,21 +414,94 @@ def salvageChat (g : GroupId) (b : ByteArray) : Except OpenError ChatSalvaged :=
       | .ok sv => .ok (finish (.closed sv.store) sv.dropped sv.missing)
       | .error e => .error e
 
-/-- `MERGE` of a `zrdtS3` blob into a chat's store. A closed store merges the blob's records with
-`CheckedStore.mergeBlob` (a relative blob's records that link its boundary then fail: a closed
-store takes no boundary digest). A relative store opens the blob as a store of its chat and adds
-its records and boundary (`RelStore.merge`). The blob's audience table is not read. -/
-def mergeChat (s : ChatStore) (b : ByteArray) : Except OpenError ChatStore :=
+/-- `MERGE` of a `zrdtS3` blob into a chat's store: the merged store, and the blob's audience
+table. A closed store merges the blob's records with `CheckedStore.mergeBlob` (a relative blob's
+records that link its boundary then fail: a closed store takes no boundary digest). A relative
+store opens the blob as a store of its chat and adds its records and boundary (`RelStore.merge`).
+`Zrdt.Proto` records the blob's audiences with `mergeAudiences`. -/
+def mergeChat (s : ChatStore) (b : ByteArray) : Except OpenError (ChatStore × AudTable) :=
   match s with
   | .closed c =>
     match decodeChat b with
     | none => .error .malformed
     | some x =>
-      if blobTooLarge x.records then .error .tooLarge else .closed <$> c.mergeBlob x.records
+      if blobTooLarge x.records then .error .tooLarge
+      else (fun c' => (.closed c', Std.ExtTreeMap.ofList x.audiences compare)) <$>
+        c.mergeBlob x.records
   | .relative c =>
     match openChat c.group b with
     | .error e => .error e
-    | .ok (d, _) => .relative <$> c.merge d.toRel
+    | .ok (d, auds) => (fun c' => (.relative c', auds)) <$> c.merge d.toRel
+
+/-- The audiences after `MERGE` into the merged store `s`: every recorded audience stays, and the
+blob's audience of a record stored in `s` is added where none is recorded. -/
+def mergeAudiences (s : ChatStore) (auds blobAuds : AudTable) : AudTable :=
+  blobAuds.foldl (init := auds) fun m d a => if s.has d && !m.contains d then m.insert d a else m
+
+/-- **What `mergeAudiences` records.** Every recorded audience stays. An audience in the result
+was recorded before, or it is the blob's audience of a record stored in `s` that had none. -/
+theorem mergeAudiences_spec (s : ChatStore) (auds blobAuds : AudTable) :
+    (∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
+      (mergeAudiences s auds blobAuds)[d]? = some a) ∧
+    (∀ (d : Digest) (a : Array Serve.Seat), (mergeAudiences s auds blobAuds)[d]? = some a →
+      auds[d]? = some a ∨ (auds[d]? = none ∧ s.has d = true ∧ blobAuds[d]? = some a)) := by
+  have step : ∀ (l : List (Digest × Array Serve.Seat)) (m : AudTable),
+      (∀ x ∈ l, blobAuds[x.1]? = some x.2) →
+      (∀ (d : Digest) (a : Array Serve.Seat), m[d]? = some a →
+        (l.foldl (fun (m : AudTable) p => if s.has p.1 && !m.contains p.1 then m.insert p.1 p.2
+          else m) m)[d]? = some a) ∧
+      (∀ (d : Digest) (a : Array Serve.Seat), (l.foldl (fun (m : AudTable) p =>
+          if s.has p.1 && !m.contains p.1 then m.insert p.1 p.2 else m) m)[d]? = some a →
+        m[d]? = some a ∨ (m[d]? = none ∧ s.has d = true ∧ blobAuds[d]? = some a)) := by
+    intro l
+    induction l with
+    | nil => intro m _; exact ⟨fun _ _ h => h, fun _ _ h => .inl h⟩
+    | cons p rest ih =>
+      intro m hl
+      obtain ⟨keep, only⟩ := ih (if s.has p.1 && !m.contains p.1 then m.insert p.1 p.2 else m)
+        fun x hx => hl x (List.mem_cons_of_mem _ hx)
+      have hp := hl p List.mem_cons_self
+      simp only [List.foldl_cons]
+      refine ⟨fun d a hd => keep d a ?_, fun d a hd => ?_⟩
+      · split
+        · rename_i hc
+          simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
+          rw [Std.ExtTreeMap.getElem?_insert]
+          split
+          · rename_i he
+            rw [Std.LawfulEqCmp.compare_eq_iff_eq] at he
+            subst he
+            rw [Std.ExtTreeMap.contains_eq_isSome_getElem?, hd] at hc
+            cases hc.2
+          · exact hd
+        · exact hd
+      · rcases only d a hd with h | ⟨hn, hs, hb⟩
+        · split at h
+          · rename_i hc
+            simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
+            rw [Std.ExtTreeMap.getElem?_insert] at h
+            split at h
+            · rename_i he
+              rw [Std.LawfulEqCmp.compare_eq_iff_eq] at he
+              subst he
+              cases h
+              refine .inr ⟨?_, hc.1, hp⟩
+              rw [Std.ExtTreeMap.contains_eq_isSome_getElem?] at hc
+              cases hm : m[p.1]? with
+              | none => rfl
+              | some _ => rw [hm] at hc; cases hc.2
+            · exact .inl h
+          · exact .inl h
+        · split at hn
+          · rw [Std.ExtTreeMap.getElem?_insert] at hn
+            split at hn
+            · cases hn
+            · exact .inr ⟨hn, hs, hb⟩
+          · exact .inr ⟨hn, hs, hb⟩
+  have := step blobAuds.toList auds fun x hx =>
+    Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mp hx
+  rw [mergeAudiences, Std.ExtTreeMap.foldl_eq_foldl_toList]
+  exact this
 
 /-! ## Reading back what was written -/
 
@@ -588,16 +664,14 @@ theorem size_storedAudiences (s : ChatStore) (auds : AudTable) :
     have hk' := Std.ExtTreeMap.mem_keys.mp hk
     rw [storedAudiences, Std.ExtTreeMap.mem_filter] at hk'
     obtain ⟨_, hhas⟩ := hk'
-    simp only [ChatStore.has, Std.ExtTreeMap.getKey_eq] at hhas
-    exact Std.ExtTreeMap.mem_keys.mpr (Std.ExtTreeMap.mem_iff_contains.mpr hhas)
+    simp only [ChatStore.has, Std.ExtTreeMap.getKey_eq, Bool.and_eq_true] at hhas
+    exact Std.ExtTreeMap.mem_keys.mpr (Std.ExtTreeMap.mem_iff_contains.mpr hhas.1)
   have := s.builtRel.size_lt
   omega
 
 /-- **The framing reads back.** A store's blob decodes to its mode, its boundary, its stored
-audiences and its records blob, when each audience reads back. -/
-theorem decodeChat_encodeChat (s : ChatStore) (auds : AudTable)
-    (hp : ∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
-      Serve.parseAudience (Serve.writeAudience a) = some a) :
+audiences and its records blob. -/
+theorem decodeChat_encodeChat (s : ChatStore) (auds : AudTable) :
     decodeChat (encodeChat s auds) =
       some ⟨s.isRelative, s.boundary.toList, (storedAudiences s auds).toList, s.inner⟩ := by
   let bnd := s.boundary.toList
@@ -615,7 +689,9 @@ theorem decodeChat_encodeChat (s : ChatStore) (auds : AudTable)
     intro x hx
     have := Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mp hx
     simp only [storedAudiences, Std.ExtTreeMap.getElem?_filter'] at this
-    exact hp x.1 x.2 (Option.eq_some_of_filter_eq_some this)
+    obtain ⟨-, hv⟩ := Option.filter_eq_some_iff.mp this
+    simp only [Bool.and_eq_true] at hv
+    exact Serve.parseAudience_writeAudience hv.2
   have hclosed : s.isRelative = true ∨ bnd.length = 0 := by
     cases s with
     | closed c => right; simp [bnd, ChatStore.boundary]
@@ -747,13 +823,12 @@ theorem openStore_encode (s : ChatStore) (l : List (Digest × Array Serve.Seat))
 
 /-- **A chat's blob reopens as itself:** opening the blob of a store and its audience table,
 under its own chat, gives back exactly that store (records, heads, boundary and vouchers) and the
-audiences of its stored records, when each audience reads back through `parseAudience`. -/
-theorem ChatStore.encode_reopens (s : ChatStore) (auds : AudTable)
-    (hp : ∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
-      Serve.parseAudience (Serve.writeAudience a) = some a) :
+audiences of its stored records (`storedAudiences`: every one `zrdtd` records, since each is
+well-formed and reads back, `Serve.parseAudience_writeAudience`). -/
+theorem ChatStore.encode_reopens (s : ChatStore) (auds : AudTable) :
     openChat s.group (encodeChat s auds) = .ok (s, storedAudiences s auds) := by
   unfold openChat
-  rw [decodeChat_encodeChat s auds hp]
+  rw [decodeChat_encodeChat s auds]
   simp only
   rw [openStore_encode]
   simp only [Functor.map, Except.map, ofList_toList, storedAudiences_idem]
@@ -776,9 +851,9 @@ open Examples
   | .ok (s, auds) => s.headsArray == all4.headsArray && !s.isRelative &&
     auds.toList == [(hashRecord a1, #[⟨alice, Serve.keyTag ⟨#[1]⟩⟩])]
   | .error _ => false
--- The audiences `ACCEPT` records read back (the hypothesis of `ChatStore.encode_reopens`).
+-- The audiences `ACCEPT` records are well-formed and read back.
 #guard (Serve.audienceOf Serve.Examples.welcome.2).all fun a =>
-  Serve.parseAudience (Serve.writeAudience a) == some a
+  Serve.validAudience a && Serve.parseAudience (Serve.writeAudience a) == some a
 -- Refused: a closed blob that lists a boundary digest; a `zrdtS2` blob; another chat.
 #guard (decodeChat (blob3Tag ++ ⟨#[0]⟩ ++ u32be 1 ++ (hashRecord a1).bytes ++ alice.bytes ++
   u32be 0 ++ all4.encode)).isNone
@@ -792,7 +867,7 @@ open Examples
   | .ok sv => sv.store.isRelative && sv.dropped.size == 0
   | .error _ => false
 #guard match mergeChat (.relative relStore) (encodeChat (.closed all4) ∅) with
-  | .ok s => s.has (hashRecord a1) && s.headsArray == all4.headsArray
+  | .ok (s, _) => s.has (hashRecord a1) && s.headsArray == all4.headsArray
   | .error _ => false
 -- A closed store refuses a relative blob's records that need its boundary.
 #guard match mergeChat (.closed (CheckedStore.empty group)) (encodeChat (.relative relStore) ∅) with
@@ -802,6 +877,6 @@ open Examples
 -- The guarantee on a concrete store.
 example : openChat (ChatStore.relative relStore).group (encodeChat (.relative relStore) ∅) =
     .ok (.relative relStore, storedAudiences (.relative relStore) ∅) :=
-  ChatStore.encode_reopens _ _ (by simp)
+  ChatStore.encode_reopens _ _
 
 end Zrdt
