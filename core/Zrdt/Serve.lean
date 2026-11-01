@@ -63,6 +63,8 @@ def audienceField : Nat := 201
 /-- The most entries an audience may have (JOIN_PLAN §12.2, decided: 256). -/
 def maxAudience : Nat := 256
 
+example : audienceField = 201 ∧ maxAudience = 256 := ⟨rfl, rfl⟩
+
 /-- One audience entry: an account, and the tag of the identity key the author held for it
 (`zeroTag` for a member the message is not sent to). -/
 structure Seat where
@@ -741,6 +743,24 @@ def crawls : List Query :=
   [rq bob keyBob, rq bob keyBob (wanted := some #[hashRecord pre.1]),
    rq bob keyBob (since := #[hashRecord later.1]), rq bob keyBob (since := #[hashRecord pre.1]),
    rq bob keyBob (wanted := some #[hashRecord pre.1, hashRecord welcome.1, hashRecord stale.1])]
+-- The walks, for Bob's catch-up: he is seated in `welcome` and `later`; the walk back from them
+-- reaches `stale` too, never `pre`; `later` reaches all four; `later` links `stale` only.
+#guard visList store held (rq bob keyBob) == [hashRecord welcome.1, hashRecord later.1] ||
+  visList store held (rq bob keyBob) == [hashRecord later.1, hashRecord welcome.1]
+#guard (upSet store held (rq bob keyBob)).toList.length == 3 &&
+  !(upSet store held (rq bob keyBob)).contains (hashRecord pre.1)
+#guard (sinceReach store (rq bob keyBob (since := #[hashRecord later.1]))).toList.length == 4
+#guard (linksOf store [hashRecord later.1]).toList == [hashRecord stale.1]
+#guard (linkedByMap store).get? (hashRecord stale.1) == some [hashRecord later.1]
+#guard !entitledHere held (rq bob keyBob) (hashRecord pre.1) pre.1 &&
+  entitledHere held (rq bob keyBob) (hashRecord welcome.1) welcome.1
+-- The audience cache decides structure when the opening is gone: Bob is still `addressed` for
+-- `welcome` (with no content) when only its recorded audience is held.
+#guard (serve store meAlice ((∅ : HeldMap).insert (hashRecord welcome.1)
+    { audience := audienceOf welcome.2 }) (rq bob keyBob)).any fun
+  | .addressed r none _ => r == welcome.1 | _ => false
+#guard audienceFor welcome.1 { opening := some pre.2, audience := some #[] } == some #[]
+
 -- None returns `pre`'s content or structure.
 #guard crawls.all fun cq => (serve store meAlice held cq).all fun
   | .addressed r _ _ => r != pre.1

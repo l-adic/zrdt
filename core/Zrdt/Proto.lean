@@ -1168,6 +1168,43 @@ theorem commit_openingMatches {build : String} {t t' : Table} {g : GroupId} {a :
     exact commitWithOpening_matches hc
   · simp at h
 
+/-! ### `run_serve_content` on a real request
+
+A table holding Alice's message to herself (`Serve.Examples.selfMsg`), and her own `SERVE`
+request for her account: the reply holds the message with its opening, as an author copy. So the
+hypothesis of `run_serve_content` is met, and its content clause is not vacuous. -/
+
+open Serve.Examples in
+/-- Chat `"self"`: Alice's message to herself, no audience recorded. -/
+def selfTable : Table := (∅ : Table).insert "self" { store := selfStore }
+
+open Serve.Examples in
+/-- Alice asks for her own account's catch-up, under her own key; her device holds the opening and
+the record `live`. -/
+def selfServe : ServeRequest :=
+  { own := Examples.alice, requester := Examples.alice, key := keyAlice,
+    rid := ⟨Array.replicate 16 0⟩, since := #[], ownSince := #[], wanted := none,
+    forExport := false, strict := false, live := #[selfDigest], disown := #[],
+    held := #[(selfDigest, selfMsg.2)] }
+
+open Serve.Examples in
+example : ∃ h es t', run buildId selfTable (.serve "self" selfServe) = (.served h es, t') ∧
+    Serve.Entry.addressed selfMsg.1 (some selfMsg.2) true ∈ es := by
+  have hme : selfServe.me = selfMe := by
+    simp [ServeRequest.me, selfServe, selfMe]
+  have hheld : selfServe.heldMap ∅ = selfHeld := by
+    have hm : (∅ : Std.ExtTreeMap Digest (Array Serve.Seat) compare).map
+        (fun _ a => ({ audience := some a } : Serve.Held)) = ∅ :=
+      Std.ExtTreeMap.map_eq_empty_iff.2 rfl
+    simp [ServeRequest.heldMap, selfServe, selfHeld, hm]
+  have hq : selfServe.query = rq Examples.alice keyAlice := rfl
+  refine ⟨⟨Examples.alice, Serve.keyTag keyAlice, ⟨Array.replicate 16 0⟩⟩,
+    Serve.serve selfStore selfServe.me (selfServe.heldMap ∅) selfServe.query, selfTable, ?_, ?_⟩
+  · simp only [run, reading, selfTable, Std.HashMap.getElem?_insert_self]
+    rfl
+  · rw [hme, hheld, hq]
+    exact self_served false false
+
 /-- Answer one request payload: the reply payload and the new table. A request that cannot be
 read gets `UNKNOWN_OP` or `BAD_REQUEST` and changes nothing. -/
 def step (build : String) (t : Table) (payload : ByteArray) : ByteArray × Table :=
