@@ -36,6 +36,12 @@ Part 2 (proofs in `Refine.lean`):
 
 TODO (other lanes): `open_iff`, `salvage_spec` (in `LoadApi.lean`, lane
 build/encode-proofs-api), `encode_injective` (`EncodeProofs.lean`).
+
+**What the statements mean depends on** (the trusted surface, beyond the code under test):
+`abs`, `toSpec`, `hashSpec` (`Bridge.lean`); the spec's `accept`, `digests`, `heads`, `Reach`,
+`Fetched`, `CollisionIn` (`Defs.lean`); `AcceptMeans` (here). For `classify_spec` also:
+`liveOf`, `StatusMeans` (`Classify.lean`), and the spec's `liveRecords`, `authorConfirmed`,
+`foreignMarked`, `holders` (`Chat.lean`).
 -/
 
 namespace Zrdt
