@@ -13,9 +13,14 @@ replies come in request order. Diagnostics go to stderr.
 - End of input between frames: exit 0. End of input inside a frame: a diagnostic, then exit 1.
 - The host runs it with `LEAN_ABORT_ON_PANIC=1`, so a `panic!` stops it instead of going on with
   a default value. Without it, `zrdtd` warns on stderr at start.
+- `VERSION` reports `buildText`: a hash over the sources of the library modules and of this file
+  (`Proto.buildIdOf`). This file imports them all, so a change to any of them rebuilds it.
 -/
 
 open Zrdt
+
+/-- The build text of `VERSION`, over the library sources and this file's own source. -/
+def buildText : String := Proto.buildIdOf (include_str "Main.lean")
 
 /-- The most bytes one read asks for. -/
 def chunkSize : Nat := 65536
@@ -67,7 +72,7 @@ partial def loop (input output err : IO.FS.Stream) : IO UInt32 := do
     err.putStrLn s!"zrdtd: {why}; exiting"
     return 1
   | .frame payload =>
-    let reply ← Proto.handle payload
+    let reply ← Proto.handle buildText payload
     if let some line := describeRefusal payload reply then err.putStrLn line
     output.write (u32be reply.size ++ reply)
     output.flush
@@ -78,5 +83,5 @@ def main : IO UInt32 := do
   let err ← IO.getStderr
   if (← IO.getEnv "LEAN_ABORT_ON_PANIC") != some "1" then
     err.putStrLn "zrdtd: warning: LEAN_ABORT_ON_PANIC is not 1, so a panic would not stop zrdtd"
-  err.putStrLn s!"zrdtd: protocol {Proto.protocolVersion}, {Proto.buildId}"
+  err.putStrLn s!"zrdtd: protocol {Proto.protocolVersion}, {buildText}"
   loop (← IO.getStdin) (← IO.getStdout) err

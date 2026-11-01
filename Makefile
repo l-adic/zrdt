@@ -26,9 +26,9 @@ ZRDTD := core/.lake/build/bin/zrdtd
 zrdtd: ## Build the zrdtd daemon (core/, no Mathlib) -> core/.lake/build/bin/zrdtd
 	cd core && lake build zrdtd
 
-vectors: ## Regenerate vectors/vectors.json from core/Zrdt/Vectors.lean
+vectors: ## Regenerate vectors/vectors.json from core/Zrdt/Vectors.lean (printed by core/Zrdtd/Vectors.lean)
 	mkdir -p vectors
-	cd core && lake build && lake env lean --run Zrdt/Vectors.lean > ../vectors/vectors.json.tmp
+	cd core && lake build && lake env lean --run Zrdtd/Vectors.lean > ../vectors/vectors.json.tmp
 	mv vectors/vectors.json.tmp vectors/vectors.json
 
 closure: ## Check the linked zrdtd: only Init, Std, zrdt-core (and runtime libuv) initializers, no lean_initialize; silent if OK

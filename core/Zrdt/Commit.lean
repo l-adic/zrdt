@@ -158,6 +158,76 @@ def commit (group : GroupId) (author : Aci) (nonce : Nonce) (dataMessage : ByteA
   (committedBytes dataMessage).map fun s =>
     sha256 (commitTag ++ group.bytes ++ author.bytes ++ nonce.bytes ++ s)
 
+/-! ## The opening
+
+The **opening** of a message is what the app stores and relays in place of the message:
+
+    opening = nonce (32) ‖ committed bytes
+
+`COMMIT` returns it next to the commitment. It never holds field 15 (the group master key) or
+field 200. A record and an opening that a relay or an import brings are checked together by
+`openingMatches`: the commitment of the opening, under the record's group and author, must be the
+record's commit. -/
+
+/-- The commitment and the opening of a message. `none` if the `DataMessage` is malformed. -/
+def commitWithOpening (group : GroupId) (author : Aci) (nonce : Nonce) (dataMessage : ByteArray) :
+    Option (Digest × ByteArray) :=
+  (committedBytes dataMessage).map fun s =>
+    (sha256 (commitTag ++ group.bytes ++ author.bytes ++ nonce.bytes ++ s), nonce.bytes ++ s)
+
+/-- `commitWithOpening` gives the commitment `commit` gives. -/
+theorem commitWithOpening_fst (group : GroupId) (author : Aci) (nonce : Nonce)
+    (dataMessage : ByteArray) :
+    (commitWithOpening group author nonce dataMessage).map (·.1) =
+      commit group author nonce dataMessage := by
+  simp only [commitWithOpening, commit, Option.map_map]
+  rfl
+
+/-- An opening split into its nonce and its committed bytes. `none` if it is shorter than 32
+bytes. -/
+def splitOpening (o : ByteArray) : Option (Nonce × ByteArray) := do
+  let n ← Nonce.ofBytes? (o.extract 0 32)
+  pure (n, o.extract 32 o.size)
+
+/-- Whether `o` is an opening of a message with commitment `c`, by this author in this group: it
+is a nonce and committed bytes (well-formed, with no field 15 or 200 left in them), and their
+commitment is `c`. -/
+def openingMatches (group : GroupId) (author : Aci) (c : Digest) (o : ByteArray) : Bool :=
+  match splitOpening o with
+  | none => false
+  | some (n, m) => decide (committedBytes m = some m ∧ commit group author n m = some c)
+
+/-- `splitOpening` cuts the opening in two: the nonce, then the rest. -/
+theorem splitOpening_eq {o : ByteArray} {n : Nonce} {m : ByteArray}
+    (h : splitOpening o = some (n, m)) : o = n.bytes ++ m := by
+  simp only [splitOpening, Option.bind_eq_bind, Option.bind_eq_some_iff, Option.pure_def,
+    Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨n', hn, rfl, rfl⟩ := h
+  unfold Nonce.ofBytes? at hn
+  split at hn
+  · rename_i hs
+    cases hn
+    have h32 : 32 ≤ o.size := by
+      simp only [ByteArray.size_extract] at hs; omega
+    show o = o.extract 0 32 ++ o.extract 32 o.size
+    rw [← ByteArray.extract_eq_extract_append_extract 32 (Nat.zero_le _) h32,
+      ByteArray.extract_zero_size]
+  · cases hn
+
+/-- **What a matching opening means.** If `openingMatches group author c o`, then `o` is a nonce
+followed by message bytes that hold no field 15 or 200, and the commitment of that nonce and
+those bytes, by `author` in `group`, is `c`. -/
+theorem openingMatches_spec {group : GroupId} {author : Aci} {c : Digest} {o : ByteArray}
+    (h : openingMatches group author c o = true) :
+    ∃ (n : Nonce) (m : ByteArray), o = n.bytes ++ m ∧ committedBytes m = some m ∧
+      commit group author n m = some c := by
+  unfold openingMatches at h
+  split at h
+  · cases h
+  · rename_i n m hs
+    obtain ⟨h1, h2⟩ := of_decide_eq_true h
+    exact ⟨n, m, splitOpening_eq hs, h1, h2⟩
+
 /-! ## Examples -/
 
 namespace Examples
@@ -186,7 +256,8 @@ varint `9d 06`. -/
 def unknownField : ByteArray := bytesOf [0x9d, 0x06, 1, 2, 3, 4]
 
 /-- A message with all five fields. -/
-def dataMessage : ByteArray := bodyField ++ groupV2Field ++ timestampField ++ zrdtField ++ unknownField
+def dataMessage : ByteArray :=
+  bodyField ++ groupV2Field ++ timestampField ++ zrdtField ++ unknownField
 
 end Examples
 
@@ -219,5 +290,23 @@ open Examples
 #guard commit group alice ⟨⟨Array.replicate 32 0⟩, rfl⟩ dataMessage !=
   commit group alice nonce dataMessage
 #guard commit group alice nonce (bytesOf [0x0b]) == none
+
+-- The opening: the nonce, then the message without fields 15 and 200.
+#guard (commitWithOpening group alice nonce dataMessage).map (·.2) ==
+  some (nonce.bytes ++ bodyField ++ timestampField ++ unknownField)
+#guard (commitWithOpening group alice nonce dataMessage).map (·.1) ==
+  commit group alice nonce dataMessage
+-- It matches the commitment, under the same group and author only.
+#guard match commitWithOpening group alice nonce dataMessage with
+  | some (c, o) => openingMatches group alice c o && !openingMatches group Aci.zero c o &&
+      !openingMatches otherGroup alice c o && !openingMatches group alice (dig 1) o
+  | none => false
+-- An opening that still holds field 15 (the master key) is refused, though its commitment is
+-- the same; so are an opening cut inside its nonce and a malformed one.
+#guard match commit group alice nonce dataMessage with
+  | some c => !openingMatches group alice c (nonce.bytes ++ dataMessage) &&
+      !openingMatches group alice c (nonce.bytes.extract 0 31) &&
+      !openingMatches group alice c (nonce.bytes ++ bodyField ++ bytesOf [0x0b])
+  | none => false
 
 end Zrdt

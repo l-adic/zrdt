@@ -25,12 +25,15 @@ not strictly increasing (`StrictlySorted`).
 
 The store writes its records sorted by digest. `decodeBlob` checks the framing strictly (every
 length exact, no bytes left over, every record strictly decoded; `encodeBlob_of_decodeBlob`). It
-does not check the order of the records or the group inside each record: the store's `open`
-checks the group when it accepts them, and the order does not change the store. A well-sized
-blob decodes back to what was written (`decodeBlob_encodeBlob`).
+does not check the order of the records, repeats, or the group inside each record: the store's
+`open` checks the group when it accepts them, the order does not change the store, and a
+byte-identical repeat is accepted once (it counts once). A well-sized blob decodes back to what
+was written (`decodeBlob_encodeBlob`).
 
 **Size limits:** a store holds fewer than `2^24` records, and a record has at most 4096 links
-(`WellSized`). The decoders do not enforce them; `accept` and `open` report `TOO_LARGE`.
+(`WellSized`). A blob whose count field is `2^24` or more is `TOO_LARGE` before any record is
+read (`blobTooLarge`; `decodeBlob` rejects it too). Otherwise the decoders do not enforce the
+limits; `accept` and `open` report `TOO_LARGE`.
 
 **Untrusted counts:** no decoder sizes an allocation from a number it read. `decode` derives the
 link count from the input length. `decodeBlob` first checks that the input is long enough for
@@ -110,6 +113,16 @@ def decode (b : ByteArray) : Option Rec := do
 /-- The digest of a record: SHA-256 of its encoding. This is the value other records link to. -/
 def hashRecord (r : Rec) : Digest := sha256 (encode r)
 
+/-! ## Size limits (docs/PLAN.md §3.4) -/
+
+/-- The most links a record may have. -/
+def maxLinks : Nat := 4096
+
+/-- A store holds fewer than this many records. -/
+def maxRecords : Nat := 2^24
+
+example : maxLinks = 4096 ∧ maxRecords = 16777216 := ⟨rfl, rfl⟩
+
 /-! ## Store blobs -/
 
 /-- The 6-byte tag that starts every store blob: `"zrdtS2"`. -/
@@ -141,27 +154,27 @@ def minEntrySize : Nat := 4 + encodedSize 0
 example : minEntrySize = 93 := rfl
 
 /-- Decode a store blob into its group and records. `none` on any framing error, a record that
-does not decode, or bytes left over. The order of the records is not checked. -/
+does not decode, bytes left over, or a count of `maxRecords` or more. The order of the records is
+not checked, and a record may appear more than once. -/
 def decodeBlob (b : ByteArray) : Option (GroupId × Array Rec) := do
   guard (42 ≤ b.size)
   guard (b.extract 0 6 = blobTag)
   let g ← GroupId.ofBytes? (b.extract 6 38)
   let count ← readU32? b 38
-  -- A count the input cannot hold is rejected before any work.
+  -- A count over the limit, or one the input cannot hold, is rejected before any work.
+  guard (count < maxRecords)
   guard (count * minEntrySize ≤ b.size - 42)
   let (rs, stop) ← readRecords b 42 #[] count
   guard (stop = b.size)
   pure (g, rs)
 
+/-- Whether `b` starts like a store blob (the tag, the group, the count) whose count is
+`maxRecords` or more. Such a blob is `TOO_LARGE` (docs/PLAN.md §3.4); `zrdtd` checks this before
+it reads any record. `decodeBlob` rejects these blobs too. -/
+def blobTooLarge (b : ByteArray) : Bool :=
+  b.extract 0 6 == blobTag && (readU32? b 38).any (maxRecords ≤ ·)
+
 /-! ## Size limits (docs/PLAN.md §3.4) -/
-
-/-- The most links a record may have. -/
-def maxLinks : Nat := 4096
-
-/-- A store holds fewer than this many records. -/
-def maxRecords : Nat := 2^24
-
-example : maxLinks = 4096 ∧ maxRecords = 16777216 := ⟨rfl, rfl⟩
 
 /-- A record is within the size limit: at most `maxLinks` links. -/
 def Rec.WellSized (r : Rec) : Prop := r.links.size ≤ maxLinks
@@ -247,8 +260,16 @@ example : hashRecord first = (Digest.ofHex?
 #guard decodeBlob ((encodeBlob group #[first]).set! 45 90) == none      -- len says 90
 #guard decodeBlob ((encodeBlob group #[first]).set! 0 0) == none        -- wrong tag
 -- Fuzz: a header claiming 2^32 - 1 records and nothing after it is rejected at once, without
--- allocating for the claimed count.
+-- allocating for the claimed count. It is too large; a count of 2^24 - 1 is not.
 #guard decodeBlob (blobTag ++ group.bytes ++ ⟨#[0xff, 0xff, 0xff, 0xff]⟩) == none
+#guard blobTooLarge (blobTag ++ group.bytes ++ ⟨#[0xff, 0xff, 0xff, 0xff]⟩)
+#guard blobTooLarge (blobTag ++ group.bytes ++ u32be (2^24))
+#guard !blobTooLarge (blobTag ++ group.bytes ++ u32be (2^24 - 1))
+#guard !blobTooLarge (encodeBlob group #[first, reply])
+#guard !blobTooLarge ((blobTag ++ group.bytes ++ u32be (2^24)).set! 0 0)  -- not a blob
+-- Records in any order, and byte-identical repeats, decode.
+#guard decodeBlob (encodeBlob group #[reply, first]) == some (group, #[reply, first])
+#guard decodeBlob (encodeBlob group #[first, first]) == some (group, #[first, first])
 
 -- Size limits.
 #guard decide (WellSized #[first, reply])
@@ -662,8 +683,9 @@ theorem decodeBlob_encodeBlob (g : GroupId) (rs : Array Rec) (h : WellSized rs) 
     simp only [ByteArray.size_append, size_blobTag, g.size_eq, size_u32be, Array.length_toList,
       Array.toArray_toList, Array.empty_append] at this
     rw [e3]; exact this
+  have hlt : rs.size < maxRecords := h.1
   simp only [decodeBlob, hsize, htag, hg, hu, GroupId.ofBytes?_bytes]
-  simp [guard, hmin]
+  simp [guard, hmin, hlt]
   rw [hread]
   simp
 
@@ -673,7 +695,7 @@ theorem encodeBlob_of_decodeBlob {b : ByteArray} {g : GroupId} {rs : Array Rec}
     (h : decodeBlob b = some (g, rs)) : encodeBlob g rs = b := by
   simp only [decodeBlob, guard, Option.bind_eq_bind, Option.pure_def,
     Option.bind_eq_some_iff] at h
-  obtain ⟨_, h1, _, h2, g', hg, count, hcount, _, h3, ⟨rs', stop⟩, hread, _, h4, hout⟩ := h
+  obtain ⟨_, h1, _, h2, g', hg, count, hcount, _, _, _, h3, ⟨rs', stop⟩, hread, _, h4, hout⟩ := h
   have h1 := guard_eq_some h1
   have h2 := guard_eq_some h2
   have h4 := guard_eq_some h4
