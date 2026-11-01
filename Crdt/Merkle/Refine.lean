@@ -19,6 +19,8 @@ what each operation of `Zrdt.CheckedStore` does to `abs c`, in the words of the 
   `abs_accept_wrongChat`, `abs_accept_tooLarge`): an accepted record is the spec's `accept`; any
   other result leaves the store as it was, and says why. The `missing` list is exactly the links
   the spec store does not hold.
+* `acceptAll` (`abs_acceptAll`): a batch adds only its own records, keeps the store's, and each
+  record left over is refused by the spec's `accept` (or by a collision, the chat, or size).
 * `merge` (`merge_abs`): a merged store holds the records of both stores.
 * `heads` (`heads_eq`), `has` (`has_iff`), `get` (`get_eq_some_iff`): the observers read the spec
   store.
@@ -555,6 +557,54 @@ example : abs Examples.s1 = Crdt.Merkle.accept hashSpec
     show (CheckedStore.empty Examples.group).accept Examples.a1 =
       (.accepted (hashRecord Examples.a1), Examples.s1)
     rfl)
+
+/-! ## Accepting a batch -/
+
+/-- **`acceptAll`, in the spec model.** Let `(e, left) := c.acceptAll rs`. The new spec store
+keeps every record of `c` and adds only records of the batch; every batch record that is not
+left over is in it; and every left-over record is from the batch and is refused by the spec's
+`accept` in the final store (its links do not all resolve), unless the code refused it for a
+collision, another chat, or size. -/
+theorem abs_acceptAll (c : CheckedStore) (rs : Array Rec) :
+    abs c ⊆ abs (c.acceptAll rs).1 ∧
+    abs (c.acceptAll rs).1 ⊆ abs c ∪ specOf rs ∧
+    (∀ x ∈ rs, x ∉ (c.acceptAll rs).2 → toSpec x ∈ abs (c.acceptAll rs).1) ∧
+    ∀ x ∈ (c.acceptAll rs).2, x ∈ rs ∧
+      (Crdt.Merkle.accept hashSpec (abs (c.acceptAll rs).1) (toSpec x) =
+          abs (c.acceptAll rs).1 ∨
+        CollisionIn hashSpec (insert (toSpec x) (abs (c.acceptAll rs).1)) ∨
+        x.group ≠ c.group ∨ ¬ x.WellSized ∨ maxRecords ≤ (c.acceptAll rs).1.size + 1) := by
+  obtain ⟨hg, hkeep, honly, hstored, hleft⟩ := acceptAll_sound c rs
+  have hstuck := acceptAll_stuck c rs
+  generalize c.acceptAll rs = res at hg hkeep honly hstored hleft hstuck ⊢
+  obtain ⟨e, left⟩ := res
+  dsimp only at hg hkeep honly hstored hleft hstuck ⊢
+  refine ⟨fun x hx => ?_, fun x hx => ?_, fun x hx hl => ?_, fun x hx => ⟨hleft x hx, ?_⟩⟩
+  · obtain ⟨k, r, hk, rfl⟩ := mem_abs.mp hx
+    exact mem_abs.mpr ⟨k, r, hkeep k r hk, rfl⟩
+  · obtain ⟨k, r, hk, rfl⟩ := mem_abs.mp hx
+    rcases honly k r hk with h | h
+    · exact Finset.mem_union_left _ (mem_abs.mpr ⟨k, r, h, rfl⟩)
+    · exact Finset.mem_union_right _ (toSpec_mem_specOf.mpr h)
+  · exact e.built.toSpec_mem_abs.mpr (hstored x hx hl)
+  · have hne := hstuck x hx
+    rcases hres : e.accept x with ⟨res, e'⟩
+    rw [hres] at hne
+    cases res with
+    | accepted d => exact absurd rfl (hne d)
+    | missing ds =>
+      exact Or.inl (abs_accept_missing hres).2.1
+    | collision d => exact Or.inr (Or.inl (collisionIn_of_accept_collision hres))
+    | wrongChat =>
+      exact Or.inr (Or.inr (Or.inl (by rw [← hg]; exact (abs_accept_wrongChat hres).2)))
+    | tooLarge =>
+      rcases (abs_accept_tooLarge hres).2 with h | ⟨-, h⟩
+      · exact Or.inr (Or.inr (Or.inr (Or.inl h)))
+      · exact Or.inr (Or.inr (Or.inr (Or.inr h)))
+
+example : abs (CheckedStore.empty Examples.group) ⊆
+    abs ((CheckedStore.empty Examples.group).acceptAll #[Examples.a1]).1 :=
+  (abs_acceptAll _ _).1
 
 /-! ## Merge -/
 
