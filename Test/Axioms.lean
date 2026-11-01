@@ -4,6 +4,7 @@ Released under the MIT license as described in the file LICENSE.
 Authors: crdt-lean contributors
 -/
 import Crdt
+import Zrdt.Proto
 
 /-!
 # Axiom footprint gate
@@ -204,9 +205,8 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 -- zrdt: exactly the advertised statements about the shipped store (`Crdt/Merkle/Api.lean`,
 -- docs/PLAN.md §3.2), in the order of §3.2, and `Zrdt.encode_injective`
--- (`Crdt/Merkle/EncodeProofs.lean`). The spec theorems in `Crdt.Merkle` (`fetched_agree`,
--- `fetched_build`, `fetched_union`, `confirmed_exact`, `salvage_maximal`,
--- `authorConfirmed_sound`, ...) are their proof obligations and are not pinned here.
+-- (`Crdt/Merkle/EncodeProofs.lean`), the same names as `comparator.json`. Some of their proof
+-- obligations are pinned in a separate block below; they are not advertised.
 
 /-- info: 'Zrdt.CheckedStore.fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.fetched
@@ -240,6 +240,41 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.encode_injective' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.encode_injective
+
+-- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
+-- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
+-- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
+-- axiom in them fails the build too; they are not part of what docs/PLAN.md §3.2 promises, and
+-- `comparator.json` does not list them.
+
+/-- info: 'Crdt.Merkle.authorConfirmed_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.authorConfirmed_sound
+
+/-- info: 'Crdt.Merkle.salvage_maximal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.salvage_maximal
+
+/-- info: 'Crdt.Merkle.confirmed_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.confirmed_exact
+
+/-- info: 'Crdt.Merkle.fetched_union' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.fetched_union
+
+/-- info: 'Zrdt.Proto.acceptRecord_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptRecord_accepted
+
+/-- info: 'Zrdt.openingMatches_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.openingMatches_spec
+
+-- `COMMIT`'s opening always passes `openingMatches` (`core/Zrdt/Commit.lean`, `Proto.lean`).
+
+/-- info: 'Zrdt.committedBytes_idem' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.committedBytes_idem
+
+/-- info: 'Zrdt.commitWithOpening_matches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.commitWithOpening_matches
+
+/-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

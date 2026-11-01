@@ -40,3 +40,25 @@ closure: ## Check the linked zrdtd: only Init, Std, zrdt-core (and runtime libuv
 	if [ -n "$$bad" ]; then \
 	  echo "closure check failed: $(ZRDTD) links $$(echo "$$bad" | wc -l) other initializers, e.g.:"; \
 	  echo "$$bad" | head -10; exit 1; fi
+
+# Comparator (docs/PLAN.md §5, claude.md §3 and §7): the advertised statements of
+# Crdt/Merkle/Api.lean and Zrdt.encode_injective, restated with `sorry` in
+# Comparator/Challenge.lean, judged against the solution module Crdt.Merkle.Api.
+# `lake comparator` and `lake check` sandbox the project with bubblewrap, which needs
+# unprivileged user namespaces (on Ubuntu 24.04 an AppArmor profile for /usr/bin/bwrap).
+.PHONY: comparator check comparator-local
+
+# Every module of ours: the spec and proofs (Crdt) and the shipped code (core/Zrdt).
+OWN_MODULES := $(shell find Crdt core/Zrdt -name '*.lean' | sed -e 's|^core/||' -e 's|\.lean$$||' -e 's|/|.|g' | sort)
+
+comparator: ## Judge the advertised statements with `lake comparator` (comparator.json; needs bwrap)
+	lake build Comparator.Challenge
+	lake comparator
+
+check: ## Replay the default targets through the kernel with `lake check` (needs bwrap)
+	lake check
+
+comparator-local: ## Stand-in where bwrap cannot run (NOT the verdict): statements + axioms, then leanchecker
+	lake build Comparator.Challenge $(OWN_MODULES)
+	lake env lean --run scripts/CompareStatements.lean
+	lake env leanchecker $(OWN_MODULES)
