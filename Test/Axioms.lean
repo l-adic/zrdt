@@ -5,6 +5,8 @@ Authors: crdt-lean contributors
 -/
 import Crdt
 import Zrdt.Proto
+import Zrdt.Serve
+import Zrdt.ChatStore
 
 /-!
 # Axiom footprint gate
@@ -275,6 +277,111 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
+
+-- SERVE (docs/JOIN_PLAN.md §5, §7.1; `core/Zrdt/Serve.lean`, `core/Zrdt/Proto.lean`). Not
+-- advertised yet: JOIN_PLAN §7.3 adds `serve_content` to `Api.lean` with the relative store.
+
+/-- info: 'Zrdt.Serve.serveOpening_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serveOpening_spec
+
+/-- info: 'Zrdt.Serve.serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_content
+
+/-- info: 'Zrdt.Serve.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_content_complete
+
+/-- info: 'Zrdt.Serve.serve_authorCopy' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_authorCopy
+
+/-- info: 'Zrdt.Serve.serve_strict' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_strict
+
+/-- info: 'Zrdt.Serve.serve_export' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_export
+
+/-- info: 'Zrdt.Serve.serve_after' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_after
+
+/-- info: 'Zrdt.Serve.serve_boundary' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_boundary
+
+/-- info: 'Zrdt.Serve.audience_bound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.audience_bound
+
+/-- info: 'Zrdt.Proto.accept_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.accept_accepted
+
+/-- info: 'Zrdt.Proto.run_serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_serve_content
+
+/-- info: 'Zrdt.Proto.run_audience' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_audience
+
+/-- info: 'Zrdt.Proto.run_addressed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_addressed
+
+-- The relative store (docs/JOIN_PLAN.md §6.2, §7.1; `core/Zrdt/RelStore.lean`,
+-- `core/Zrdt/ChatStore.lean`, `core/Zrdt/Proto.lean`). Not advertised yet: JOIN_PLAN §7.3.
+
+/-- info: 'Zrdt.builtRel_empty_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.builtRel_empty_iff
+
+/-- info: 'Zrdt.rawAcceptRel_empty' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.rawAcceptRel_empty
+
+/-- info: 'Zrdt.rawAcceptRel_built' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.rawAcceptRel_built
+
+/-- info: 'Zrdt.RelStore.acceptAll_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.acceptAll_sound
+
+/-- info: 'Zrdt.RelStore.acceptAll_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.acceptAll_stuck
+
+/-- info: 'Zrdt.RelStore.load_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.load_complete
+
+/-- info: 'Zrdt.RelStore.load_reopens' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.load_reopens
+
+/-- info: 'Zrdt.RelStore.merge_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.merge_ok
+
+/-- info: 'Zrdt.RelStore.linkable_sub' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.linkable_sub
+
+/-- info: 'Zrdt.ChatStore.encode_reopens' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ChatStore.encode_reopens
+
+/-- info: 'Zrdt.Proto.acceptView_built' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_built
+
+/-- info: 'Zrdt.ChatStore.acceptAll_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ChatStore.acceptAll_sound
+
+/-- info: 'Zrdt.ChatStore.linkable_sub' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ChatStore.linkable_sub
+
+/-- info: 'Zrdt.classify_raw' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.classify_raw
+
+/-- info: 'Zrdt.Proto.acceptView_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_sound
+
+/-- info: 'Zrdt.Proto.acceptView_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_accepted
+
+/-- info: 'Zrdt.Proto.acceptView_audiences' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_audiences
+
+/-- info: 'Zrdt.Proto.run_acceptView' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_acceptView
+
+/-- info: 'Zrdt.Proto.run_linkable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_linkable
+
+/-- info: 'Zrdt.Proto.run_newRelative' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_newRelative
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

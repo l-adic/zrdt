@@ -1,6 +1,8 @@
 import Std.Data.HashMap
 import Zrdt.Commit
 import Zrdt.Provenance
+import Zrdt.Serve
+import Zrdt.ChatStore
 
 /-!
 # The `zrdtd` frame protocol (docs/PLAN.md §3.3)
@@ -31,6 +33,28 @@ All numbers are unsigned and big-endian.
   the member's `aci` (2 only).
 - `opening`: `bytes` holding a nonce (32 bytes), then a DataMessage with its top-level fields 15
   and 200 removed (`Zrdt.Commit`).
+- `key`: 33 bytes, an identity public key as libsignal serializes it. `tag`, `rid` (a request
+  id): 16 bytes.
+- `flag`: `u8`, 0 or 1. Any other value is `BAD_REQUEST`.
+- `member`: `aci` ‖ `u8` (1: a `key` follows, 0: none). Members Signal does not send the
+  message to (blocked, seen as unregistered) are given with no key.
+- `held`: `digest` ‖ `opening`: an opening the host still holds.
+- `entry` (in a `SERVE` reply and an `ACCEPT_VIEW` request): a kind `u8`, then:
+  - `0x00` addressed: the record's encoding (`bytes`) ‖ author copy (`flag`) ‖ `u8` (1: an
+    `opening` follows, 0: none);
+  - `0x01` after: the record's encoding (`bytes`);
+  - `0x02` boundary: a `digest`.
+- `entries`: a `u32` count, then that many `entry`s. A `SERVE` reply's bytes after its 48-byte
+  header are `entries`; the requester passes them, once unsealed, to `ACCEPT_VIEW` unchanged.
+- `result` (in an `ACCEPT_VIEW` reply), one per entry: a status byte, then for `OK` the
+  `digest` (the record's, or the boundary digest's), for `MISSING` the `digests` that are neither
+  stored nor boundary digests, for `COLLISION` the `digest`, otherwise nothing.
+- `zrdtS3` (a store blob, in `OPEN`, `SALVAGE`, `MERGE` and the `ENCODE` reply; `Zrdt.ChatStore`):
+  `"zrdtS3"` ‖ mode `u8` (0 closed, 1 relative) ‖ a `u32` count ‖ that many (`digest` ‖ voucher
+  `aci`), the boundary sorted by digest ‖ a `u32` count ‖ that many (`digest` ‖ field-201 value
+  as `bytes`), the recorded audiences sorted by digest ‖ the records as a `zrdtS2` blob
+  (docs/PLAN.md §3.4) to the end. A closed blob lists no boundary digest. Only `zrdtS3` is read
+  (greenfield).
 
 - `chat` is a `str`: the host's conversation id.
 - `parts` is a record (docs/PLAN.md §3.4). In a request, its links may come in any order and may
@@ -53,6 +77,9 @@ All numbers are unsigned and big-endian.
 | `0x06` | `UNVERIFIABLE` | unverifiable (`digests`) ‖ missing (`digests`) |
 | `0x07` | `NOT_FOUND` | empty |
 | `0x08` | `BAD_OPENING` | empty |
+| `0x09` | `NO_AUDIENCE` | empty |
+| `0x0A` | `EPHEMERAL` | empty (only as an `ACCEPT_VIEW` result) |
+| `0x0B` | `IGNORED` | empty (only as an `ACCEPT_VIEW` result) |
 | `0x80` | `BAD_REQUEST` | empty |
 | `0x81` | `UNKNOWN_OP` | empty |
 | `0x82` | `NO_CHAT` | empty |
@@ -80,7 +107,7 @@ Request bodies:
 | `0x04` | `SALVAGE` | `chat` ‖ `group` ‖ `input` |
 | `0x05` | `COMMIT` | `group` ‖ author (`aci`) ‖ `nonce` ‖ DataMessage (`bytes`) |
 | `0x06` | `HASH` | `parts` |
-| `0x07` | `ACCEPT` | `chat` ‖ `parts` |
+| `0x07` | `ACCEPT` | `chat` ‖ `parts` ‖ `u8` (1: an `opening` follows, 0: none) |
 | `0x08` | `HEADS` | `chat` |
 | `0x09` | `HAS` | `chat` ‖ `digest` |
 | `0x0A` | `GET` | `chat` ‖ `digest` |
@@ -90,6 +117,12 @@ Request bodies:
 | `0x0E` | `ENCODE` | `chat` |
 | `0x0F` | `CLOSE` | `chat` |
 | `0x10` | `ACCEPT_RECORD` | `chat` ‖ record (`bytes`) ‖ `u8` (1: an `opening` follows, 0: none) |
+| `0x11` | `AUDIENCE` | a `u32` count ‖ that many `member`s |
+| `0x12` | `SERVE` | `chat` ‖ own `aci` ‖ requester `aci` ‖ requester `key` ‖ `rid` ‖ since (`digests`) ‖ responder since (`digests`) ‖ `u8` mode (0 catch-up, 1 per-digest) ‖ wanted (`digests`, mode 1 only) ‖ export (`flag`) ‖ strict (`flag`) ‖ live (`digests`) ‖ disown (`digests`) ‖ a `u32` count ‖ that many `held` |
+| `0x13` | `ADDRESSED` | `chat` ‖ `aci` ‖ `key` |
+| `0x14` | `ACCEPT_VIEW` | `chat` ‖ voucher (`aci`) ‖ import (`flag`) ‖ `entries` |
+| `0x15` | `LINKABLE` | `chat` ‖ live (`digests`) |
+| `0x16` | `NEW_RELATIVE` | `chat` ‖ `group` |
 
 Replies (every op can also reply `BAD_REQUEST`):
 
@@ -102,8 +135,15 @@ Replies (every op can also reply `BAD_REQUEST`):
 - `COMMIT`: `OK`: the commitment (`digest`) ‖ the `opening`; `MALFORMED`.
 - `HASH`: `OK`: the record's digest.
 - `ACCEPT`: `OK` (accepted): the record's digest ‖ its encoding (`bytes`); `MISSING`,
-  `COLLISION`, `WRONG_CHAT`, `TOO_LARGE`, `NO_CHAT`.
-- `ACCEPT_RECORD`: as `ACCEPT`, and also `MALFORMED`, `BAD_OPENING`.
+  `COLLISION`, `WRONG_CHAT`, `TOO_LARGE`, `NO_CHAT`, `BAD_OPENING`, `NO_AUDIENCE`.
+- `ACCEPT_RECORD`: as `ACCEPT`, and also `MALFORMED`.
+- `AUDIENCE`: `OK`: the field-201 value (`bytes`); `TOO_LARGE`, `MALFORMED`.
+- `SERVE`: `OK`: the header (requester `aci` ‖ `tag` of the requester `key` ‖ `rid`) ‖ a `u32`
+  count ‖ that many `entry`s; `NO_CHAT`.
+- `ADDRESSED`: `OK`: `digests`; `NO_CHAT`.
+- `ACCEPT_VIEW`: `OK`: a `u32` count ‖ that many `result`s, one per entry, in order; `NO_CHAT`.
+- `LINKABLE`: `OK`: `digests`; `NO_CHAT`.
+- `NEW_RELATIVE`: `OK`; `CHAT_OPEN`.
 - `HEADS`: `OK`: `digests`; `NO_CHAT`.
 - `HAS`: `OK`: `u8` (1 stored, 0 not); `NO_CHAT`.
 - `GET`: `OK`: `parts`; `NOT_FOUND`, `NO_CHAT`.
@@ -120,14 +160,68 @@ Replies (every op can also reply `BAD_REQUEST`):
 - `ACCEPT` → `OK`: the record is stored, now or before (a byte-identical duplicate is accepted);
   the digest is the record's (`hashRecord`), and the bytes are its canonical encoding (links
   sorted, repeats dropped), the bytes to relay or store.
+- `ACCEPT` with an opening, and `ACCEPT_RECORD` with one: the opening's commitment under the
+  record's group and author must be the record's commit, and it must hold no field 15 or 200
+  (`openingMatches`), otherwise `BAD_OPENING`. Its committed bytes must hold exactly one field
+  201 whose value is a well-formed audience (`Serve.audienceOf`: 1 to 256 entries, strictly
+  increasing by ACI), otherwise `NO_AUDIENCE`: every record message carries its audience. Both
+  are checked before the store is touched. If the record is then accepted (now or before), its
+  audience is recorded for `ADDRESSED` and `SERVE` (docs/JOIN_PLAN.md §4.2). Without an opening,
+  nothing is recorded. Order of checks: `NO_CHAT`, `BAD_OPENING`, `NO_AUDIENCE`, then `accept`'s.
 - `ACCEPT_RECORD`: accept a record that came as bytes (relayed or imported), optionally with its
-  opening. The bytes must be exactly a record's encoding, otherwise `MALFORMED`. If an opening is
-  given, its commitment under the record's group and author must be the record's commit, and it
-  must hold no field 15 or 200 (`openingMatches`), otherwise `BAD_OPENING`. Both are checked
-  before the store is touched, and then the record goes through `accept` as for `ACCEPT`. Order of
-  checks: `NO_CHAT`, `MALFORMED`, `BAD_OPENING`, then `accept`'s.
-- `MISSING`: the store is unchanged; the list holds exactly the links that are not stored, and
-  is never empty.
+  opening. The bytes must be exactly a record's encoding, otherwise `MALFORMED`. Then as
+  `ACCEPT`. Order of checks: `NO_CHAT`, `MALFORMED`, `BAD_OPENING`, `NO_AUDIENCE`, then
+  `accept`'s.
+- `AUDIENCE` → `OK`: the value of `DataMessage` field 201 for the given members, which the host
+  sets as `zrdtAudience` before `COMMIT` (docs/JOIN_PLAN.md §3.2, §4.1): each member's `aci` and
+  the `tag` of its key (`Serve.keyTag`, the first 16 bytes of SHA-256(`"zrdtK1"` ‖ key)), or 16
+  zero bytes for a member given with no key, sorted by ACI. The host includes the author itself,
+  with its own key. The value always passes `Serve.parseAudience` (`run_audience`). `TOO_LARGE`:
+  more than 256 members. `MALFORMED`: no members, or an ACI given twice.
+- `SERVE` → `OK`: the reply to a member's request (docs/JOIN_PLAN.md §5, `Serve.serve`). The
+  responder's state: its own ACI, its `live` digests and its disown set (and `zrdtd` adds a
+  relative store's own boundary digests). The request: the
+  requester's ACI (the Signal-authenticated sender) and the identity key this device holds for it
+  now, the request's id, its `since` and this device's own `since` for that account (joined),
+  catch-up or the wanted digests, the export flag and the strict flag. `held`: the openings the
+  host holds for stored records; `zrdtd` adds the audiences it recorded. Every opening in the
+  reply opens a stored record and its own committed audience seats the requester's ACI under the
+  tag of the given key (`run_serve_content`). The header carries the requester's ACI, that tag
+  and the request id: the host sends the reply only to that ACI, and seals the bytes after the
+  header to exactly that key (`sendZrdtServed`, docs/JOIN_PLAN.md §4.3). `SERVE` changes nothing.
+  Entries come sorted by digest.
+- `ADDRESSED` → `OK`: the stored records whose recorded audience seats this ACI under the tag of
+  this key, sorted: the openings the host should load for `SERVE`.
+- `NEW` opens an empty **closed** store; `NEW_RELATIVE` an empty **relative** one, for a device
+  that has no store for a group it is a member of (a catch-up, docs/JOIN_PLAN.md §6.1, and a
+  re-add, §6.5). A relative store takes boundary digests; a closed one never does. Every op works
+  on both. On a relative store: a link resolves if it is stored or a boundary digest, so
+  `MISSING` lists the links that are neither; `HEADS` lists the stored digests and the boundary
+  digests that no stored record links; `HAS` and `GET` know stored records only; `SERVE` also
+  serves the store's own boundary digests (`Serve.Me.boundary`).
+- `ACCEPT_VIEW` → `OK`: the requester takes a `SERVE` reply (docs/JOIN_PLAN.md §4.4). The host
+  passes only replies that passed §4.4's checks (sealed to this account, solicited by this
+  device, from a responder whose key has not changed), with the responder as voucher. Every
+  entry is checked first, as `ACCEPT_RECORD` checks: the record bytes must decode (`MALFORMED`),
+  an opening must match (`BAD_OPENING`) and carry an audience (`NO_AUDIENCE`), and with the
+  import flag (an export from another account, A9) an opening must not disappear or be view-once
+  (`EPHEMERAL`). A refused entry changes nothing. Then a relative store takes each boundary
+  entry's digest as a boundary digest vouched by the voucher (the first voucher of a digest
+  stays); a closed store takes none (`IGNORED`, unless the digest is a stored record). Then the
+  records of the entries that passed are accepted as one batch, in whatever order lets their
+  links resolve (`acceptAll`), and the audience of each checked opening is recorded for a record
+  that is stored. A record whose digest is a boundary digest is accepted like any other: it
+  replaces the digest (promotion). The result of a record entry is what `ACCEPT` would reply for
+  it now (`OK` with its digest only if it is stored, `acceptView_accepted`); of a boundary entry,
+  `OK` with the digest if it is now a boundary digest or a stored record, `IGNORED` (closed
+  store) or `TOO_LARGE` (the boundary holds 2^24 - 1 digests). The author-copy flag is not read:
+  provenance stays host state (A8).
+- `LINKABLE` → `OK`: the digests a new record of this device may link (`COMMIT`'s links, docs/
+  JOIN_PLAN.md §6.2). A closed store: its heads (`HEADS`, as A7). A relative store: the heads that
+  are stored records in `live`, which the host fills with the digests it holds `live` (its own
+  included) or as an author copy; never a boundary digest or a relayed head (`run_linkable`).
+- `MISSING`: the store is unchanged; the list holds exactly the links that are not stored (nor,
+  in a relative store, boundary digests), and is never empty.
 - `COLLISION`: nothing changed; a different record with this digest is stored, or is in the
   input.
 - `WRONG_CHAT`: nothing changed; the record, the blob, or a record in it belongs to another chat.
@@ -149,21 +243,33 @@ Replies (every op can also reply `BAD_REQUEST`):
 - `CLASSIFY`: the status of every stored record (`Zrdt.Provenance`). Facts about digests that are
   not stored are ignored. A record held by several members names the one with the smallest ACI
   in byte order.
-- `VERSION`: the protocol is 2. The build text names the package version and the first 16 hex
+- `OPEN` of a blob, `SALVAGE` of a blob, `ENCODE`: the blob is `zrdtS3`. A closed blob loads
+  with exactly the checks of `CheckedStore.open` and `salvage` (on its records part); a relative
+  one loads its records over its boundary (`RelStore.load`). The audiences come back with the
+  store, for stored records only (`ChatStore.encode_reopens`: the blob of a store reopens as exactly
+  that store and its audiences). `MERGE` into a closed store reads the blob's records part as
+  before (a relative blob's records that link its boundary are `UNVERIFIABLE`); into a relative
+  store, it adds the blob's records and boundary. `MERGE` does not read the blob's audiences.
+- `VERSION`: the protocol is 3. The build text names the package version and the first 16 hex
   digits of SHA-256 over the Lean sources of the modules `zrdtd` runs, `Zrdtd/Main.lean`
   included (`buildIdOf`).
 
 ## The table of open stores
 
-`NEW`, `OPEN` and `SALVAGE` put a store under a chat key that is not in use (otherwise
-`CHAT_OPEN`). After that, only `ACCEPT`, `ACCEPT_RECORD` and `MERGE` change the store, and `CLOSE`
-removes it. So under one chat key a store only grows, until `CLOSE`. A failed `OPEN`, `SALVAGE`,
-`MERGE` or `ACCEPT_RECORD` changes nothing. `CLOSE` on a chat key that is not in use replies `OK`.
+`NEW`, `NEW_RELATIVE`, `OPEN` and `SALVAGE` put a store under a chat key that is not in use
+(otherwise `CHAT_OPEN`), with the audiences of the blob (none for `NEW`, `NEW_RELATIVE` and a
+record list). After that, only `ACCEPT`, `ACCEPT_RECORD`, `ACCEPT_VIEW` and `MERGE` change the
+store, and only `ACCEPT`, `ACCEPT_RECORD` and `ACCEPT_VIEW` with an opening record audiences;
+`CLOSE` removes both. So under one chat key a store and its audiences only grow, until `CLOSE`,
+and a store stays closed or relative. A failed `OPEN`, `SALVAGE`, `MERGE`, `ACCEPT` or
+`ACCEPT_RECORD` changes nothing. `CLOSE` on a chat key that is not in use replies `OK`. The
+audiences are in the store blob (`zrdtS3`); the host may still re-send with `ACCEPT_RECORD` the
+openings it holds (a stored record is accepted again, and its audience recorded).
 
-`ACCEPT`, `ACCEPT_RECORD` and `MERGE` take the store out of the table before they change it, and
-put the result back. For `ACCEPT` the table then holds no second reference to the store, so
-`accept` updates it in place. `MERGE` keeps the original to put back if the merge fails; the
-merged store shares most of its tree with it.
+`ACCEPT`, `ACCEPT_RECORD`, `ACCEPT_VIEW` and `MERGE` take the store out of the table before they
+change it, and put the result back. For `ACCEPT` the table then holds no second reference to the
+store, so `accept` updates it in place. `MERGE` keeps the original to put back if the merge fails;
+the merged store shares most of its tree with it.
 -/
 
 namespace Zrdt.Proto
@@ -173,14 +279,14 @@ namespace Zrdt.Proto
 /-- The first byte of a reply (table in the module header). -/
 inductive Code
   | ok | missing | collision | wrongChat | tooLarge | malformed | unverifiable | notFound
-  | badOpening | badRequest | unknownOp | noChat | chatOpen
+  | badOpening | noAudience | ephemeral | ignored | badRequest | unknownOp | noChat | chatOpen
 deriving DecidableEq, Repr
 
 /-- The byte of each status. -/
 def Code.byte : Code → UInt8
   | .ok => 0x00 | .missing => 0x01 | .collision => 0x02 | .wrongChat => 0x03
   | .tooLarge => 0x04 | .malformed => 0x05 | .unverifiable => 0x06 | .notFound => 0x07
-  | .badOpening => 0x08
+  | .badOpening => 0x08 | .noAudience => 0x09 | .ephemeral => 0x0A | .ignored => 0x0B
   | .badRequest => 0x80 | .unknownOp => 0x81 | .noChat => 0x82 | .chatOpen => 0x83
 
 /-- The name of each status, as in the module header. -/
@@ -188,38 +294,47 @@ def Code.name : Code → String
   | .ok => "OK" | .missing => "MISSING" | .collision => "COLLISION"
   | .wrongChat => "WRONG_CHAT" | .tooLarge => "TOO_LARGE" | .malformed => "MALFORMED"
   | .unverifiable => "UNVERIFIABLE" | .notFound => "NOT_FOUND" | .badOpening => "BAD_OPENING"
+  | .noAudience => "NO_AUDIENCE" | .ephemeral => "EPHEMERAL" | .ignored => "IGNORED"
   | .badRequest => "BAD_REQUEST"
   | .unknownOp => "UNKNOWN_OP" | .noChat => "NO_CHAT" | .chatOpen => "CHAT_OPEN"
 
 /-- Every status. -/
 def Code.all : List Code :=
   [.ok, .missing, .collision, .wrongChat, .tooLarge, .malformed, .unverifiable, .notFound,
-    .badOpening, .badRequest, .unknownOp, .noChat, .chatOpen]
+    .badOpening, .noAudience, .ephemeral, .ignored, .badRequest, .unknownOp, .noChat, .chatOpen]
 
 /-- The status with this byte, if any. -/
 def Code.ofByte? (b : UInt8) : Option Code := Code.all.find? (·.byte == b)
 
 #guard Code.ofByte? 0x83 == some .chatOpen
 #guard Code.ofByte? 0x08 == some .badOpening
-#guard Code.ofByte? 0x09 == none
+#guard Code.ofByte? 0x09 == some .noAudience
+#guard Code.ofByte? 0x0B == some .ignored
+#guard Code.ofByte? 0x0C == none
 -- Every status has its own byte.
 #guard (Code.all.map Code.byte).eraseDups.length == Code.all.length
 
-/-- The op names, in op-byte order: `0x01` is `VERSION`, `0x10` is `ACCEPT_RECORD`. -/
+/-- The op names, in op-byte order: `0x01` is `VERSION`, `0x16` is `NEW_RELATIVE`. -/
 def opNames : Array String :=
   #["VERSION", "NEW", "OPEN", "SALVAGE", "COMMIT", "HASH", "ACCEPT", "HEADS", "HAS", "GET",
-    "REACH_SET", "MERGE", "CLASSIFY", "ENCODE", "CLOSE", "ACCEPT_RECORD"]
+    "REACH_SET", "MERGE", "CLASSIFY", "ENCODE", "CLOSE", "ACCEPT_RECORD", "AUDIENCE", "SERVE",
+    "ADDRESSED", "ACCEPT_VIEW", "LINKABLE", "NEW_RELATIVE"]
 
 /-- The name of the op with this byte, if any. -/
 def opName? (b : UInt8) : Option String := if b = 0 then none else opNames[b.toNat - 1]?
 
 #guard opName? 0x0B == some "REACH_SET"
 #guard opName? 0x10 == some "ACCEPT_RECORD"
-#guard opName? 0x00 == none && opName? 0x11 == none
+#guard opName? 0x13 == some "ADDRESSED"
+#guard opName? 0x14 == some "ACCEPT_VIEW" && opName? 0x16 == some "NEW_RELATIVE"
+#guard opName? 0x00 == none && opName? 0x17 == none
 
 /-- The protocol version. It changes when a request or reply layout changes. Version 2: the
-`ACCEPT` and `COMMIT` replies carry the record bytes and the opening; `ACCEPT_RECORD` is new. -/
-def protocolVersion : Nat := 2
+`ACCEPT` and `COMMIT` replies carry the record bytes and the opening; `ACCEPT_RECORD` is new.
+Version 3 (docs/JOIN_PLAN.md §10.2): `ACCEPT` takes an optional opening; an opening must carry an
+audience (`NO_AUDIENCE`); `AUDIENCE`, `SERVE`, `ADDRESSED`, `ACCEPT_VIEW`, `LINKABLE` and
+`NEW_RELATIVE` are new; store blobs are `zrdtS3`. -/
+def protocolVersion : Nat := 3
 
 /-! ## Writing fields -/
 
@@ -315,6 +430,19 @@ def nonce : Parser Nonce := do
   | some n => pure n
   | none => failure
 
+/-- A `key`: 33 bytes. -/
+def key : Parser ByteArray := take 33
+
+/-- A `rid` (request id): 16 bytes. -/
+def rid : Parser ByteArray := take 16
+
+/-- A `flag`: 0 or 1. -/
+def flag : Parser Bool := do
+  match ← u8 with
+  | 0 => pure false
+  | 1 => pure true
+  | _ => failure
+
 /-- `digests`. A count the input cannot hold is rejected before any digest is read. -/
 def digests : Parser (Array Digest) := do
   let n ← u32
@@ -373,6 +501,67 @@ inductive Input
   | blob (b : ByteArray)
   | records (rs : Array ByteArray)
 
+/-- The body of a `SERVE` request (layout in the module header). -/
+structure ServeRequest where
+  /-- The responder's own ACI. -/
+  own : Aci
+  /-- The Signal-authenticated sender of the request. -/
+  requester : Aci
+  /-- The identity key this device holds for the requester now (33 bytes). -/
+  key : ByteArray
+  /-- The request id (16 bytes). -/
+  rid : ByteArray
+  /-- The request's `since`. -/
+  since : Array Digest
+  /-- This device's own `since` for the requester's account. -/
+  ownSince : Array Digest
+  /-- `none`: catch-up. `some ds`: the wanted digests. -/
+  wanted : Option (Array Digest)
+  /-- An export: refuse disappearing and view-once content. -/
+  forExport : Bool
+  /-- Strict mode: content only in author copies. -/
+  strict : Bool
+  /-- The digests this device holds `live`. -/
+  live : Array Digest
+  /-- This device's disown set. -/
+  disown : Array Digest
+  /-- The openings the host holds, by digest. -/
+  held : Array (Digest × ByteArray)
+
+/-- The request `SERVE` answers. -/
+def ServeRequest.query (sr : ServeRequest) : Serve.Query :=
+  { aci := sr.requester, key := sr.key, since := sr.since, ownSince := sr.ownSince,
+    wanted := sr.wanted, forExport := sr.forExport, strict := sr.strict }
+
+/-- The requester of `SERVE`'s query is the request's. -/
+@[simp] theorem ServeRequest.query_aci (sr : ServeRequest) : sr.query.aci = sr.requester := rfl
+
+/-- The key of `SERVE`'s query is the request's. -/
+@[simp] theorem ServeRequest.query_key (sr : ServeRequest) : sr.query.key = sr.key := rfl
+
+/-- The responder's own state: from the request, and the store's own boundary digests (empty
+for a closed store). -/
+def ServeRequest.me (sr : ServeRequest) (boundary : DigestSet := ∅) : Serve.Me :=
+  { aci := sr.own, live := sr.live.foldl (·.insert ·) ∅,
+    disown := sr.disown.foldl (·.insert ·) ∅, boundary }
+
+/-- What the responder holds outside the store: the audiences `zrdtd` recorded, and the openings
+the host passed (a later opening for the same digest replaces an earlier one). -/
+def ServeRequest.heldMap (sr : ServeRequest)
+    (auds : Std.ExtTreeMap Digest (Array Serve.Seat) compare) : Serve.HeldMap :=
+  sr.held.foldl (init := auds.map fun _ a => ({ audience := some a } : Serve.Held)) fun m (d, o) =>
+    m.insert d { m.getD d {} with opening := some o }
+
+/-- An entry of an `ACCEPT_VIEW` request: an entry of a `SERVE` reply, as the requester got it
+(the record as bytes, not yet decoded). -/
+inductive ViewEntry
+  /-- A record sent to this account, its author-copy flag, and its opening if one came. -/
+  | addressed (record : ByteArray) (authorCopy : Bool) (opening : Option ByteArray)
+  /-- A record's structure, no content. -/
+  | after (record : ByteArray)
+  /-- A digest only. -/
+  | boundary (d : Digest)
+
 /-- A request (ops in the module header). -/
 inductive Request
   | version
@@ -381,7 +570,7 @@ inductive Request
   | salvage (chat : String) (group : GroupId) (input : Input)
   | commit (group : GroupId) (author : Aci) (nonce : Nonce) (dataMessage : ByteArray)
   | hash (parts : Parts)
-  | accept (chat : String) (parts : Parts)
+  | accept (chat : String) (parts : Parts) (opening : Option ByteArray)
   | heads (chat : String)
   | has (chat : String) (d : Digest)
   | get (chat : String) (d : Digest)
@@ -391,6 +580,12 @@ inductive Request
   | encode (chat : String)
   | close (chat : String)
   | acceptRecord (chat : String) (record : ByteArray) (opening : Option ByteArray)
+  | audience (members : Array (Aci × Option ByteArray))
+  | serve (chat : String) (req : ServeRequest)
+  | addressed (chat : String) (aci : Aci) (key : ByteArray)
+  | acceptView (chat : String) (voucher : Aci) (forImport : Bool) (entries : Array ViewEntry)
+  | linkable (chat : String) (live : Array Digest)
+  | newRelative (chat : String) (group : GroupId)
 
 /-- The op byte and name of each request. -/
 def Request.op : Request → UInt8 × String
@@ -400,7 +595,10 @@ def Request.op : Request → UInt8 × String
   | .has .. => (0x09, "HAS") | .get .. => (0x0A, "GET") | .reachSet .. => (0x0B, "REACH_SET")
   | .merge .. => (0x0C, "MERGE") | .classify .. => (0x0D, "CLASSIFY")
   | .encode .. => (0x0E, "ENCODE") | .close .. => (0x0F, "CLOSE")
-  | .acceptRecord .. => (0x10, "ACCEPT_RECORD")
+  | .acceptRecord .. => (0x10, "ACCEPT_RECORD") | .audience .. => (0x11, "AUDIENCE")
+  | .serve .. => (0x12, "SERVE") | .addressed .. => (0x13, "ADDRESSED")
+  | .acceptView .. => (0x14, "ACCEPT_VIEW") | .linkable .. => (0x15, "LINKABLE")
+  | .newRelative .. => (0x16, "NEW_RELATIVE")
 
 namespace Write
 
@@ -421,6 +619,45 @@ def fact (f : Fact) : ByteArray :=
       | .relayed a => u8 1 ++ a.bytes
       | .imported => u8 2) ++
     digests f.disown
+
+/-- `flag`. -/
+def flag (b : Bool) : ByteArray := u8 (if b then 1 else 0)
+
+/-- An optional item: `u8` 0, or `u8` 1 and the item. -/
+def opt {α : Type} (w : α → ByteArray) : Option α → ByteArray
+  | none => u8 0
+  | some x => u8 1 ++ w x
+
+/-- `member`. -/
+def member (m : Aci × Option ByteArray) : ByteArray := m.1.bytes ++ opt id m.2
+
+/-- The body of a `SERVE` request after the chat key. -/
+def serveRequest (sr : ServeRequest) : ByteArray :=
+  sr.own.bytes ++ sr.requester.bytes ++ sr.key ++ sr.rid ++ digests sr.since ++
+    digests sr.ownSince ++ opt digests sr.wanted ++ flag sr.forExport ++ flag sr.strict ++
+    digests sr.live ++ digests sr.disown ++
+    sr.held.foldl (fun acc (d, o) => acc ++ d.bytes ++ bytes o) (u32be sr.held.size)
+
+/-- `entry`, in a `SERVE` reply. -/
+def entry : Serve.Entry → ByteArray
+  | .addressed r o ac => u8 0 ++ bytes (encode r) ++ flag ac ++ opt bytes o
+  | .after r => u8 1 ++ bytes (encode r)
+  | .boundary d => u8 2 ++ d.bytes
+
+/-- The entries of a `SERVE` reply: a count, then each `entry`. The host seals exactly these
+bytes. -/
+def entries (es : List Serve.Entry) : ByteArray :=
+  es.foldl (fun acc e => acc ++ entry e) (u32be es.length)
+
+/-- An entry of an `ACCEPT_VIEW` request: the bytes `entry` writes for a `SERVE` reply. -/
+def viewEntry : ViewEntry → ByteArray
+  | .addressed r ac o => u8 0 ++ bytes r ++ flag ac ++ opt bytes o
+  | .after r => u8 1 ++ bytes r
+  | .boundary d => u8 2 ++ d.bytes
+
+/-- The entries of an `ACCEPT_VIEW` request: a count, then each entry. -/
+def viewEntries (es : Array ViewEntry) : ByteArray :=
+  es.foldl (fun acc e => acc ++ viewEntry e) (u32be es.size)
 
 /-- `status` (of a record, in a `CLASSIFY` reply). -/
 def status : Status → ByteArray
@@ -444,22 +681,25 @@ def Request.write (q : Request) : ByteArray :=
     | .open c g i | .salvage c g i => Write.str c ++ g.bytes ++ Write.input i
     | .commit g a n m => g.bytes ++ a.bytes ++ n.bytes ++ Write.bytes m
     | .hash p => Write.parts p
-    | .accept c p => Write.str c ++ Write.parts p
+    | .accept c p o => Write.str c ++ Write.parts p ++ Write.opt Write.bytes o
     | .heads c | .encode c | .close c => Write.str c
     | .has c d | .get c d => Write.str c ++ d.bytes
     | .reachSet c ds => Write.str c ++ Write.digests ds
     | .merge c b => Write.str c ++ Write.bytes b
     | .classify c fs => fs.foldl (fun acc f => acc ++ Write.fact f) (Write.str c ++ u32be fs.size)
-    | .acceptRecord c r o =>
-      Write.str c ++ Write.bytes r ++
-        match o with
-        | none => Write.u8 0
-        | some o => Write.u8 1 ++ Write.bytes o
+    | .acceptRecord c r o => Write.str c ++ Write.bytes r ++ Write.opt Write.bytes o
+    | .audience ms => ms.foldl (fun acc m => acc ++ Write.member m) (u32be ms.size)
+    | .serve c sr => Write.str c ++ Write.serveRequest sr
+    | .addressed c a k => Write.str c ++ a.bytes ++ k
+    | .acceptView c v i es => Write.str c ++ v.bytes ++ Write.flag i ++ Write.viewEntries es
+    | .linkable c ds => Write.str c ++ Write.digests ds
+    | .newRelative c g => Write.str c ++ g.bytes
 
 #guard (Request.close "x").write == ⟨#[0x0F, 0, 0, 0, 1, 0x78]⟩
 -- `Request.op` and `opNames` agree.
-#guard [Request.version, .heads "c", .close "c", .acceptRecord "c" .empty none].all fun q =>
-  opName? q.op.1 == some q.op.2
+#guard [Request.version, .heads "c", .close "c", .acceptRecord "c" .empty none, .audience #[],
+  .addressed "c" Aci.zero .empty, .acceptView "c" Aci.zero false #[], .linkable "c" #[],
+  .newRelative "c" GroupId.zero].all fun q => opName? q.op.1 == some q.op.2
 
 namespace Parser
 
@@ -476,6 +716,54 @@ def input : Parser Input := do
   match ← u8 with
   | 0 => .blob <$> bytes
   | 1 => .records <$> many bytes 4 (← u32)
+  | _ => failure
+
+/-- An optional item after a `u8` 0 or 1. -/
+def opt {α : Type} (item : Parser α) : Parser (Option α) := do
+  match ← u8 with
+  | 0 => pure none
+  | 1 => some <$> item
+  | _ => failure
+
+/-- `member`. -/
+def member : Parser (Aci × Option ByteArray) := do
+  let a ← aci
+  let k ← opt key
+  pure (a, k)
+
+/-- `held`. -/
+def held : Parser (Digest × ByteArray) := do
+  let d ← digest
+  let o ← bytes
+  pure (d, o)
+
+/-- The body of a `SERVE` request after the chat key. -/
+def serveRequest : Parser ServeRequest := do
+  let own ← aci
+  let requester ← aci
+  let key ← key
+  let rid ← rid
+  let since ← digests
+  let ownSince ← digests
+  let wanted ← opt digests
+  let forExport ← flag
+  let strict ← flag
+  let live ← digests
+  let disown ← digests
+  -- A held item takes at least 36 bytes: a digest and an empty opening's length.
+  let held ← many held 36 (← u32)
+  pure { own, requester, key, rid, since, ownSince, wanted, forExport, strict, live, disown, held }
+
+/-- An entry of an `ACCEPT_VIEW` request. -/
+def viewEntry : Parser ViewEntry := do
+  match ← u8 with
+  | 0 => do
+    let r ← bytes
+    let ac ← flag
+    let o ← opt bytes
+    pure (.addressed r ac o)
+  | 1 => .after <$> bytes
+  | 2 => .boundary <$> digest
   | _ => failure
 
 /-- `fact`. -/
@@ -497,7 +785,7 @@ def body : UInt8 → Option (Parser Request)
   | 0x04 => some (.salvage <$> str <*> group <*> input)
   | 0x05 => some (.commit <$> group <*> aci <*> nonce <*> bytes)
   | 0x06 => some (.hash <$> parts)
-  | 0x07 => some (.accept <$> str <*> parts)
+  | 0x07 => some (.accept <$> str <*> parts <*> opt bytes)
   | 0x08 => some (.heads <$> str)
   | 0x09 => some (.has <$> str <*> digest)
   | 0x0A => some (.get <$> str <*> digest)
@@ -507,13 +795,19 @@ def body : UInt8 → Option (Parser Request)
   | 0x0D => some (do let c ← str; .classify c <$> many fact 37 (← u32))
   | 0x0E => some (.encode <$> str)
   | 0x0F => some (.close <$> str)
-  | 0x10 => some (do
-      let c ← str
-      let r ← bytes
-      match ← u8 with
-      | 0 => pure (.acceptRecord c r none)
-      | 1 => pure (.acceptRecord c r (some (← bytes)))
-      | _ => failure)
+  | 0x10 => some (.acceptRecord <$> str <*> bytes <*> opt bytes)
+  -- A member takes at least 17 bytes: an ACI and the key byte.
+  | 0x11 => some (do .audience <$> many member 17 (← u32))
+  | 0x12 => some (.serve <$> str <*> serveRequest)
+  | 0x13 => some (.addressed <$> str <*> aci <*> key)
+  -- An entry takes at least 5 bytes: the kind and a record's length.
+  | 0x14 => some (do
+    let c ← str
+    let v ← aci
+    let i ← flag
+    .acceptView c v i <$> many viewEntry 5 (← u32))
+  | 0x15 => some (.linkable <$> str <*> digests)
+  | 0x16 => some (.newRelative <$> str <*> group)
   | _ => none
 
 end Parser
@@ -538,17 +832,53 @@ def Request.readsBack (q : Request) : Bool :=
 open Examples in
 #guard [Request.version, .new "chat" group, .open "c" group (.blob (encodeBlob group #[first])),
   .salvage "c" group (.records #[encode first, encode reply]),
-  .commit group alice nonce dataMessage, .hash (.ofRec reply), .accept "c" (.ofRec first),
+  .commit group alice nonce dataMessage, .hash (.ofRec reply), .accept "c" (.ofRec first) none,
+  .accept "c" (.ofRec first) (some nonce.bytes), .audience #[(alice, some ⟨Array.replicate 33 1⟩),
+    (bob, none)],
+  .serve "c"
+    { own := alice, requester := bob, key := ⟨Array.replicate 33 2⟩,
+      rid := ⟨Array.replicate 16 7⟩, since := #[dig 1], ownSince := #[], wanted := some #[dig 2],
+      forExport := true, strict := false, live := #[dig 3], disown := #[dig 4],
+      held := #[(dig 3, nonce.bytes)] },
+  .serve "c"
+    { own := alice, requester := bob, key := ⟨Array.replicate 33 2⟩,
+      rid := ⟨Array.replicate 16 7⟩, since := #[], ownSince := #[dig 1], wanted := none,
+      forExport := false, strict := true, live := #[], disown := #[], held := #[] },
+  .addressed "c" bob ⟨Array.replicate 33 2⟩,
   .heads "c", .has "c" (dig 1), .get "c" (dig 1), .reachSet "c" #[dig 2, dig 1],
   .merge "c" (encodeBlob group #[]),
   .classify "c" #[⟨dig 1, .live, #[dig 2]⟩, ⟨dig 3, .relayed alice, #[]⟩, ⟨dig 4, .imported, #[]⟩],
   .encode "c", .close "c", .acceptRecord "c" (encode first) none,
-  .acceptRecord "c" (encode first) (some nonce.bytes)].all Request.readsBack
+  .acceptRecord "c" (encode first) (some nonce.bytes),
+  .acceptView "c" alice true #[.addressed (encode first) true (some nonce.bytes),
+    .addressed (encode reply) false none, .after (encode first), .boundary (dig 5)],
+  .acceptView "c" bob false #[], .linkable "c" #[dig 1, dig 2], .newRelative "n" group].all
+  Request.readsBack
 #guard (match Request.parse ByteArray.empty with | .error .badRequest => true | _ => false)
-#guard (match Request.parse ⟨#[0x11]⟩ with | .error .unknownOp => true | _ => false)
+#guard (match Request.parse ⟨#[0x17]⟩ with | .error .unknownOp => true | _ => false)
 #guard (match Request.parse ⟨#[0x01, 0x00]⟩ with | .error .badRequest => true | _ => false)
 
 /-! ## Replies -/
+
+/-- The header of a `SERVE` reply: where the host sends it and the key it seals it to. -/
+structure ServeHeader where
+  /-- The requester's ACI: the only destination of the reply. -/
+  aci : Aci
+  /-- The tag of the key `SERVE` checked (`Serve.keyTag`): the host seals to a key with this tag. -/
+  tag : Array UInt8
+  /-- The request id. -/
+  rid : ByteArray
+deriving DecidableEq
+
+/-- What `ACCEPT_VIEW` did with one entry. -/
+inductive ViewResult
+  /-- A record entry: what `accept` says for the record in the store after the request. -/
+  | record (res : AcceptResult)
+  /-- A boundary entry: the digest is now a boundary digest or a stored record. -/
+  | known (d : Digest)
+  /-- Refused: `MALFORMED`, `BAD_OPENING`, `NO_AUDIENCE`, `EPHEMERAL` (a record entry, before the
+  store is touched), `IGNORED` or `TOO_LARGE` (a boundary entry). -/
+  | code (c : Code)
 
 /-- A reply (layouts in the module header). -/
 inductive Reply
@@ -579,6 +909,12 @@ inductive Reply
   | classified (ss : Array (Digest × Status))
   /-- `ENCODE`. -/
   | blob (b : ByteArray)
+  /-- `AUDIENCE`: the field-201 value. -/
+  | audience (b : ByteArray)
+  /-- `SERVE`: the header (requester, key tag, request id) and the entries. -/
+  | served (header : ServeHeader) (entries : List Serve.Entry)
+  /-- `ACCEPT_VIEW`: one result per entry. -/
+  | viewed (results : Array ViewResult)
 
 /-- The bytes of a status with an empty body. -/
 def Code.write (c : Code) : ByteArray := Write.u8 c.byte
@@ -590,6 +926,16 @@ def writeOpenError : OpenError → ByteArray
   | .wrongChat => Code.wrongChat.write
   | .collision d => Code.collision.write ++ d.bytes
   | .unverifiable u m => Code.unverifiable.write ++ Write.digests u ++ Write.digests m
+
+/-- One result of an `ACCEPT_VIEW` reply: a status byte, then `OK`: the digest; `MISSING`: the
+`digests` neither stored nor in the boundary; `COLLISION`: the `digest`; otherwise nothing. -/
+def ViewResult.write : ViewResult → ByteArray
+  | .record (.accepted d) | .known d => Code.ok.write ++ d.bytes
+  | .record (.missing ds) => Code.missing.write ++ Write.digests ds
+  | .record (.collision d) => Code.collision.write ++ d.bytes
+  | .record .wrongChat => Code.wrongChat.write
+  | .record .tooLarge => Code.tooLarge.write
+  | .code c => c.write
 
 /-- The payload of a reply: its status byte, then its body. -/
 def Reply.write : Reply → ByteArray
@@ -614,6 +960,9 @@ def Reply.write : Reply → ByteArray
   | .classified ss =>
     ss.foldl (fun acc (d, s) => acc ++ d.bytes ++ Write.status s) (Code.ok.write ++ u32be ss.size)
   | .blob b => Code.ok.write ++ Write.bytes b
+  | .audience b => Code.ok.write ++ Write.bytes b
+  | .served h es => Code.ok.write ++ h.aci.bytes ++ ⟨h.tag⟩ ++ h.rid ++ Write.entries es
+  | .viewed rs => rs.foldl (fun acc x => acc ++ x.write) (Code.ok.write ++ u32be rs.size)
 
 open Examples in
 #guard (Reply.accept first (.missing #[dig 1])).write == ⟨#[1, 0, 0, 0, 1] ++ (dig 1).bytes.data⟩
@@ -632,7 +981,8 @@ imports this file, so it reads its own source and passes it to `buildIdOf`. -/
 def sources : List String := [
   include_str "Digest.lean", include_str "Sha256.lean", include_str "Record.lean",
   include_str "Encode.lean", include_str "Store.lean", include_str "Provenance.lean",
-  include_str "Commit.lean", include_str "Proto.lean"]
+  include_str "Commit.lean", include_str "RelStore.lean", include_str "Serve.lean",
+  include_str "ChatStore.lean", include_str "Proto.lean"]
 
 /-- The build text of `VERSION`: the package version and the first 16 hex digits of SHA-256 over
 `sources` and then `mainSource`, the source of `Zrdtd/Main.lean` (each as `str`). Two builds from
@@ -649,128 +999,408 @@ def buildId : String := buildIdOf ""
 
 /-! ## Running requests -/
 
-/-- The open stores, by chat key. -/
-abbrev Table := Std.HashMap String CheckedStore
+/-- One open chat: its store, and the audiences `zrdtd` recorded from openings it checked
+(docs/JOIN_PLAN.md §4.2), by digest. -/
+structure Chat where
+  /-- The store: closed, or relative (created by `NEW_RELATIVE`, or opened from a relative
+  blob). -/
+  store : ChatStore
+  /-- The audience of each stored record whose opening came with `ACCEPT`, `ACCEPT_RECORD` or
+  `ACCEPT_VIEW`, or that the chat's blob carried at `OPEN`. -/
+  audiences : AudTable := ∅
+
+/-- The open chats, by chat key. -/
+abbrev Table := Std.HashMap String Chat
 
 /-- Decode every listed record; `none` if one does not decode. -/
 def decodeAll (rs : Array ByteArray) : Option (Array Rec) := rs.mapM decode
 
-/-- `OPEN`: load the input as a store of chat `g`. A blob whose count is too large is refused
-before any record is read. -/
-def openInput (g : GroupId) : Input → Except OpenError CheckedStore
-  | .blob b => if blobTooLarge b then .error .tooLarge else CheckedStore.open g b
+/-- `OPEN`: load the input as a chat of group `g`: a `zrdtS3` blob (`openChat`), or a list of
+records as a closed store. A records blob whose count is too large is refused before any record
+is read. -/
+def openInput (g : GroupId) : Input → Except OpenError Chat
+  | .blob b => (fun (s, auds) => ({ store := s, audiences := auds } : Chat)) <$> openChat g b
   | .records rs =>
     match decodeAll rs with
-    | some u => CheckedStore.openRecords g u
+    | some u => (fun c => ({ store := .closed c } : Chat)) <$> CheckedStore.openRecords g u
     | none => .error .malformed
 
-/-- `SALVAGE`: load what can be accepted of the input as a store of chat `g`. -/
-def salvageInput (g : GroupId) : Input → Except OpenError CheckedStore.Salvaged
-  | .blob b => if blobTooLarge b then .error .tooLarge else CheckedStore.salvage g b
+/-- `SALVAGE`: load what can be accepted of the input as a chat of group `g`, and the dropped and
+missing digests. -/
+def salvageInput (g : GroupId) : Input → Except OpenError (Chat × Array Digest × Array Digest)
+  | .blob b =>
+    (fun sv => (({ store := sv.store, audiences := sv.audiences } : Chat), sv.dropped, sv.missing))
+      <$> salvageChat g b
   | .records rs =>
     match decodeAll rs with
-    | some u => CheckedStore.salvageRecords g u
+    | some u =>
+      (fun sv => (({ store := .closed sv.store } : Chat), sv.dropped, sv.missing)) <$>
+        CheckedStore.salvageRecords g u
     | none => .error .malformed
 
-/-- Take the store of `chat` out of the table: the store (if any), and the table without it.
-The table then holds no reference to the store, so the next change to it can happen in place. -/
-def takeOut (t : Table) (chat : String) : Option CheckedStore × Table :=
+/-- Take the chat `chat` out of the table: the chat (if any), and the table without it. The table
+then holds no reference to the store, so the next change to it can happen in place. -/
+def takeOut (t : Table) (chat : String) : Option Chat × Table :=
   (t[chat]?, t.erase chat)
 
-/-- `MERGE`: add the records of blob `b` to `c`. -/
-def mergeInput (c : CheckedStore) (b : ByteArray) : Except OpenError CheckedStore :=
-  if blobTooLarge b then .error .tooLarge else c.mergeBlob b
+/-- `MERGE`: add the records of the `zrdtS3` blob `b` to the store `s` (`mergeChat`). -/
+def mergeInput (s : ChatStore) (b : ByteArray) : Except OpenError ChatStore := mergeChat s b
 
-/-- Accept record `r` into the store of `chat`. The store is taken out of the table first, so
-`accept` can update it in place. -/
-def acceptInto (t : Table) (chat : String) (r : Rec) : Reply × Table :=
+/-- The audiences after `accept` gave `res` for a record whose checked opening has audience
+`aud`: recorded under the digest if the record is stored. -/
+def recordAudience (auds : AudTable) (res : AcceptResult) (aud : Option (Array Serve.Seat)) :
+    AudTable :=
+  match res, aud with
+  | .accepted d, some a => auds.insert d a
+  | _, _ => auds
+
+/-- Accept record `r` into the store of `chat`, and record `aud` if it is stored. The chat is
+taken out of the table first, so `accept` can update the store in place. -/
+def acceptInto (t : Table) (chat : String) (r : Rec) (aud : Option (Array Serve.Seat)) :
+    Reply × Table :=
   match takeOut t chat with
-  | (some c, t) =>
-    let (res, c) := c.accept r
-    (.accept r res, t.insert chat c)
+  | (some ⟨c, auds⟩, t) =>
+    let p := c.accept r
+    (.accept r p.1, t.insert chat ⟨p.2, recordAudience auds p.1 aud⟩)
   | (none, t) => (.code .noChat, t)
 
-/-- Answer a request that only reads the store of `chat`. -/
-def reading (t : Table) (chat : String) (f : CheckedStore → Reply) : Reply × Table :=
+/-- Accept record `r` into the store of `chat` with an optional opening: the opening must match
+the record (`BAD_OPENING`) and carry an audience (`NO_AUDIENCE`), checked before the store is
+touched. -/
+def acceptChecked (t : Table) (chat : String) (r : Rec) : Option ByteArray → Reply × Table
+  | none => acceptInto t chat r none
+  | some o =>
+    if !openingMatches r.group r.author r.commit o then (.code .badOpening, t)
+    else
+      match Serve.audienceOf o with
+      | none => (.code .noAudience, t)
+      | some aud => acceptInto t chat r (some aud)
+
+/-- Answer a request that only reads the chat `chat`. -/
+def reading (t : Table) (chat : String) (f : Chat → Reply) : Reply × Table :=
   match t[chat]? with
   | some c => (f c, t)
   | none => (.code .noChat, t)
+
+/-- `AUDIENCE`: the field-201 value for these members, sorted by ACI; a member with no key gets
+the zero tag. The result is checked with `Serve.parseAudience` before it is returned, so it is
+never a value `ACCEPT` would refuse. -/
+def audienceReply (ms : Array (Aci × Option ByteArray)) : Reply :=
+  if Serve.maxAudience < ms.size then .code .tooLarge
+  else
+    let seats := (ms.qsort fun x y => compare x.1 y.1 == .lt).map fun (a, k) =>
+      ({ aci := a, tag := (k.map Serve.keyTag).getD Serve.zeroTag } : Serve.Seat)
+    let b := Serve.writeAudience seats
+    if (Serve.parseAudience b).isSome then .audience b else .code .malformed
+
+/-- `SERVE` on chat `ch`. -/
+def serveReply (ch : Chat) (sr : ServeRequest) : Reply :=
+  .served ⟨sr.requester, Serve.keyTag sr.key, sr.rid⟩
+    (Serve.serve ch.store.raw (sr.me ch.store.boundaryDigests) (sr.heldMap ch.audiences) sr.query)
+
+/-- `ADDRESSED`: the stored records whose recorded audience seats `aci` under `key`. -/
+def addressedOf (ch : Chat) (aci : Aci) (key : ByteArray) : Array Digest :=
+  (ch.audiences.toList.filterMap fun (d, aud) =>
+    if Serve.seats aud aci key then some d else none).toArray
+
+/-! ### `ACCEPT_VIEW` (docs/JOIN_PLAN.md §4.4, §6.2) -/
+
+/-- What one `ACCEPT_VIEW` entry asks for, after its own checks. -/
+inductive ViewItem
+  /-- Accept this record; record this audience (from its checked opening) if it is stored. -/
+  | record (r : Rec) (aud : Option (Array Serve.Seat))
+  /-- Take this boundary digest. -/
+  | boundary (d : Digest)
+  /-- Refused before the store is touched. -/
+  | refused (c : Code)
+
+/-- The checks of one entry, as `ACCEPT_RECORD`'s: the record bytes must decode (`MALFORMED`); an
+opening must match the record (`BAD_OPENING`) and carry an audience (`NO_AUDIENCE`); for an
+import, it must neither disappear nor be view-once (`EPHEMERAL`, A9). -/
+def checkEntry (forImport : Bool) : ViewEntry → ViewItem
+  | .boundary d => .boundary d
+  | .after b =>
+    match decode b with
+    | some r => .record r none
+    | none => .refused .malformed
+  | .addressed b _ o =>
+    match decode b with
+    | none => .refused .malformed
+    | some r =>
+      match o with
+      | none => .record r none
+      | some op =>
+        if !openingMatches r.group r.author r.commit op then .refused .badOpening
+        else
+          match Serve.audienceOf op with
+          | none => .refused .noAudience
+          | some aud => if forImport && Serve.ephemeral op then .refused .ephemeral
+            else .record r (some aud)
+
+open Serve.Examples in
+-- An import refuses a disappearing message's opening; a relay takes it. A wrong opening is
+-- refused, and so are bytes that are not a record.
+#guard [checkEntry true (.addressed (encode timed.1) false (some timed.2)),
+    checkEntry false (.addressed (encode timed.1) false (some timed.2)),
+    checkEntry false (.addressed (encode later.1) false (some welcome.2)),
+    checkEntry false (.after ((encode later.1).push 0))].map (fun
+      | .refused c => c.name | .record _ (some _) => "record+audience" | _ => "other") ==
+  ["EPHEMERAL", "record+audience", "BAD_OPENING", "MALFORMED"]
+
+/-- The record an item asks to accept. -/
+def ViewItem.record? : ViewItem → Option Rec
+  | .record r _ => some r
+  | _ => none
+
+/-- Take boundary digest `d` vouched by `v`: a relative store adds it (`RelStore.addBoundary`;
+nothing changes if its boundary is full); a closed store takes no boundary digest. -/
+def takeBoundary (v : Aci) (s : ChatStore) (d : Digest) : ChatStore :=
+  match s with
+  | .closed _ => s
+  | .relative c =>
+    match c.addBoundary d v with
+    | some c' => .relative c'
+    | none => s
+
+/-- Take the boundary digest of an item, if it is one. -/
+def takeItem (v : Aci) (s : ChatStore) : ViewItem → ChatStore
+  | .boundary d => takeBoundary v s d
+  | _ => s
+
+/-- Take the boundary digests of the items, in order. -/
+def takeBoundaries (v : Aci) (s : ChatStore) (items : List ViewItem) : ChatStore :=
+  items.foldl (takeItem v) s
+
+/-- `ACCEPT_VIEW` on chat `ch`: take the boundary entries (a relative store only), then accept the
+record entries that pass their checks as one batch (`ChatStore.acceptAll`), and record the
+audiences of their checked openings for the records that are stored. The reply has one result per
+entry: for a record, what `accept` says for it in the final store; for a boundary digest, `known`
+if it is now a boundary digest or a stored record, otherwise `IGNORED` (closed store) or
+`TOO_LARGE` (the boundary is full). -/
+def acceptView (ch : Chat) (v : Aci) (forImport : Bool) (es : Array ViewEntry) :
+    Array ViewResult × Chat :=
+  let items := es.toList.map (checkEntry forImport)
+  let s1 := takeBoundaries v ch.store items
+  let s2 := (s1.acceptAll (items.filterMap ViewItem.record?).toArray).1
+  let result : ViewItem → ViewResult := fun
+    | .record r _ => .record (s2.accept r).1
+    | .boundary d =>
+      if s2.has d || s2.boundary.contains d then .known d
+      else if s2.isRelative then .code .tooLarge else .code .ignored
+    | .refused c => .code c
+  let auds := items.foldl (init := ch.audiences) fun auds it =>
+    match it with
+    | .record r (some a) => recordAudience auds (s2.accept r).1 (some a)
+    | _ => auds
+  ((items.map result).toArray, { store := s2, audiences := auds })
 
 /-- Carry out a request: the reply and the new table. `build` is the build text of `VERSION`. -/
 def run (build : String) (t : Table) : Request → Reply × Table
   | .version => (.version protocolVersion build, t)
   | .new chat g =>
-    if t.contains chat then (.code .chatOpen, t) else (.ok, t.insert chat (.empty g))
+    if t.contains chat then (.code .chatOpen, t)
+    else (.ok, t.insert chat { store := .closed (.empty g) })
+  | .newRelative chat g =>
+    if t.contains chat then (.code .chatOpen, t)
+    else (.ok, t.insert chat { store := .relative (.empty g) })
   | .open chat g i =>
     if t.contains chat then (.code .chatOpen, t)
     else
       match openInput g i with
-      | .ok c => (.opened (.ok ()), t.insert chat c)
+      | .ok ch => (.opened (.ok ()), t.insert chat ch)
       | .error e => (.opened (.error e), t)
   | .salvage chat g i =>
     if t.contains chat then (.code .chatOpen, t)
     else
       match salvageInput g i with
-      | .ok s => (.salvaged (.ok (s.dropped, s.missing)), t.insert chat s.store)
+      | .ok (ch, dropped, missing) => (.salvaged (.ok (dropped, missing)), t.insert chat ch)
       | .error e => (.salvaged (.error e), t)
   | .commit g a n m =>
     match commitWithOpening g a n m with
     | some (d, o) => (.committed d o, t)
     | none => (.code .malformed, t)
   | .hash p => (.digest (hashRecord p.toRec), t)
-  | .accept chat p => acceptInto t chat p.toRec
+  | .accept chat p o =>
+    if !t.contains chat then (.code .noChat, t) else acceptChecked t chat p.toRec o
   | .acceptRecord chat b o =>
     if !t.contains chat then (.code .noChat, t)
     else
       match decode b with
       | none => (.code .malformed, t)
-      | some r =>
-        if o.all (openingMatches r.group r.author r.commit) then acceptInto t chat r
-        else (.code .badOpening, t)
-  | .heads chat => reading t chat fun c => .digests c.headsArray
-  | .has chat d => reading t chat fun c => .has (c.has d)
+      | some r => acceptChecked t chat r o
+  | .heads chat => reading t chat fun c => .digests c.store.headsArray
+  | .has chat d => reading t chat fun c => .has (c.store.has d)
   | .get chat d => reading t chat fun c =>
-    match c.get d with
+    match c.store.get d with
     | some r => .record r
     | none => .code .notFound
-  | .reachSet chat ds => reading t chat fun c => .digests (c.reachSet ds).toList.toArray
+  | .reachSet chat ds => reading t chat fun c => .digests (c.store.reachSet ds).toList.toArray
   | .merge chat b =>
     match takeOut t chat with
     | (some c, t) =>
-      match mergeInput c b with
-      | .ok e => (.opened (.ok ()), t.insert chat e)
+      match mergeInput c.store b with
+      | .ok e => (.opened (.ok ()), t.insert chat { c with store := e })
       | .error err => (.opened (.error err), t.insert chat c)
     | (none, t) => (.code .noChat, t)
-  | .classify chat facts => reading t chat fun c => .classified (classify c facts).toList.toArray
-  | .encode chat => reading t chat fun c => .blob c.encode
+  | .classify chat facts => reading t chat fun c =>
+    .classified (c.store.classify facts).toList.toArray
+  | .encode chat => reading t chat fun c => .blob (encodeChat c.store c.audiences)
   | .close chat => (.ok, t.erase chat)
+  | .audience ms => (audienceReply ms, t)
+  | .serve chat sr => reading t chat fun c => serveReply c sr
+  | .addressed chat a k => reading t chat fun c => .digests (addressedOf c a k)
+  | .acceptView chat v i es =>
+    match takeOut t chat with
+    | (some ch, t) =>
+      let (rs, ch') := acceptView ch v i es
+      (.viewed rs, t.insert chat ch')
+    | (none, t) => (.code .noChat, t)
+  | .linkable chat live => reading t chat fun c =>
+    .digests (c.store.linkable (live.foldl (·.insert ·) ∅))
+
+/-- What `acceptInto` did when it replies `ACCEPTED`: the record is the one given, and the
+audience given, if any, is recorded under the digest in the new table. -/
+theorem acceptInto_accepted {t t' : Table} {chat : String} {r r' : Rec}
+    {aud : Option (Array Serve.Seat)} {d : Digest}
+    (h : acceptInto t chat r aud = (.accept r' (.accepted d), t')) :
+    r' = r ∧ ∀ a, aud = some a → ∃ ch, t'[chat]? = some ch ∧ ch.audiences[d]? = some a := by
+  unfold acceptInto takeOut at h
+  split at h
+  · simp only [Prod.mk.injEq, Reply.accept.injEq] at h
+    obtain ⟨⟨rfl, hres⟩, rfl⟩ := h
+    refine ⟨rfl, fun a ha => ⟨_, Std.HashMap.getElem?_insert_self, ?_⟩⟩
+    simp [recordAudience, hres, ha]
+  · simp at h
+
+/-- What `acceptChecked` did when it replies `ACCEPTED`: an opening, if one came, matches the
+record and carries an audience, which is recorded under the record's digest. -/
+theorem acceptChecked_accepted {t t' : Table} {chat : String} {r r' : Rec}
+    {o : Option ByteArray} {d : Digest}
+    (h : acceptChecked t chat r o = (.accept r' (.accepted d), t')) :
+    r' = r ∧ ∀ op ∈ o, openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧
+        ∃ ch, t'[chat]? = some ch ∧ ch.audiences[d]? = some aud := by
+  cases o with
+  | none =>
+    exact ⟨(acceptInto_accepted h).1, by simp⟩
+  | some op =>
+    simp only [acceptChecked] at h
+    split at h
+    · simp at h
+    · rename_i hm
+      split at h
+      · simp at h
+      · rename_i aud ha
+        obtain ⟨rfl, hrec⟩ := acceptInto_accepted h
+        refine ⟨rfl, fun op' hop => ?_⟩
+        cases hop
+        simp only [Bool.not_eq_true', Bool.not_eq_false] at hm
+        exact ⟨hm, aud, ha, hrec aud rfl⟩
 
 /-- **`ACCEPT_RECORD` checks before it stores.** If it replies `ACCEPTED` for record `r`, the
 bytes it got are exactly `r`'s encoding, and the opening, if one came, is a nonce and message
 bytes that hold no field 15 or 200 and whose commitment, by `r`'s author in `r`'s group, is
-`r`'s commit. -/
+`r`'s commit; it carries an audience, and that audience is recorded under `r`'s digest. -/
 theorem acceptRecord_accepted {build : String} {t t' : Table} {chat : String} {b : ByteArray}
     {o : Option ByteArray} {r : Rec} {d : Digest}
     (h : run build t (.acceptRecord chat b o) = (.accept r (.accepted d), t')) :
-    encode r = b ∧ ∀ op ∈ o, ∃ (n : Nonce) (m : ByteArray), op = n.bytes ++ m ∧
-      committedBytes m = some m ∧ commit r.group r.author n m = some r.commit := by
+    encode r = b ∧ ∀ op ∈ o, (∃ (n : Nonce) (m : ByteArray), op = n.bytes ++ m ∧
+      committedBytes m = some m ∧ commit r.group r.author n m = some r.commit) ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧
+        ∃ ch, t'[chat]? = some ch ∧ ch.audiences[d]? = some aud := by
   simp only [run] at h
   split at h
   · simp at h
   · split at h
     · simp at h
     · rename_i r' hdec
-      split at h
-      · rename_i hop
-        unfold acceptInto takeOut at h
-        split at h
-        · simp only [Prod.mk.injEq, Reply.accept.injEq] at h
-          obtain ⟨⟨rfl, -⟩, -⟩ := h
-          refine ⟨encode_of_decode hdec, fun op hmem => ?_⟩
-          subst hmem
-          exact openingMatches_spec (by simpa using hop)
-        · simp at h
-      · simp at h
+      obtain ⟨rfl, hop⟩ := acceptChecked_accepted h
+      refine ⟨encode_of_decode hdec, fun op hmem => ?_⟩
+      obtain ⟨hm, rest⟩ := hop op hmem
+      exact ⟨openingMatches_spec hm, rest⟩
+
+/-- **`ACCEPT` checks an opening before it stores.** If it replies `ACCEPTED`, the record is the
+one given, and an opening, if one came, matches it and carries an audience, which is recorded
+under the record's digest. -/
+theorem accept_accepted {build : String} {t t' : Table} {chat : String} {p : Parts}
+    {o : Option ByteArray} {r : Rec} {d : Digest}
+    (h : run build t (.accept chat p o) = (.accept r (.accepted d), t')) :
+    r = p.toRec ∧ ∀ op ∈ o, openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧
+        ∃ ch, t'[chat]? = some ch ∧ ch.audiences[d]? = some aud := by
+  simp only [run] at h
+  split at h
+  · simp at h
+  · obtain ⟨rfl, hop⟩ := acceptChecked_accepted h
+    exact ⟨rfl, hop⟩
+
+/-- **`SERVE` sends content only to an account its author addressed, under the checked key.** If
+`SERVE` replies with header `h` and entries `es`, nothing changed; the header names the requester,
+the tag of the key `SERVE` checked, and the request id; and every opening in the entries opens a
+record of the chat's store, with its own committed audience seating the header's ACI under that
+key. The host sends the reply only to `h.aci` and seals the entries to a key whose tag is
+`h.tag` (docs/JOIN_PLAN.md §4.3), so the account and the key checked are the ones that can read
+the content. -/
+theorem run_serve_content {build : String} {t t' : Table} {chat : String} {sr : ServeRequest}
+    {h : ServeHeader} {es : List Serve.Entry}
+    (hr : run build t (.serve chat sr) = (.served h es, t')) :
+    t' = t ∧ h.aci = sr.requester ∧ h.tag = Serve.keyTag sr.key ∧ h.rid = sr.rid ∧
+      ∃ ch, t[chat]? = some ch ∧ ∀ r o ac, Serve.Entry.addressed r o ac ∈ es →
+        ∃ d, ch.store.get d = some r ∧ ∀ op, o = some op →
+          openingMatches r.group r.author r.commit op = true ∧
+          ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud h.aci sr.key = true := by
+  simp only [run, reading] at hr
+  split at hr
+  · rename_i ch hch
+    simp only [serveReply, Prod.mk.injEq, Reply.served.injEq] at hr
+    obtain ⟨⟨rfl, rfl⟩, rfl⟩ := hr
+    refine ⟨rfl, rfl, rfl, rfl, ch, hch, fun r o ac he => ?_⟩
+    obtain ⟨d, hget, hop⟩ := Serve.serve_content he
+    refine ⟨d, hget, fun op hop' => ?_⟩
+    have h1 := hop op hop'
+    rw [ServeRequest.query_aci, ServeRequest.query_key] at h1
+    exact h1
+  · simp at hr
+
+/-- **`AUDIENCE` gives a value `ACCEPT` takes.** Its field-201 value is a well-formed audience,
+and nothing changed. -/
+theorem run_audience {build : String} {t t' : Table} {ms : Array (Aci × Option ByteArray)}
+    {b : ByteArray} (h : run build t (.audience ms) = (.audience b, t')) :
+    t' = t ∧ (Serve.parseAudience b).isSome = true := by
+  simp only [run, audienceReply, Prod.mk.injEq] at h
+  obtain ⟨h, rfl⟩ := h
+  refine ⟨rfl, ?_⟩
+  split at h
+  · simp at h
+  · split at h
+    · rename_i hp
+      simp only [Reply.audience.injEq] at h
+      rw [← h]
+      exact hp
+    · simp at h
+
+/-- **`ADDRESSED` lists only records whose recorded audience seats the account.** Every digest
+it returns is stored with a recorded audience that seats `aci` under the tag of `key`. -/
+theorem run_addressed {build : String} {t t' : Table} {chat : String} {a : Aci}
+    {k : ByteArray} {ds : Array Digest}
+    (h : run build t (.addressed chat a k) = (.digests ds, t')) :
+    t' = t ∧ ∃ ch, t[chat]? = some ch ∧ ∀ d ∈ ds,
+      ∃ aud, ch.audiences[d]? = some aud ∧ Serve.seats aud a k = true := by
+  simp only [run, reading] at h
+  split at h
+  · rename_i ch hch
+    simp only [Prod.mk.injEq, Reply.digests.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨rfl, ch, hch, fun d hd => ?_⟩
+    simp only [addressedOf, List.mem_toArray, List.mem_filterMap] at hd
+    obtain ⟨⟨d', aud⟩, hmem, hf⟩ := hd
+    split at hf
+    · rename_i hs
+      simp only [Option.some.injEq] at hf
+      subst hf
+      exact ⟨aud, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.1 hmem, hs⟩
+    · simp at hf
+  · simp at h
 
 /-- **`COMMIT`'s opening matches its commitment.** If `COMMIT` replies with commitment `d` and
 opening `o`, then `o` passes `openingMatches` for the same group and author: the opening check of
@@ -786,6 +1416,426 @@ theorem commit_openingMatches {build : String} {t t' : Table} {g : GroupId} {a :
     exact commitWithOpening_matches hc
   · simp at h
 
+/-! ### What `ACCEPT_VIEW`, `LINKABLE` and `NEW_RELATIVE` guarantee -/
+
+/-- A boundary item comes from a boundary entry with that digest. -/
+theorem checkEntry_boundary {imp : Bool} {e : ViewEntry} {d : Digest}
+    (h : checkEntry imp e = .boundary d) : e = .boundary d := by
+  cases e with
+  | boundary d' => simp only [checkEntry, ViewItem.boundary.injEq] at h; rw [h]
+  | after b => simp only [checkEntry] at h; split at h <;> simp at h
+  | addressed b ac o =>
+    simp only [checkEntry] at h
+    split at h
+    · simp at h
+    · cases o with
+      | none => simp at h
+      | some op =>
+        simp only at h
+        split at h
+        · simp at h
+        · split at h
+          · simp at h
+          · split at h <;> simp at h
+
+/-- A record item comes from a record entry whose bytes decode to it. An audience comes only with
+an opening of that entry that matches the record, carries exactly that audience, and, for an
+import, neither disappears nor is view-once. -/
+theorem checkEntry_record {imp : Bool} {e : ViewEntry} {r : Rec}
+    {aud : Option (Array Serve.Seat)} (h : checkEntry imp e = .record r aud) :
+    (∃ b, decode b = some r ∧ (e = .after b ∨ ∃ ac o, e = .addressed b ac o)) ∧
+    ∀ a, aud = some a → ∃ b ac op, e = .addressed b ac (some op) ∧
+      openingMatches r.group r.author r.commit op = true ∧ Serve.audienceOf op = some a ∧
+      (imp = true → Serve.ephemeral op = false) := by
+  cases e with
+  | boundary d => simp [checkEntry] at h
+  | after b =>
+    simp only [checkEntry] at h
+    split at h
+    · rename_i r' hd
+      simp only [ViewItem.record.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨⟨b, hd, .inl rfl⟩, by simp⟩
+    · simp at h
+  | addressed b ac o =>
+    simp only [checkEntry] at h
+    split at h
+    · simp at h
+    · rename_i r' hd
+      cases o with
+      | none =>
+        simp only [ViewItem.record.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact ⟨⟨b, hd, .inr ⟨ac, none, rfl⟩⟩, by simp⟩
+      | some op =>
+        simp only at h
+        split at h
+        · simp at h
+        · rename_i hm
+          split at h
+          · simp at h
+          · rename_i a' ha
+            split at h
+            · simp at h
+            · rename_i hne
+              simp only [ViewItem.record.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              refine ⟨⟨b, hd, .inr ⟨ac, some op, rfl⟩⟩, fun a ha' => ?_⟩
+              cases ha'
+              refine ⟨b, ac, op, rfl, by simpa using hm, ha, fun hi => ?_⟩
+              simpa [hi] using hne
+
+/-- Taking one boundary digest keeps the kind, the chat and the records; the boundary only grows,
+by `d` with voucher `v`. -/
+theorem takeBoundary_spec (v : Aci) (s : ChatStore) (d : Digest) :
+    (takeBoundary v s d).isRelative = s.isRelative ∧ (takeBoundary v s d).raw.map = s.raw.map ∧
+    (takeBoundary v s d).raw.group = s.raw.group ∧
+    ∀ (x : Digest) (a : Aci), (takeBoundary v s d).boundary[x]? = some a →
+      s.boundary[x]? = some a ∨ (x = d ∧ a = v) := by
+  cases s with
+  | closed c => exact ⟨rfl, rfl, rfl, fun _ _ h => .inl h⟩
+  | relative c =>
+    simp only [takeBoundary]
+    cases hadd : c.addBoundary d v with
+    | none => exact ⟨rfl, rfl, rfl, fun _ _ h => .inl h⟩
+    | some c' =>
+      obtain ⟨hg, hm, -, -, hnew⟩ := RelStore.addBoundary_spec hadd
+      exact ⟨rfl, hm, hg, fun x a h => hnew x a h⟩
+
+/-- Taking the boundary items keeps the kind, the chat and the records; every new boundary digest
+is one of the items, with voucher `v`. -/
+theorem takeBoundaries_spec (v : Aci) (s : ChatStore) (items : List ViewItem) :
+    (takeBoundaries v s items).isRelative = s.isRelative ∧
+    (takeBoundaries v s items).raw.map = s.raw.map ∧
+    (takeBoundaries v s items).raw.group = s.raw.group ∧
+    ∀ (x : Digest) (a : Aci), (takeBoundaries v s items).boundary[x]? = some a →
+      s.boundary[x]? = some a ∨ (a = v ∧ ViewItem.boundary x ∈ items) := by
+  induction items generalizing s with
+  | nil => exact ⟨rfl, rfl, rfl, fun _ _ h => .inl h⟩
+  | cons it rest ih =>
+    have hstep : takeBoundaries v s (it :: rest) = takeBoundaries v (takeItem v s it) rest := rfl
+    rw [hstep]
+    obtain ⟨hk, hm, hg, hb⟩ := ih (takeItem v s it)
+    have h1 : (takeItem v s it).isRelative = s.isRelative ∧ (takeItem v s it).raw.map = s.raw.map ∧
+        (takeItem v s it).raw.group = s.raw.group ∧
+        ∀ (x : Digest) (a : Aci), (takeItem v s it).boundary[x]? = some a →
+          s.boundary[x]? = some a ∨ (a = v ∧ ViewItem.boundary x ∈ it :: rest) := by
+      cases it with
+      | boundary d =>
+        obtain ⟨k, m, g, b⟩ := takeBoundary_spec v s d
+        refine ⟨k, m, g, fun x a h => ?_⟩
+        rcases b x a h with h | ⟨rfl, rfl⟩
+        · exact .inl h
+        · exact .inr ⟨rfl, List.mem_cons_self⟩
+      | record r aud => exact ⟨rfl, rfl, rfl, fun _ _ h => .inl h⟩
+      | refused c => exact ⟨rfl, rfl, rfl, fun _ _ h => .inl h⟩
+    obtain ⟨k1, m1, g1, b1⟩ := h1
+    refine ⟨hk.trans k1, hm.trans m1, hg.trans g1, fun x a h => ?_⟩
+    rcases hb x a h with h | ⟨rfl, hx⟩
+    · exact b1 x a h
+    · exact .inr ⟨rfl, List.mem_cons_of_mem _ hx⟩
+
+/-- **What `ACCEPT_VIEW` does to a chat's store** (`acceptView_built` is by construction: the
+store is a `ChatStore`, correct relative to its boundary, `ChatStore.builtRel`). The kind and the
+chat are the same, so **a closed store stays closed and takes no boundary digest**. Every stored
+record is kept. Every new record is the record of an entry that passed its checks. Every new
+boundary digest is a boundary entry's, vouched by `v`. -/
+theorem acceptView_sound (ch : Chat) (v : Aci) (imp : Bool) (es : Array ViewEntry) :
+    (acceptView ch v imp es).2.store.isRelative = ch.store.isRelative ∧
+    (acceptView ch v imp es).2.store.group = ch.store.group ∧
+    (∀ (k : Digest) (x : Rec), ch.store.get k = some x →
+      (acceptView ch v imp es).2.store.get k = some x) ∧
+    (∀ (k : Digest) (x : Rec), (acceptView ch v imp es).2.store.get k = some x →
+      ch.store.get k = some x ∨ ∃ e ∈ es, ∃ aud, checkEntry imp e = .record x aud) ∧
+    (∀ (x : Digest) (a : Aci), (acceptView ch v imp es).2.store.boundary[x]? = some a →
+      ch.store.boundary[x]? = some a ∨ (a = v ∧ ViewEntry.boundary x ∈ es)) := by
+  let items := es.toList.map (checkEntry imp)
+  let s1 := takeBoundaries v ch.store items
+  obtain ⟨k1, m1, g1, b1⟩ := takeBoundaries_spec v ch.store items
+  obtain ⟨k2, g2, b2, keep2, only2, -⟩ :=
+    ChatStore.acceptAll_sound s1 (items.filterMap ViewItem.record?).toArray
+  have hget1 : ∀ k, s1.get k = ch.store.get k := fun k => by
+    simp only [ChatStore.get, s1, m1]
+  refine ⟨k2.trans k1, g2.trans g1, fun k x h => keep2 k x (by rw [hget1]; exact h),
+    fun k x h => ?_, fun x a h => ?_⟩
+  · rcases only2 k x h with h' | h'
+    · exact .inl (by rw [← hget1]; exact h')
+    · right
+      simp only [List.mem_toArray, List.mem_filterMap] at h'
+      obtain ⟨it, hit, hrec⟩ := h'
+      obtain ⟨e, he, rfl⟩ := List.mem_map.mp hit
+      cases hce : checkEntry imp e with
+      | record r aud =>
+        rw [hce] at hrec
+        simp only [ViewItem.record?, Option.some.injEq] at hrec
+        subst hrec
+        exact ⟨e, Array.mem_toList_iff.mp he, aud, hce⟩
+      | boundary d => rw [hce] at hrec; simp [ViewItem.record?] at hrec
+      | refused c => rw [hce] at hrec; simp [ViewItem.record?] at hrec
+  · have h' : s1.boundary[x]? = some a := by
+      have : (acceptView ch v imp es).2.store.boundary = s1.boundary := b2
+      rw [← this]; exact h
+    rcases b1 x a h' with h'' | ⟨rfl, hx⟩
+    · exact .inl h''
+    · right
+      obtain ⟨e, he, hce⟩ := List.mem_map.mp hx
+      exact ⟨rfl, by rw [← checkEntry_boundary hce]; exact Array.mem_toList_iff.mp he⟩
+
+/-- **`ACCEPT_VIEW` keeps the store correct relative to its boundary** (`BuiltRel`; for a closed
+store the boundary is empty and this is `Built`). It holds by construction: the store is a
+`ChatStore`, which carries the proof. -/
+theorem acceptView_built (ch : Chat) (v : Aci) (imp : Bool) (es : Array ViewEntry) :
+    BuiltRel (acceptView ch v imp es).2.store.raw (acceptView ch v imp es).2.store.boundary :=
+  ChatStore.builtRel _
+
+/-- **`ACCEPT_VIEW` says `OK` for a record only if it is stored.** If the result for entry `i` is
+`accepted d`, the entry is a record entry that passed its checks, `d` is that record's digest, and
+the chat's store holds it under `d`. -/
+theorem acceptView_accepted {ch : Chat} {v : Aci} {imp : Bool} {es : Array ViewEntry} {i : Nat}
+    {d : Digest} (h : (acceptView ch v imp es).1[i]? = some (.record (.accepted d))) :
+    ∃ e r aud, es[i]? = some e ∧ checkEntry imp e = .record r aud ∧ d = hashRecord r ∧
+      (acceptView ch v imp es).2.store.get d = some r := by
+  let items := es.toList.map (checkEntry imp)
+  let s1 := takeBoundaries v ch.store items
+  let recs := (items.filterMap ViewItem.record?).toArray
+  obtain ⟨-, -, -, -, -, hacc⟩ := ChatStore.acceptAll_sound s1 recs
+  unfold acceptView at h
+  simp only [List.getElem?_toArray, List.getElem?_map, Array.getElem?_toList] at h
+  cases he : es[i]? with
+  | none => simp [he] at h
+  | some e =>
+    rw [he] at h
+    simp only [Option.map_some, Option.some.injEq] at h
+    cases hce : checkEntry imp e with
+    | record r aud =>
+      rw [hce] at h
+      simp only [ViewResult.record.injEq] at h
+      have hr : r ∈ recs := by
+        simp only [recs, List.mem_toArray, List.mem_filterMap]
+        exact ⟨.record r aud, List.mem_map.mpr ⟨e, Array.mem_toList_iff.mpr
+          (Array.mem_of_getElem? he), hce⟩, rfl⟩
+      exact ⟨e, r, aud, rfl, hce, (ChatStore.accept_accepted h).1, hacc r hr d h⟩
+    | boundary d' =>
+      rw [hce] at h
+      simp only at h
+      split at h
+      · simp at h
+      · split at h <;> simp at h
+    | refused c => rw [hce] at h; simp at h
+
+/-- The audiences `acceptView`'s fold records come from record items whose record is stored. -/
+theorem foldAudiences {s : ChatStore} (l : List ViewItem) (auds : AudTable) {d : Digest}
+    {a : Array Serve.Seat}
+    (h : (l.foldl (init := auds) fun auds it =>
+      match it with
+      | .record r (some a) => recordAudience auds (s.accept r).1 (some a)
+      | _ => auds)[d]? = some a) :
+    auds[d]? = some a ∨ ∃ r, ViewItem.record r (some a) ∈ l ∧ (s.accept r).1 = .accepted d := by
+  induction l generalizing auds with
+  | nil => exact .inl h
+  | cons it rest ih =>
+    simp only [List.foldl_cons] at h
+    rcases ih _ h with h' | ⟨r, hr, hacc⟩
+    · cases it with
+      | record r0 aud =>
+        cases aud with
+        | none => exact .inl h'
+        | some a0 =>
+          cases hres : (s.accept r0).1 with
+          | accepted d0 =>
+            simp only [hres, recordAudience] at h'
+            rw [Std.ExtTreeMap.getElem?_insert] at h'
+            split at h'
+            · rename_i hdd
+              rw [Std.LawfulEqCmp.compare_eq_iff_eq] at hdd
+              subst hdd
+              cases h'
+              exact .inr ⟨r0, List.mem_cons_self, hres⟩
+            · exact .inl h'
+          | _ => simp only [hres, recordAudience] at h'; exact .inl h'
+      | boundary _ => exact .inl h'
+      | refused _ => exact .inl h'
+    · exact .inr ⟨r, List.mem_cons_of_mem _ hr, hacc⟩
+
+/-- **`ACCEPT_VIEW` records only checked audiences of stored records.** An audience in the chat's
+table after `ACCEPT_VIEW` was there before, or it is the audience of an entry's opening that
+matches the entry's record (`checkEntry_record`), and that record is stored under `d`. -/
+theorem acceptView_audiences {ch : Chat} {v : Aci} {imp : Bool} {es : Array ViewEntry} {d : Digest}
+    {a : Array Serve.Seat} (h : (acceptView ch v imp es).2.audiences[d]? = some a) :
+    ch.audiences[d]? = some a ∨ ∃ e ∈ es, ∃ r, checkEntry imp e = .record r (some a) ∧
+      d = hashRecord r ∧ (acceptView ch v imp es).2.store.get d = some r := by
+  let items := es.toList.map (checkEntry imp)
+  let s1 := takeBoundaries v ch.store items
+  let recs := (items.filterMap ViewItem.record?).toArray
+  obtain ⟨-, -, -, -, -, hacc⟩ := ChatStore.acceptAll_sound s1 recs
+  unfold acceptView at h
+  rcases foldAudiences _ _ h with h' | ⟨r, hr, hacc'⟩
+  · exact .inl h'
+  · right
+    obtain ⟨e, he, hce⟩ := List.mem_map.mp hr
+    have hrr : r ∈ recs := by
+      simp only [recs, List.mem_toArray, List.mem_filterMap]
+      exact ⟨.record r (some a), hr, rfl⟩
+    exact ⟨e, Array.mem_toList_iff.mp he, r, hce, (ChatStore.accept_accepted hacc').1,
+      hacc r hrr d hacc'⟩
+
+/-- `ACCEPT_VIEW` runs `acceptView` on the chat, and puts the result back. -/
+theorem run_acceptView {build : String} {t t' : Table} {chat : String} {v : Aci} {imp : Bool}
+    {es : Array ViewEntry} {rs : Array ViewResult}
+    (h : run build t (.acceptView chat v imp es) = (.viewed rs, t')) :
+    ∃ ch, t[chat]? = some ch ∧ rs = (acceptView ch v imp es).1 ∧
+      t'[chat]? = some (acceptView ch v imp es).2 := by
+  simp only [run, takeOut] at h
+  cases hch : t[chat]? with
+  | none => simp [hch] at h
+  | some ch =>
+    simp only [hch, Prod.mk.injEq, Reply.viewed.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨ch, rfl, rfl, Std.HashMap.getElem?_insert_self⟩
+
+/-- A digest is in the set built from a list exactly when it is in the list. -/
+theorem mem_foldl_insert {l : List Digest} {s : DigestSet} {d : Digest} :
+    d ∈ l.foldl (·.insert ·) s ↔ d ∈ s ∨ d ∈ l := by
+  induction l generalizing s with
+  | nil => simp
+  | cons x xs ih =>
+    rw [List.foldl_cons, ih, Std.ExtTreeSet.mem_insert, Std.LawfulEqCmp.compare_eq_iff_eq,
+      List.mem_cons]
+    constructor
+    · rintro ((rfl | h) | h)
+      · exact .inr (.inl rfl)
+      · exact .inl h
+      · exact .inr (.inr h)
+    · rintro (h | rfl | h)
+      · exact .inl (.inr h)
+      · exact .inl (.inl rfl)
+      · exact .inr h
+
+/-- **`LINKABLE` returns only heads, and for a relative store only live records.** Every digest it
+returns is a head of the chat's store (no stored record links it); for a relative store it is
+also a stored record and in the `live` list the host passed (docs/JOIN_PLAN.md §6.2). Nothing
+changes. -/
+theorem run_linkable {build : String} {t t' : Table} {chat : String} {live : Array Digest}
+    {ds : Array Digest} (h : run build t (.linkable chat live) = (.digests ds, t')) :
+    t' = t ∧ ∃ ch, t[chat]? = some ch ∧ ∀ d ∈ ds,
+      (∀ (k : Digest) (x : Rec), ch.store.get k = some x → d ∉ x.links) ∧
+      (ch.store.isRelative = true → (∃ r, ch.store.get d = some r) ∧ d ∈ live) := by
+  simp only [run, reading] at h
+  split at h
+  · rename_i ch hch
+    simp only [Prod.mk.injEq, Reply.digests.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨rfl, ch, hch, fun d hd => ?_⟩
+    obtain ⟨hn, hr⟩ := ChatStore.linkable_sub hd
+    refine ⟨hn, fun hrel => ?_⟩
+    obtain ⟨h1, h2⟩ := hr hrel
+    refine ⟨h1, ?_⟩
+    rw [← Array.foldl_toList, mem_foldl_insert] at h2
+    rcases h2 with h2 | h2
+    · simp at h2
+    · exact Array.mem_toList_iff.mp h2
+  · simp at h
+
+/-- **`NEW_RELATIVE` opens an empty relative store**, and `NEW` an empty closed one. -/
+theorem run_newRelative {build : String} {t t' : Table} {chat : String} {g : GroupId}
+    (h : run build t (.newRelative chat g) = (.ok, t')) :
+    ∃ ch, t'[chat]? = some ch ∧ ch.store.isRelative = true ∧ ch.store.group = g ∧
+      ch.store.headsArray = #[] := by
+  simp only [run] at h
+  split at h
+  · simp at h
+  · simp only [Prod.mk.injEq] at h
+    obtain ⟨-, rfl⟩ := h
+    refine ⟨_, Std.HashMap.getElem?_insert_self, rfl, rfl, ?_⟩
+    simp [ChatStore.headsArray, RelStore.headsArray, RelStore.heads, RelStore.empty,
+      RelStore.emptyWith, keySet]
+
+/-! ### The theorems on concrete inputs
+
+A closed chat that holds `a1` takes a view whose one entry is `a1`'s record: the reply says
+`accepted`, so the hypothesis of `acceptView_accepted` holds. `LINKABLE` and `NEW_RELATIVE` reply
+as their theorems assume. -/
+
+/-- A closed chat holding `a1` (`Zrdt.Examples.s1`). -/
+def chatA1 : Chat := { store := .closed Examples.s1 }
+
+/-- `a1` is stored in it. -/
+theorem chatA1_get : chatA1.store.get (hashRecord Examples.a1) = some Examples.a1 := by
+  have hok : (rawAccept (CheckedStore.empty Examples.group).raw Examples.a1).1 =
+      .accepted (hashRecord Examples.a1) :=
+    rawAccept_of_ok rfl (by decide) (by simp [Examples.a1]) (by simp [CheckedStore.empty])
+      (fun _ => by simp [CheckedStore.empty, maxRecords])
+  have h := rawAccept_accepted (c' := (rawAccept (CheckedStore.empty Examples.group).raw
+    Examples.a1).2) (Prod.ext hok rfl)
+  show (rawAccept (CheckedStore.empty Examples.group).raw Examples.a1).2.map[hashRecord
+    Examples.a1]? = some Examples.a1
+  rw [h.2.2.1]
+  exact Std.ExtTreeMap.getElem?_insert_self
+
+/-- The view's one result is `accepted`. -/
+theorem chatA1_view : (acceptView chatA1 Examples.alice false
+    #[.after (encode Examples.a1)]).1[0]? = some (.record (.accepted (hashRecord Examples.a1))) := by
+  have hce : checkEntry false (.after (encode Examples.a1)) = .record Examples.a1 none := by
+    simp [checkEntry, decode_encode]
+  obtain ⟨-, -, -, hkeep, -, -⟩ := ChatStore.acceptAll_sound
+    (takeBoundaries Examples.alice chatA1.store [.record Examples.a1 none]) #[Examples.a1]
+  have hst := hkeep _ _ chatA1_get
+  simp only [acceptView, List.map_cons, List.map_nil, hce,
+    List.filterMap_cons, List.filterMap_nil, ViewItem.record?, List.getElem?_toArray,
+    List.getElem?_cons_zero, Option.some.injEq, ViewResult.record.injEq]
+  exact ChatStore.accept_stored hst
+
+example : ∃ e r aud, (#[ViewEntry.after (encode Examples.a1)])[0]? = some e ∧
+    checkEntry false e = .record r aud ∧ hashRecord Examples.a1 = hashRecord r ∧
+    (acceptView chatA1 Examples.alice false #[.after (encode Examples.a1)]).2.store.get
+      (hashRecord Examples.a1) = some r :=
+  acceptView_accepted chatA1_view
+
+example : ∃ ds t', run buildId ((∅ : Table).insert "a" chatA1) (.linkable "a" #[]) =
+    (.digests ds, t') :=
+  ⟨_, _, by simp only [run, reading, Std.HashMap.getElem?_insert_self]; rfl⟩
+
+example : ∃ ch, ((run buildId (∅ : Table) (.newRelative "n" Examples.group)).2)["n"]? = some ch ∧
+    ch.store.isRelative = true ∧ ch.store.group = Examples.group ∧ ch.store.headsArray = #[] :=
+  run_newRelative (build := buildId) (t := ∅) (by simp [run])
+
+/-! ### `run_serve_content` on a real request
+
+A table holding Alice's message to herself (`Serve.Examples.selfMsg`), and her own `SERVE`
+request for her account: the reply holds the message with its opening, as an author copy. So the
+hypothesis of `run_serve_content` is met, and its content clause is not vacuous. -/
+
+open Serve.Examples in
+/-- Chat `"self"`: Alice's message to herself, no audience recorded. -/
+def selfTable : Table := (∅ : Table).insert "self" { store := .closed selfStore }
+
+open Serve.Examples in
+/-- Alice asks for her own account's catch-up, under her own key; her device holds the opening and
+the record `live`. -/
+def selfServe : ServeRequest :=
+  { own := Examples.alice, requester := Examples.alice, key := keyAlice,
+    rid := ⟨Array.replicate 16 0⟩, since := #[], ownSince := #[], wanted := none,
+    forExport := false, strict := false, live := #[selfDigest], disown := #[],
+    held := #[(selfDigest, selfMsg.2)] }
+
+open Serve.Examples in
+example : ∃ h es t', run buildId selfTable (.serve "self" selfServe) = (.served h es, t') ∧
+    Serve.Entry.addressed selfMsg.1 (some selfMsg.2) true ∈ es := by
+  have hme : selfServe.me = selfMe := by
+    simp [ServeRequest.me, selfServe, selfMe]
+  have hheld : selfServe.heldMap ∅ = selfHeld := by
+    have hm : (∅ : Std.ExtTreeMap Digest (Array Serve.Seat) compare).map
+        (fun _ a => ({ audience := some a } : Serve.Held)) = ∅ :=
+      Std.ExtTreeMap.map_eq_empty_iff.2 rfl
+    simp [ServeRequest.heldMap, selfServe, selfHeld, hm]
+  have hq : selfServe.query = rq Examples.alice keyAlice := rfl
+  refine ⟨⟨Examples.alice, Serve.keyTag keyAlice, ⟨Array.replicate 16 0⟩⟩,
+    Serve.serve selfStore.raw selfServe.me (selfServe.heldMap ∅) selfServe.query, selfTable, ?_, ?_⟩
+  · simp only [run, reading, selfTable, Std.HashMap.getElem?_insert_self]
+    rfl
+  · rw [hme, hheld, hq]
+    exact self_served false false
+
 /-- Answer one request payload: the reply payload and the new table. A request that cannot be
 read gets `UNKNOWN_OP` or `BAD_REQUEST` and changes nothing. -/
 def step (build : String) (t : Table) (payload : ByteArray) : ByteArray × Table :=
@@ -800,8 +1850,8 @@ def session (payloads : List ByteArray) (build : String := buildId) : List ByteA
 
 open Examples in
 -- Open a chat, accept `a1` and then `b1`, read the heads, close.
-#guard session [(Request.new "c" group).write, (Request.accept "c" (.ofRec a1)).write,
-    (Request.accept "c" (.ofRec b1)).write, (Request.heads "c").write, (Request.close "c").write,
+#guard session [(Request.new "c" group).write, (Request.accept "c" (.ofRec a1) none).write,
+    (Request.accept "c" (.ofRec b1) none).write, (Request.heads "c").write, (Request.close "c").write,
     (Request.heads "c").write] ==
   [Reply.ok.write, (Reply.accept a1 (.accepted (hashRecord a1))).write,
     (Reply.accept b1 (.accepted (hashRecord b1))).write, (Reply.digests #[hashRecord b1]).write,
