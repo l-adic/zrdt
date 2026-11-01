@@ -246,6 +246,31 @@ example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
       ∃ r, Examples.s1.get d = some r ∧ StatusMeans (abs Examples.s1) (liveOf facts) (toSpec r) st :=
   CheckedStore.classify_spec _ _ _ _
 
+/-- `s1` holds `a1` under its digest (computed by the kernel). -/
+theorem Examples.s1_get_a1 : Examples.s1.get (hashRecord Examples.a1) = some Examples.a1 := by
+  decide +kernel
+
+-- With no facts, Alice's `a1` in `s1` is `unconfirmed`, and `CLASSIFY` cannot say otherwise.
+example : (classify Examples.s1 #[])[hashRecord Examples.a1]? = some .unconfirmed := by
+  rw [CheckedStore.classify_spec]
+  refine ⟨_, Examples.s1_get_a1, ?_⟩
+  simp [StatusMeans, authorConfirmed, foreignMarked, holders, liveRecords, liveOf, liveList]
+
+example : (classify Examples.s1 #[])[hashRecord Examples.a1]? ≠ some .confirmedByAuthor := by
+  intro h
+  obtain ⟨r, -, hs⟩ := (CheckedStore.classify_spec _ _ _ _).mp h
+  simp [StatusMeans, authorConfirmed, liveRecords, liveOf, liveList] at hs
+
+-- Once `a1` is known to have arrived live, it is confirmed by its author.
+example : (classify Examples.s1 #[⟨hashRecord Examples.a1, .live, #[]⟩])[hashRecord Examples.a1]? =
+    some .confirmedByAuthor := by
+  rw [CheckedStore.classify_spec]
+  refine ⟨_, Examples.s1_get_a1, ?_⟩
+  have hmem : toSpec Examples.a1 ∈ abs Examples.s1 :=
+    ((Examples.s1.get_eq_some_iff).mp Examples.s1_get_a1).1
+  exact ⟨⟨toSpec Examples.a1, Finset.mem_filter.mpr ⟨hmem, by simp [liveOf, liveList], rfl⟩,
+    .head (Finset.mem_singleton_self _)⟩, fun y _ => by simp [liveOf, liveList]⟩
+
 -- A record with no live record anywhere is `unconfirmed`, and not `confirmedByAuthor`.
 example (x : SpecRec) : StatusMeans ∅ ⟨∅, ∅⟩ x .unconfirmed ∧
     ¬ StatusMeans ∅ ⟨∅, ∅⟩ x .confirmedByAuthor := by
