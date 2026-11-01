@@ -1750,6 +1750,55 @@ theorem run_newRelative {build : String} {t t' : Table} {chat : String} {g : Gro
     simp [ChatStore.headsArray, RelStore.headsArray, RelStore.heads, RelStore.empty,
       RelStore.emptyWith, keySet]
 
+/-! ### The theorems on concrete inputs
+
+A closed chat that holds `a1` takes a view whose one entry is `a1`'s record: the reply says
+`accepted`, so the hypothesis of `acceptView_accepted` holds. `LINKABLE` and `NEW_RELATIVE` reply
+as their theorems assume. -/
+
+/-- A closed chat holding `a1` (`Zrdt.Examples.s1`). -/
+def chatA1 : Chat := { store := .closed Examples.s1 }
+
+/-- `a1` is stored in it. -/
+theorem chatA1_get : chatA1.store.get (hashRecord Examples.a1) = some Examples.a1 := by
+  have hok : (rawAccept (CheckedStore.empty Examples.group).raw Examples.a1).1 =
+      .accepted (hashRecord Examples.a1) :=
+    rawAccept_of_ok rfl (by decide) (by simp [Examples.a1]) (by simp [CheckedStore.empty])
+      (fun _ => by simp [CheckedStore.empty, maxRecords])
+  have h := rawAccept_accepted (c' := (rawAccept (CheckedStore.empty Examples.group).raw
+    Examples.a1).2) (Prod.ext hok rfl)
+  show (rawAccept (CheckedStore.empty Examples.group).raw Examples.a1).2.map[hashRecord
+    Examples.a1]? = some Examples.a1
+  rw [h.2.2.1]
+  exact Std.ExtTreeMap.getElem?_insert_self
+
+/-- The view's one result is `accepted`. -/
+theorem chatA1_view : (acceptView chatA1 Examples.alice false
+    #[.after (encode Examples.a1)]).1[0]? = some (.record (.accepted (hashRecord Examples.a1))) := by
+  have hce : checkEntry false (.after (encode Examples.a1)) = .record Examples.a1 none := by
+    simp [checkEntry, decode_encode]
+  obtain ⟨-, -, -, hkeep, -, -⟩ := ChatStore.acceptAll_sound
+    (takeBoundaries Examples.alice chatA1.store [.record Examples.a1 none]) #[Examples.a1]
+  have hst := hkeep _ _ chatA1_get
+  simp only [acceptView, List.map_cons, List.map_nil, hce,
+    List.filterMap_cons, List.filterMap_nil, ViewItem.record?, List.getElem?_toArray,
+    List.getElem?_cons_zero, Option.some.injEq, ViewResult.record.injEq]
+  exact ChatStore.accept_stored hst
+
+example : ∃ e r aud, (#[ViewEntry.after (encode Examples.a1)])[0]? = some e ∧
+    checkEntry false e = .record r aud ∧ hashRecord Examples.a1 = hashRecord r ∧
+    (acceptView chatA1 Examples.alice false #[.after (encode Examples.a1)]).2.store.get
+      (hashRecord Examples.a1) = some r :=
+  acceptView_accepted chatA1_view
+
+example : ∃ ds t', run buildId ((∅ : Table).insert "a" chatA1) (.linkable "a" #[]) =
+    (.digests ds, t') :=
+  ⟨_, _, by simp only [run, reading, Std.HashMap.getElem?_insert_self]; rfl⟩
+
+example : ∃ ch, ((run buildId (∅ : Table) (.newRelative "n" Examples.group)).2)["n"]? = some ch ∧
+    ch.store.isRelative = true ∧ ch.store.group = Examples.group ∧ ch.store.headsArray = #[] :=
+  run_newRelative (build := buildId) (t := ∅) (by simp [run])
+
 /-! ### `run_serve_content` on a real request
 
 A table holding Alice's message to herself (`Serve.Examples.selfMsg`), and her own `SERVE`

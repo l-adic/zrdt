@@ -142,6 +142,26 @@ theorem accept_accepted {s : ChatStore} {r : Rec} {d : Digest}
     rw [hmap]
     exact Std.ExtTreeMap.getElem?_insert_self
 
+/-- `accept` says `accepted` for a record that is already stored, and changes nothing. -/
+theorem accept_stored {s : ChatStore} {r : Rec} (h : s.get (hashRecord r) = some r) :
+    (s.accept r).1 = .accepted (hashRecord r) := by
+  have hb := s.builtRel
+  have hg : r.group = s.raw.group := hb.group_eq _ r h
+  have hw : r.WellSized := hb.wellSized _ r h
+  have hl : ∀ x ∈ r.links, x ∈ s.raw.map ∨ x ∈ s.boundary := hb.closed _ r h
+  have hc : ∀ old, s.raw.map[hashRecord r]? = some old → old = r := fun old ho => by
+    simp only [get] at h
+    rw [h] at ho
+    exact (Option.some.inj ho).symm
+  have hm : hashRecord r ∈ s.raw.map :=
+    Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp only [get] at h; simp [h])
+  cases s with
+  | closed c =>
+    show (rawAccept c.raw r).1 = _
+    rw [← rawAcceptRel_empty]
+    exact rawAcceptRel_of_ok hg hw hl hc (fun hn => absurd hm hn)
+  | relative c => exact rawAcceptRel_of_ok hg hw hl hc (fun hn => absurd hm hn)
+
 /-- **What `acceptAll` guarantees, for either kind of store.** The kind, the chat and the boundary
 are the same; every stored record is kept; every new record is from the batch; and `accept` on
 the final store says `accepted` for a record of the batch only if it is stored there. -/
