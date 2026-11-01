@@ -1,5 +1,5 @@
 import Zrdt.Commit
-import Zrdt.Store
+import Zrdt.RelStore
 
 /-!
 # `SERVE`: what a member sends another member about its store (docs/JOIN_PLAN.md §3, §5, §7.1)
@@ -18,7 +18,8 @@ the content of a message without one.
 and the tag is not zero. There is no author shortcut: the author is seated by its own entry,
 under its own key.
 
-**`serve c me held q`** answers requester `q` from a responder with store `c`, own state `me`
+**`serve c me held q`** answers requester `q` from a responder with store `c` (a `RawStore`: a
+closed store's data, or a relative store's, `Zrdt.RelStore`), own state `me`
 (its ACI, the digests it holds `live`, its disown set, and its own boundary digests, empty for a
 closed store) and what it holds outside the store for each record (`held`: the opening, and the
 audience `zrdtd` recorded from an opening it checked earlier). The reply is a list of entries,
@@ -259,29 +260,29 @@ theorem serveOpening_spec {me : Me} {q : Query} {d : Digest} {r : Rec} {o : Byte
 /-! ## The walks -/
 
 /-- For every stored record, the stored records that link it. -/
-def linkedByMap (c : CheckedStore) : Std.ExtTreeMap Digest (List Digest) compare :=
-  c.raw.map.foldl (init := c.raw.map.map fun _ _ => []) fun acc d r =>
+def linkedByMap (c : RawStore) : Std.ExtTreeMap Digest (List Digest) compare :=
+  c.map.foldl (init := c.map.map fun _ _ => []) fun acc d r =>
     r.links.foldl (init := acc) fun acc l => acc.modify l (d :: ·)
 
 /-- The stored records reachable from `q`'s `since` joined with the responder's own `since`. -/
-def sinceReach (c : CheckedStore) (q : Query) : DigestSet :=
+def sinceReach (c : RawStore) (q : Query) : DigestSet :=
   c.reachSet (q.since ++ q.ownSince)
 
 /-- The stored records `q` is seated in (as far as the responder knows) and that are not
 reachable from `since`. -/
-def visList (c : CheckedStore) (held : HeldMap) (q : Query) : List Digest :=
+def visList (c : RawStore) (held : HeldMap) (q : Query) : List Digest :=
   let sr := sinceReach c q
-  c.raw.map.toList.filterMap fun (d, r) =>
+  c.map.toList.filterMap fun (d, r) =>
     if entitledHere held q d r && !sr.contains d then some d else none
 
 /-- The stored records that reach a `vis` record: the walk backwards from them. -/
-def upSet (c : CheckedStore) (held : HeldMap) (q : Query) : DigestSet :=
+def upSet (c : RawStore) (held : HeldMap) (q : Query) : DigestSet :=
   walk id (linkedByMap c) ∅ (visList c held q)
 
 /-- The digests linked by the stored records among `ds`. -/
-def linksOf (c : CheckedStore) (ds : List Digest) : DigestSet :=
+def linksOf (c : RawStore) (ds : List Digest) : DigestSet :=
   ds.foldl (init := ∅) fun acc d =>
-    match c.get d with
+    match c.map[d]? with
     | some r => r.links.foldl (fun s l => s.insert l) acc
     | none => acc
 
@@ -301,14 +302,14 @@ inductive Entry
 each wanted digest only, and content for a wanted record `q` is seated in whatever `since` says.
 Entries from stored records come first, sorted by digest, then the responder's own boundary
 digests, sorted. -/
-def serve (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query) : List Entry :=
+def serve (c : RawStore) (me : Me) (held : HeldMap) (q : Query) : List Entry :=
   let up := upSet c held q
   let sr := sinceReach c q
   let linkedByUp := linksOf c up.toList
-  let linkedAny := linksOf c (c.raw.map.toList.map (·.1))
+  let linkedAny := linksOf c (c.map.toList.map (·.1))
   let perDigest := q.wanted.isSome
   let want : Digest → Bool := fun d => (q.wanted.map (·.contains d)).getD true
-  let fromRecords := c.raw.map.toList.filterMap fun (d, r) =>
+  let fromRecords := c.map.toList.filterMap fun (d, r) =>
     if !want d then none
     else if entitledHere held q d r && (perDigest || !sr.contains d) then
       some (.addressed r ((held.getD d {}).opening.filter (serveOpening me q d r))
@@ -317,7 +318,7 @@ def serve (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query) : List Entry
     else if perDigest || linkedByUp.contains d || !linkedAny.contains d then some (.boundary d)
     else none
   let fromBoundary := me.boundary.toList.filterMap fun d =>
-    if want d && !c.raw.map.contains d &&
+    if want d && !c.map.contains d &&
         (perDigest || linkedByUp.contains d || !linkedAny.contains d) then
       some (.boundary d)
     else none
@@ -326,15 +327,15 @@ def serve (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query) : List Entry
 /-! ## What the reply may contain -/
 
 /-- A pair of a stored map's list is a stored record. -/
-theorem get_of_mem_toList {c : CheckedStore} {d : Digest} {r : Rec}
-    (h : (d, r) ∈ c.raw.map.toList) : c.get d = some r :=
+theorem get_of_mem_toList {c : RawStore} {d : Digest} {r : Rec}
+    (h : (d, r) ∈ c.map.toList) : c.map[d]? = some r :=
   Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.1 h
 
 /-- Every addressed entry: a stored record; the author-copy bit is `authorCopy`; an opening only
 if `serveOpening` accepts it. -/
-theorem serve_addressed {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_addressed {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     {o : Option ByteArray} {ac : Bool} (he : Entry.addressed r o ac ∈ serve c me held q) :
-    ∃ d : Digest, c.get d = some r ∧ ac = authorCopy me d r ∧
+    ∃ d : Digest, c.map[d]? = some r ∧ ac = authorCopy me d r ∧
       ∀ op, o = some op → serveOpening me q d r op = true := by
   simp only [serve, List.mem_append, List.mem_filterMap] at he
   rcases he with ⟨⟨d, r'⟩, hmem, hf⟩ | ⟨d, -, hf⟩
@@ -363,9 +364,9 @@ theorem serve_addressed {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query
 stored record (so its audience is the one the author committed to), and that audience seats
 `q.aci` with the tag of `q.key`. No author shortcut, no audience cache, no `since`, no host flag
 or provenance. -/
-theorem serve_content {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_content {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     {o : Option ByteArray} {ac : Bool} (he : Entry.addressed r o ac ∈ serve c me held q) :
-    ∃ d : Digest, c.get d = some r ∧
+    ∃ d : Digest, c.map[d]? = some r ∧
       ∀ op, o = some op → openingMatches r.group r.author r.commit op = true ∧
         ∃ aud, audienceOf op = some aud ∧ seats aud q.aci q.key = true := by
   obtain ⟨d, hget, -, hop⟩ := serve_addressed he
@@ -373,9 +374,9 @@ theorem serve_content {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} 
 
 /-- **An author copy is the author's own.** An entry marked author copy is a stored record the
 responder wrote, holds `live`, and has not disowned. -/
-theorem serve_authorCopy {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_authorCopy {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     {o : Option ByteArray} (he : Entry.addressed r o true ∈ serve c me held q) :
-    ∃ d : Digest, c.get d = some r ∧ r.author = me.aci ∧ me.live.contains d = true ∧
+    ∃ d : Digest, c.map[d]? = some r ∧ r.author = me.aci ∧ me.live.contains d = true ∧
       me.disown.contains d = false := by
   obtain ⟨d, hget, hac, -⟩ := serve_addressed he
   have h := hac.symm
@@ -383,7 +384,7 @@ theorem serve_authorCopy {c : CheckedStore} {me : Me} {held : HeldMap} {q : Quer
   exact ⟨d, hget, h.1.1, h.1.2, h.2⟩
 
 /-- **Strict mode: content only in author copies.** -/
-theorem serve_strict {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_strict {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     {op : ByteArray} {ac : Bool} (hs : q.strict = true)
     (he : Entry.addressed r (some op) ac ∈ serve c me held q) : ac = true := by
   obtain ⟨d, -, hac, hop⟩ := serve_addressed he
@@ -391,7 +392,7 @@ theorem serve_strict {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {
   exact (serveOpening_spec (hop op rfl)).2.2.2 hs
 
 /-- **Exports carry no disappearing or view-once content.** -/
-theorem serve_export {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_export {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     {op : ByteArray} {ac : Bool} (hx : q.forExport = true)
     (he : Entry.addressed r (some op) ac ∈ serve c me held q) : ephemeral op = false := by
   obtain ⟨d, -, -, hop⟩ := serve_addressed he
@@ -403,9 +404,9 @@ stored record is in the reply, marked author copy exactly when it is one: in a c
 depends on the store, the held openings, the responder's own state (strict mode only) and `q`,
 and on nothing else: not the audience cache, not the structure entries. `q.key` is
 server-influenceable (TOFU); the host seals the reply to it (JOIN_PLAN §4.3). -/
-theorem serve_content_complete {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
+theorem serve_content_complete {c : RawStore} {me : Me} {held : HeldMap} {q : Query}
     {d : Digest} {r : Rec} {op : ByteArray}
-    (hget : c.get d = some r) (hop : (held.getD d {}).opening = some op)
+    (hget : c.map[d]? = some r) (hop : (held.getD d {}).opening = some op)
     (hs : serveOpening me q d r op = true)
     (hw : (q.wanted.map (·.contains d)).getD true = true)
     (hsr : q.wanted.isSome = true ∨ (sinceReach c q).contains d = false) :
@@ -425,9 +426,9 @@ theorem serve_content_complete {c : CheckedStore} {me : Me} {held : HeldMap} {q 
 
 /-- **Structure without content** goes only for stored records in the walk back from the records
 `q` is seated in and that `since` does not reach. -/
-theorem serve_after {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
+theorem serve_after {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     (he : Entry.after r ∈ serve c me held q) :
-    ∃ d : Digest, c.get d = some r ∧ d ∈ upSet c held q := by
+    ∃ d : Digest, c.map[d]? = some r ∧ d ∈ upSet c held q := by
   simp only [serve, List.mem_append, List.mem_filterMap] at he
   rcases he with ⟨⟨d, r'⟩, hmem, hf⟩ | ⟨d, -, hf⟩
   · have hget := get_of_mem_toList hmem
@@ -447,11 +448,11 @@ theorem serve_after {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r
 it reaches no record `q` is seated in beyond `since`), and if `q` is seated in it, this is a
 catch-up and `since` already reaches it; or it is a digest of the responder's own boundary that
 the store does not hold. -/
-theorem serve_boundary {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {d : Digest}
+theorem serve_boundary {c : RawStore} {me : Me} {held : HeldMap} {q : Query} {d : Digest}
     (he : Entry.boundary d ∈ serve c me held q) :
-    (∃ r, c.get d = some r ∧ d ∉ upSet c held q ∧
+    (∃ r, c.map[d]? = some r ∧ d ∉ upSet c held q ∧
       (entitledHere held q d r = true → q.wanted = none ∧ (sinceReach c q).contains d = true)) ∨
-    (me.boundary.contains d = true ∧ c.has d = false) := by
+    (me.boundary.contains d = true ∧ c.map.contains d = false) := by
   simp only [serve, List.mem_append, List.mem_filterMap] at he
   rcases he with ⟨⟨d', r⟩, hmem, hf⟩ | ⟨d', hmem, hf⟩
   · have hget := get_of_mem_toList hmem
@@ -593,8 +594,8 @@ def stale : Rec × ByteArray := mk carol 3 "stale view" AC #[hashRecord welcome.
 def later : Rec × ByteArray := mk alice 4 "later" ABC #[hashRecord stale.1]
 
 /-- The store with the four records. -/
-def store : CheckedStore :=
-  ((CheckedStore.empty group).acceptAll #[pre.1, welcome.1, stale.1, later.1]).1
+def store : RawStore :=
+  ((CheckedStore.empty group).acceptAll #[pre.1, welcome.1, stale.1, later.1]).1.raw
 
 /-- Openings, by digest. -/
 def heldOf (l : List (Rec × ByteArray)) : HeldMap :=
@@ -628,7 +629,7 @@ def boundaryOf (es : List Entry) : List Digest :=
 -- The opening keeps field 201 and drops field 15.
 #guard (audienceOf pre.2).map (·.map (·.aci)) == some #[alice, carol]
 #guard openingMatches group carol pre.1.commit pre.2
-#guard store.size == 4
+#guard store.map.size == 4
 
 -- Bob never gets `pre`'s content: `pre` goes to him as a boundary digest only.
 #guard contentOf (serve store meAlice held (rq bob keyBob)) == [welcome.1, later.1] ||
@@ -661,7 +662,7 @@ def forgedOpening : ByteArray :=
 /-- An opening of a message without field 201 (refused when stored; never served). -/
 def noAudience : Rec × ByteArray := mkMsg alice 14 (textField "no audience" ++ groupV2Field) #[]
 #guard audienceOf noAudience.2 == none
-#guard contentOf (serve ((CheckedStore.empty group).acceptAll #[noAudience.1]).1
+#guard contentOf (serve ((CheckedStore.empty group).acceptAll #[noAudience.1]).1.raw
   { aci := alice, live := Std.ExtTreeSet.ofList [hashRecord noAudience.1] } (heldOf [noAudience])
   (rq alice keyAlice)) == []
 
@@ -669,7 +670,7 @@ def noAudience : Rec × ByteArray := mkMsg alice 14 (textField "no audience" ++ 
 def toBob : Rec × ByteArray :=
   mk alice 7 "not for mallory" [(alice, some keyAlice), (bob, some keyBob), (mallory, none)] #[]
 /-- The store with `toBob`. -/
-def storeM : CheckedStore := ((CheckedStore.empty group).acceptAll #[toBob.1]).1
+def storeM : RawStore := ((CheckedStore.empty group).acceptAll #[toBob.1]).1.raw
 #guard contentOf (serve storeM meAlice (heldOf [toBob]) (rq mallory keyMallory)) == []
 #guard contentOf (serve storeM meAlice (heldOf [toBob]) (rq bob keyBob)) == [toBob.1]
 
@@ -677,7 +678,7 @@ def storeM : CheckedStore := ((CheckedStore.empty group).acceptAll #[toBob.1]).1
 audience seats Bob. -/
 def forgery : Rec × ByteArray := mk alice 8 "forged in alice's name" ABC #[]
 /-- The store with the forgery. -/
-def storeF : CheckedStore := ((CheckedStore.empty group).acceptAll #[forgery.1]).1
+def storeF : RawStore := ((CheckedStore.empty group).acceptAll #[forgery.1]).1.raw
 /-- Alice, who disowned the forgery. -/
 def meAliceF : Me := { aci := alice, disown := Std.ExtTreeSet.ofList [hashRecord forgery.1] }
 -- Alice serves its content to Bob (its own audience seats him), never as an author copy.
@@ -692,7 +693,7 @@ def fromCarol : Rec × ByteArray := mk carol 15 "carol to all" ABC #[]
 /-- Alice's own message to all three, after it. -/
 def fromAlice : Rec × ByteArray := mk alice 16 "alice to all" ABC #[hashRecord fromCarol.1]
 /-- The store with both. -/
-def storeS : CheckedStore := ((CheckedStore.empty group).acceptAll #[fromCarol.1, fromAlice.1]).1
+def storeS : RawStore := ((CheckedStore.empty group).acceptAll #[fromCarol.1, fromAlice.1]).1.raw
 /-- Alice holds her own `live`. -/
 def meAliceS : Me := { aci := alice, live := Std.ExtTreeSet.ofList [hashRecord fromAlice.1] }
 -- Off by default: Alice relays Carol's message and sends her own.
@@ -707,7 +708,7 @@ def meAliceS : Me := { aci := alice, live := Std.ExtTreeSet.ofList [hashRecord f
 /-- A disappearing message. -/
 def timed : Rec × ByteArray := mkMsg alice 9 (messageTimer "disappears" ABC) #[]
 /-- The store with it. -/
-def storeT : CheckedStore := ((CheckedStore.empty group).acceptAll #[timed.1]).1
+def storeT : RawStore := ((CheckedStore.empty group).acceptAll #[timed.1]).1.raw
 -- An export refuses it; a relay carries it.
 #guard ephemeral timed.2 && !ephemeral welcome.2
 #guard contentOf (serve storeT meAlice (heldOf [timed]) (rq bob keyBob (forExport := true))) == []
@@ -721,7 +722,7 @@ def gap : Rec × ByteArray := mk carol 11 "while bob was out" AC #[hashRecord ra
 /-- After the re-add. -/
 def ra2 : Rec × ByteArray := mk alice 12 "after re-add" ABC #[hashRecord gap.1]
 /-- The store with the three. -/
-def storeR : CheckedStore := ((CheckedStore.empty group).acceptAll #[ra1.1, gap.1, ra2.1]).1
+def storeR : RawStore := ((CheckedStore.empty group).acceptAll #[ra1.1, gap.1, ra2.1]).1.raw
 /-- Alice holds the three openings. -/
 def heldR : HeldMap := heldOf [ra1, gap, ra2]
 -- With `since` = his old heads, the gap comes back as a digest; without it, as `after`.
@@ -838,23 +839,23 @@ theorem selfMsg_serveOpening (forExport strict : Bool) :
 author copy (via `serve_content_complete`). -/
 theorem self_served (forExport strict : Bool) :
     Entry.addressed selfMsg.1 (some selfMsg.2) true ∈
-      serve selfStore selfMe selfHeld (rq alice keyAlice (forExport := forExport) (strict := strict)) := by
+      serve selfStore.raw selfMe selfHeld (rq alice keyAlice (forExport := forExport) (strict := strict)) := by
   have hac : authorCopy selfMe selfDigest selfMsg.1 = true := by
     have hauth : selfMsg.1.author = alice := by decide +kernel
     simp [authorCopy, selfMe, hauth]
   have := serve_content_complete (me := selfMe) (held := selfHeld)
     (q := rq alice keyAlice (forExport := forExport) (strict := strict)) selfStore_get
     (by simp [selfHeld]) (selfMsg_serveOpening forExport strict) (by simp [rq])
-    (Or.inr (by simp [sinceReach, rq, CheckedStore.reachSet, walk]))
+    (Or.inr (by simp [sinceReach, rq, RawStore.reachSet, walk]))
   rwa [hac] at this
 
 /-- `serve_content`, `serve_authorCopy`, `serve_export` and `serve_strict` applied to it. -/
-example : ∃ d, selfStore.get d = some selfMsg.1 ∧ ∀ op, some selfMsg.2 = some op →
+example : ∃ d : Digest, selfStore.raw.map[d]? = some selfMsg.1 ∧ ∀ op, some selfMsg.2 = some op →
     openingMatches selfMsg.1.group selfMsg.1.author selfMsg.1.commit op = true ∧
       ∃ aud, audienceOf op = some aud ∧
         seats aud (rq alice keyAlice).aci (rq alice keyAlice).key = true :=
   serve_content (self_served false false)
-example : ∃ d, selfStore.get d = some selfMsg.1 ∧ selfMsg.1.author = selfMe.aci ∧
+example : ∃ d : Digest, selfStore.raw.map[d]? = some selfMsg.1 ∧ selfMsg.1.author = selfMe.aci ∧
     selfMe.live.contains d = true ∧ selfMe.disown.contains d = false :=
   serve_authorCopy (self_served false false)
 example : ephemeral selfMsg.2 = false := serve_export rfl (self_served true false)
@@ -872,7 +873,7 @@ def ContentOk (q : Query) (es : List Entry) : Prop :=
     ∃ aud, audienceOf op = some aud ∧ seats aud q.aci q.key = true
 
 /-- Every reply of `serve` satisfies `ContentOk`. -/
-theorem serve_contentOk (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query) :
+theorem serve_contentOk (c : RawStore) (me : Me) (held : HeldMap) (q : Query) :
     ContentOk q (serve c me held q) := fun _ op _ he =>
   let ⟨_, _, h⟩ := serve_content he
   (h op rfl).2

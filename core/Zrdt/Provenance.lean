@@ -154,6 +154,45 @@ def classify (c : CheckedStore) (facts : Array Fact) : Std.ExtTreeMap Digest Sta
   let authors := views.toList
   c.raw.map.map fun d r => status views authors d r
 
+/-! ### `CLASSIFY` on a relative store
+
+The same code over any raw store: a relative store's records, whose links may point to boundary
+digests. `reachSet` and `get` simply skip a digest that is not stored. On a closed store it is
+`classify` itself (`classify_raw`, by definition), so every theorem about `classify` covers the
+closed stores `zrdtd` runs it on. -/
+
+/-- `linkedBy` over a raw store. -/
+def linkedByRaw (c : RawStore) : Std.ExtTreeMap Digest (List Digest) compare :=
+  c.map.foldl (init := c.map.map fun _ _ => []) fun m d r =>
+    r.links.foldl (init := m) fun m l => m.modify l (d :: ·)
+
+/-- `authorViews` over a raw store. -/
+def authorViewsRaw (c : RawStore) (live : Std.ExtTreeMap Digest (Array Digest) compare) :
+    Std.ExtTreeMap Aci AuthorView compare :=
+  let reach : Array Digest → DigestSet := fun ds => walk (fun r => r.links.toList) c.map ∅ ds.toList
+  let byAuthor : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare :=
+    live.foldl (init := ∅) fun m d dis =>
+      match c.map[d]? with
+      | some r =>
+        let (ls, ds) := m.getD r.author (#[], ∅)
+        m.insert r.author (ls.push d, dis.foldl (fun s x => s.insert x) ds)
+      | none => m
+  let back := linkedByRaw c
+  byAuthor.map fun _ (ls, ds) =>
+    let below := reach (ls.flatMap fun l => ((c.map[l]?).map (·.links)).getD #[])
+    let newest := ls.filter (!below.contains ·)
+    ⟨reach ls, ds, reachersOfAll back newest⟩
+
+/-- `classify` over a raw store: the status of every stored record, keyed by digest. -/
+def classifyRaw (c : RawStore) (facts : Array Fact) : Std.ExtTreeMap Digest Status compare :=
+  let views := authorViewsRaw c (liveFacts facts)
+  let authors := views.toList
+  c.map.map fun d r => status views authors d r
+
+/-- On a closed store, `classifyRaw` is `classify`. -/
+theorem classify_raw (c : CheckedStore) (facts : Array Fact) :
+    classify c facts = classifyRaw c.raw facts := rfl
+
 /-! ## A literal reference
 
 `classifyRef` follows the rules of the module header word for word, record by record. It is slow

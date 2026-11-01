@@ -14,7 +14,7 @@ The file holds:
   canonical links, their encoding and their digest;
 - `recordDecode`, `blobDecode`: bytes, and whether the strict decoders accept them (for blobs,
   also whether the count field alone makes them `TOO_LARGE`);
-- `blobs`: store blobs;
+- `blobs`: `zrdtS2` records blobs (the last part of a `zrdtS3` store blob, `Zrdt.ChatStore`);
 - `commit`: `DataMessage` bytes, the bytes the commitment covers, the commitment and the opening
   (`null` where the message is malformed), including messages with fields 15 and 200, and the
   audience each opening carries (`null` where it has none: `ACCEPT` refuses such an opening);
@@ -24,7 +24,10 @@ The file holds:
   same SHA-256);
 - `sessions`: request and reply payloads. Run each session on a fresh `zrdtd`, in order: send
   `length (u32) ‖ request`, read `length (u32) ‖ reply`, and compare the reply. Every op and every
-  reply of every op appears, except `COLLISION`. The `fuzz` session holds unreadable requests and
+  reply of every op appears, except `COLLISION`. The `view` session is a newcomer's relative
+  store (`NEW_RELATIVE`, `ACCEPT_VIEW` of a `SERVE` reply's entries byte for byte, `LINKABLE`,
+  its `zrdtS3` blob), a second-generation newcomer, and a closed store that ignores boundary
+  entries. The `fuzz` session holds unreadable requests and
   counts no input could hold. A step marked `buildDependent` (`VERSION`) contains the build text:
   another build of `zrdtd` gives other bytes there. The file's `build` is the text of the
   `zrdtd` built from the same sources.
@@ -321,6 +324,12 @@ def tourStatuses : Array (Digest × Status) :=
       (b2, .confirmedByAuthor), (c2, .unconfirmed)].map fun (r, s) => (hashRecord r, s)).qsort
     fun x y => compare x.1 y.1 == .lt
 
+/-- A closed `zrdtS3` blob around a `zrdtS2` records blob: mode 0, no boundary, no audiences. -/
+def s3 (inner : ByteArray) : ByteArray := blob3Tag ++ ⟨#[0]⟩ ++ u32be 0 ++ u32be 0 ++ inner
+
+-- A closed store with no audiences is written exactly so.
+#guard encodeChat (.closed all4) ∅ == s3 all4.encode
+
 /-- A record list with one entry that does not decode (the first record with a byte too many). -/
 def badList : Input := .records #[encode a1, (encode first).push 0]
 
@@ -369,7 +378,7 @@ def tour : Array Step := #[
     (some m1Committed),
   ask "COMMIT a malformed DataMessage" (.commit group alice nonce (bodyField ++ bytesOf [0x0b]))
     .malformed,
-  ask "ENCODE camping (a1 b1 c1 a2)" (.encode "camping") .ok (some (.blob all4.encode)),
+  ask "ENCODE camping (a1 b1 c1 a2)" (.encode "camping") .ok (some (.blob (s3 all4.encode))),
   ask "ACCEPT f1 (a fake in Bob's name)" (.accept "camping" (.ofRec f1) none) .ok,
   ask "ACCEPT a3" (.accept "camping" (.ofRec a3) none) .ok,
   ask "ACCEPT b2" (.accept "camping" (.ofRec b2) none) .ok,
@@ -378,56 +387,61 @@ def tour : Array Step := #[
     (.classify "camping" tourFacts) .ok (some (.classified tourStatuses)),
   ask "CLASSIFY with no facts: all unconfirmed" (.classify "camping" #[]) .ok
     (some (.classified (tourStatuses.map fun (d, _) => (d, .unconfirmed)))),
-  ask "OPEN copy from a blob" (.open "copy" group (.blob all4.encode)) .ok,
+  ask "OPEN copy from a blob" (.open "copy" group (.blob (s3 all4.encode))) .ok,
   ask "HEADS of copy: a2" (.heads "copy") .ok (some (.digests #[hashRecord a2])),
-  ask "OPEN copy again: already open" (.open "copy" group (.blob all4.encode)) .chatOpen,
+  ask "OPEN copy again: already open" (.open "copy" group (.blob (s3 all4.encode))) .chatOpen,
   ask "OPEN list from records in any order" (.open "list" group
     (.records #[encode a2, encode c1, encode b1, encode a1])) .ok,
-  ask "ENCODE list: the same blob as camping had" (.encode "list") .ok (some (.blob all4.encode)),
+  ask "ENCODE list: the same blob as camping had" (.encode "list") .ok
+    (some (.blob (s3 all4.encode))),
   ask "OPEN rev from a blob with the records in reverse digest order" (.open "rev" group
-    (.blob (encodeBlob group all4.records.reverse))) .ok,
-  ask "ENCODE rev: the records sorted by digest" (.encode "rev") .ok (some (.blob all4.encode)),
+    (.blob (s3 (encodeBlob group all4.records.reverse)))) .ok,
+  ask "ENCODE rev: the records sorted by digest" (.encode "rev") .ok
+    (some (.blob (s3 all4.encode))),
   ask "OPEN rep from a blob that holds b1 twice" (.open "rep" group
-    (.blob (encodeBlob group #[a1, b1, c1, b1, a2]))) .ok,
-  ask "ENCODE rep: b1 counts once" (.encode "rep") .ok (some (.blob all4.encode)),
+    (.blob (s3 (encodeBlob group #[a1, b1, c1, b1, a2])))) .ok,
+  ask "ENCODE rep: b1 counts once" (.encode "rep") .ok (some (.blob (s3 all4.encode))),
   ask "OPEN rep2 from a record list that holds a1 twice" (.open "rep2" group
     (.records #[encode a2, encode a1, encode c1, encode b1, encode a1])) .ok,
-  ask "ENCODE rep2: a1 counts once" (.encode "rep2") .ok (some (.blob all4.encode)),
+  ask "ENCODE rep2: a1 counts once" (.encode "rep2") .ok (some (.blob (s3 all4.encode))),
   ask "OPEN a doctored blob (b1 cut out): unverifiable a2, missing b1"
-    (.open "bad" group (.blob (encodeBlob group #[a1, c1, a2]))) .unverifiable
+    (.open "bad" group (.blob (s3 (encodeBlob group #[a1, c1, a2])))) .unverifiable
     (some (.opened (.error (.unverifiable #[hashRecord a2] #[hashRecord b1])))),
   ask "HEADS bad: nothing was loaded" (.heads "bad") .noChat,
   ask "OPEN bytes that are not a blob" (.open "bad" group (.blob "junk".toUTF8)) .malformed,
-  ask "OPEN a blob of another group" (.open "bad" group (.blob (encodeBlob otherGroup #[])))
+  ask "OPEN a zrdtS2 blob: only zrdtS3 is read" (.open "bad" group (.blob all4.encode)) .malformed,
+  ask "OPEN a blob of another group" (.open "bad" group (.blob (s3 (encodeBlob otherGroup #[]))))
     .wrongChat,
   ask "OPEN a list with a record of another group" (.open "bad" group
     (.records #[encode a1, encode foreign])) .wrongChat,
   ask "OPEN a list with a record that does not decode" (.open "bad" group badList) .malformed,
   ask "SALVAGE the doctored blob: dropped a2, missing b1" (.salvage "kept" group
-    (.blob (encodeBlob group #[a1, c1, a2]))) .ok
+    (.blob (s3 (encodeBlob group #[a1, c1, a2])))) .ok
     (some (.salvaged (.ok (#[hashRecord a2], #[hashRecord b1])))),
   ask "HEADS kept: c1" (.heads "kept") .ok (some (.digests #[hashRecord c1])),
-  ask "SALVAGE kept again: already open" (.salvage "kept" group (.blob all4.encode)) .chatOpen,
+  ask "SALVAGE kept again: already open" (.salvage "kept" group (.blob (s3 all4.encode)))
+    .chatOpen,
   ask "SALVAGE the doctored blob with a2 twice: a2 dropped once" (.salvage "kept3" group
-    (.blob (encodeBlob group #[a2, a1, c1, a2]))) .ok
+    (.blob (s3 (encodeBlob group #[a2, a1, c1, a2])))) .ok
     (some (.salvaged (.ok (#[hashRecord a2], #[hashRecord b1])))),
   ask "SALVAGE a list: nothing to drop" (.salvage "kept2" group
     (.records #[encode c1, encode a1])) .ok (some (.salvaged (.ok (#[], #[])))),
   ask "SALVAGE bytes that are not a blob" (.salvage "bad" group (.blob "junk".toUTF8)) .malformed,
-  ask "SALVAGE a blob of another group" (.salvage "bad" group (.blob (encodeBlob otherGroup #[])))
+  ask "SALVAGE a blob of another group"
+    (.salvage "bad" group (.blob (s3 (encodeBlob otherGroup #[]))))
     .wrongChat,
   ask "SALVAGE a list with a record that does not decode" (.salvage "bad" group badList)
     .malformed,
   ask "MERGE the doctored blob into kept: unverifiable, kept unchanged"
-    (.merge "kept" (encodeBlob group #[a1, c1, a2])) .unverifiable,
-  ask "MERGE a blob of another group: wrong chat" (.merge "kept" (encodeBlob otherGroup #[]))
+    (.merge "kept" (s3 (encodeBlob group #[a1, c1, a2]))) .unverifiable,
+  ask "MERGE a blob of another group: wrong chat" (.merge "kept" (s3 (encodeBlob otherGroup #[])))
     .wrongChat,
   ask "MERGE bytes that are not a blob" (.merge "kept" "junk".toUTF8) .malformed,
   ask "HEADS kept: still c1" (.heads "kept") .ok (some (.digests #[hashRecord c1])),
-  ask "MERGE a1 b1 into kept" (.merge "kept" storeAB.encode) .ok,
+  ask "MERGE a1 b1 into kept" (.merge "kept" (s3 storeAB.encode)) .ok,
   ask "HEADS kept: b1 and c1" (.heads "kept") .ok
     (some (.digests (sorted #[hashRecord b1, hashRecord c1]))),
-  ask "MERGE into a chat that is not open" (.merge "nochat" storeAB.encode) .noChat,
+  ask "MERGE into a chat that is not open" (.merge "nochat" (s3 storeAB.encode)) .noChat,
   ask "ACCEPT into a chat that is not open" (.accept "nochat" (.ofRec a1) none) .noChat,
   ask "HAS in a chat that is not open" (.has "nochat" (dig 1)) .noChat,
   ask "GET in a chat that is not open" (.get "nochat" (dig 1)) .noChat,
@@ -522,7 +536,8 @@ def expectServe (sr : ServeRequest) (records : Array (Rec × ByteArray) := joinR
       match Serve.audienceOf o with
       | some a => m.insert (hashRecord r) a
       | none => m
-  .served ⟨sr.requester, Serve.keyTag sr.key, sr.rid⟩ (Serve.serve c sr.me (sr.heldMap auds) sr.query)
+  .served ⟨sr.requester, Serve.keyTag sr.key, sr.rid⟩
+    (Serve.serve c.raw sr.me (sr.heldMap auds) sr.query)
 
 /-- Whether `needle` occurs in `hay`. -/
 def containsBytes (hay needle : ByteArray) : Bool :=
@@ -538,6 +553,17 @@ def digestsOf (rs : List (Rec × ByteArray)) : Array Digest := sorted (rs.map (h
 def tooManyMembers : Array (Aci × Option ByteArray) :=
   (List.range 257).toArray.map fun i =>
     (⟨⟨Array.replicate 14 0 ++ #[(i / 256).toUInt8, (i % 256).toUInt8]⟩, rfl⟩, none)
+
+/-- Chat `g` of the session below at its `ENCODE`: the four records and the disappearing message,
+with their audiences. -/
+def gBlob : ByteArray :=
+  let rs := joinRecords.push timed
+  let c := ((CheckedStore.empty group).acceptAll (rs.map (·.1))).1
+  let auds : AudTable := rs.foldl (init := ∅) fun m (r, o) =>
+    match Serve.audienceOf o with
+    | some a => m.insert (hashRecord r) a
+    | none => m
+  encodeChat (.closed c) auds
 
 /-- The session. -/
 def joinSteps : Array Step := #[
@@ -609,6 +635,10 @@ def joinSteps : Array Step := #[
     (some (.accept welcome.1 (.accepted (hashRecord welcome.1)))),
   ask "ADDRESSED bob in g2: welcome" (.addressed "g2" bob keyBob) .ok
     (some (.digests #[hashRecord welcome.1])),
+  ask "ENCODE g: the blob carries the audiences" (.encode "g") .ok (some (.blob gBlob)),
+  ask "OPEN g3 from g's blob" (.open "g3" group (.blob gBlob)) .ok,
+  ask "ADDRESSED bob in g3: the audiences came back with the blob" (.addressed "g3" bob keyBob) .ok
+    (some (.digests (digestsOf [welcome, later, timed]))),
   ask "CLOSE g" (.close "g") .ok,
   ask "NEW g again: no audiences" (.new "g" group) .ok,
   ask "ADDRESSED carol in the new g: nothing" (.addressed "g" carol keyCarol) .ok
@@ -638,6 +668,168 @@ def joinChecks (out : List (Step × ByteArray)) : Bool :=
 
 #guard joinChecks (joinSteps.toList.zip (session (joinSteps.map (·.request)).toList))
 
+/-! ### Relative stores: `NEW_RELATIVE`, `ACCEPT_VIEW`, `LINKABLE` (docs/JOIN_PLAN.md §4.4, §6)
+
+Bob joined chat `g` after `pre`. Alice's catch-up reply to him (the first `SERVE` of the `join`
+session) carries `welcome` and `later` with content, `stale` as structure, and `pre` as a digest.
+Bob's device opens a relative store and passes the reply's entries to `ACCEPT_VIEW`, byte for
+byte. Then Bob, a former newcomer, answers Carol: his reply carries his own boundary digest, and a
+second-generation newcomer that accepts it has the same heads as everyone. -/
+
+/-- Alice's chat `g`: the four records. -/
+def storeG : CheckedStore := ((CheckedStore.empty group).acceptAll (joinRecords.map (·.1))).1
+
+/-- The audiences of `g`'s records. -/
+def audsG : AudTable := joinRecords.foldl (init := ∅) fun m (r, o) =>
+  match Serve.audienceOf o with
+  | some a => m.insert (hashRecord r) a
+  | none => m
+
+/-- Alice's catch-up reply to Bob: its entries. -/
+def aliceToBob : List Serve.Entry :=
+  let sr := serveFrom bob keyBob
+  Serve.serve storeG.raw sr.me (sr.heldMap audsG) sr.query
+
+/-- A `SERVE` entry as `ACCEPT_VIEW` reads it. -/
+def toView : Serve.Entry → ViewEntry
+  | .addressed r o ac => .addressed (encode r) ac o
+  | .after r => .after (encode r)
+  | .boundary d => .boundary d
+
+-- The host passes the bytes after the `SERVE` header to `ACCEPT_VIEW` unchanged: the layouts are
+-- the same.
+#guard Write.viewEntries (aliceToBob.map toView).toArray == Write.entries aliceToBob
+
+/-- What `ACCEPT_VIEW` replies when it takes every entry. -/
+def allTaken (es : List Serve.Entry) : Reply :=
+  .viewed (es.map fun
+    | .addressed r _ _ | .after r => .record (.accepted (hashRecord r))
+    | .boundary d => .known d).toArray
+
+/-- Bob's chat after the catch-up. -/
+def bobChat : Chat :=
+  (acceptView { store := .relative (.empty group) } alice false
+    (aliceToBob.map toView).toArray).2
+
+/-- Bob's blob. -/
+def bobBlob : ByteArray := encodeChat bobChat.store bobChat.audiences
+
+/-- Bob's reply to Carol's catch-up: he holds the openings he was sent. -/
+def bobServe : ServeRequest :=
+  { own := bob, requester := carol, key := keyCarol, rid, since := #[], ownSince := #[],
+    wanted := none, forExport := false, strict := false, live := #[], disown := #[],
+    held := #[(hashRecord welcome.1, welcome.2), (hashRecord later.1, later.2)] }
+
+/-- Bob's reply to Carol: its entries. -/
+def bobToCarol : List Serve.Entry :=
+  Serve.serve bobChat.store.raw (bobServe.me bobChat.store.boundaryDigests)
+    (bobServe.heldMap bobChat.audiences) bobServe.query
+
+-- Bob's reply: `welcome` and `later` with content, `stale` as structure, `pre` as his own boundary
+-- digest (the round-1 fix for second-generation newcomers).
+#guard Serve.Examples.contentOf bobToCarol == [welcome.1, later.1] ||
+  Serve.Examples.contentOf bobToCarol == [later.1, welcome.1]
+#guard Serve.Examples.afterOf bobToCarol == [stale.1]
+#guard Serve.Examples.boundaryOf bobToCarol == [hashRecord pre.1]
+
+/-- `CLASSIFY` of Bob's relative store with no facts: every record unconfirmed. -/
+def bobStatuses : Array (Digest × Status) :=
+  (digestsOf [welcome, stale, later]).map fun d => (d, .unconfirmed)
+
+/-- The session. -/
+def viewSteps : Array Step := #[
+  ask "NEW_RELATIVE bob" (.newRelative "bob" group) .ok,
+  ask "NEW_RELATIVE bob again: already open" (.newRelative "bob" group) .chatOpen,
+  ask "HEADS of an empty relative store" (.heads "bob") .ok (some (.digests #[])),
+  { name := "ACCEPT_VIEW bob, vouched by alice: the entries of Alice's SERVE reply, byte for byte"
+    request := Write.u8 0x14 ++ Write.str "bob" ++ alice.bytes ++ Write.u8 0 ++
+      Write.entries aliceToBob
+    expect := .ok, reply? := some (allTaken aliceToBob).write },
+  ask "HEADS bob: Alice's heads (later)" (.heads "bob") .ok
+    (some (.digests storeG.headsArray)),
+  ask "HAS bob pre: a boundary digest, not a record" (.has "bob" (hashRecord pre.1)) .ok
+    (some (.has false)),
+  ask "GET bob pre: not found" (.get "bob" (hashRecord pre.1)) .notFound,
+  ask "REACH_SET bob from later: the three records" (.reachSet "bob" #[hashRecord later.1]) .ok
+    (some (.digests (digestsOf [welcome, stale, later]))),
+  ask "ADDRESSED bob under his key: the two records sent to him" (.addressed "bob" bob keyBob) .ok
+    (some (.digests (digestsOf [welcome, later]))),
+  ask "LINKABLE bob with nothing live: no link" (.linkable "bob" #[]) .ok (some (.digests #[])),
+  ask "LINKABLE bob with later live (Alice's author copy): later"
+    (.linkable "bob" #[hashRecord welcome.1, hashRecord later.1]) .ok
+    (some (.digests #[hashRecord later.1])),
+  ask "CLASSIFY bob with no facts" (.classify "bob" #[]) .ok (some (.classified bobStatuses)),
+  ask "ENCODE bob: a relative zrdtS3 blob" (.encode "bob") .ok (some (.blob bobBlob)),
+  ask "OPEN bob2 from Bob's blob" (.open "bob2" group (.blob bobBlob)) .ok,
+  ask "HEADS bob2: the same heads" (.heads "bob2") .ok (some (.digests storeG.headsArray)),
+  ask "ENCODE bob2: the same blob" (.encode "bob2") .ok (some (.blob bobBlob)),
+  ask "ADDRESSED bob in bob2: the audiences came back" (.addressed "bob2" bob keyBob) .ok
+    (some (.digests (digestsOf [welcome, later]))),
+  ask "SALVAGE bob3 from Bob's blob: nothing dropped" (.salvage "bob3" group (.blob bobBlob)) .ok
+    (some (.salvaged (.ok (#[], #[])))),
+  ask "SERVE from Bob's relative store to Carol: his boundary digest goes too"
+    (.serve "bob" bobServe) .ok
+    (some (.served ⟨carol, Serve.keyTag keyCarol, rid⟩ bobToCarol)),
+  ask "NEW_RELATIVE carol2 (a second-generation newcomer)" (.newRelative "carol2" group) .ok,
+  ask "ACCEPT_VIEW carol2 vouched by bob" (.acceptView "carol2" bob false
+    (bobToCarol.map toView).toArray) .ok (some (allTaken bobToCarol)),
+  ask "HEADS carol2: the same heads again" (.heads "carol2") .ok
+    (some (.digests storeG.headsArray)),
+  ask "NEW closed" (.new "closed" group) .ok,
+  ask "ACCEPT_VIEW into a closed store: pre ignored, so nothing resolves"
+    (.acceptView "closed" alice false (aliceToBob.map toView).toArray) .ok,
+  ask "HEADS closed: still empty" (.heads "closed") .ok (some (.digests #[])),
+  ask "MERGE Bob's relative blob into the closed store: unverifiable, pre missing"
+    (.merge "closed" bobBlob) .unverifiable
+    (some (.opened (.error (.unverifiable (digestsOf [welcome, stale, later])
+      #[hashRecord pre.1])))),
+  ask "ACCEPT_VIEW pre's record into the closed store, then Alice's view: all taken"
+    (.acceptView "closed" alice false
+      (#[.after (encode pre.1)] ++ (aliceToBob.map toView).toArray)) .ok,
+  ask "LINKABLE of a closed store: its heads" (.linkable "closed" #[]) .ok
+    (some (.digests storeG.headsArray)),
+  ask "ACCEPT_VIEW bob: pre's record arrives (promotion)" (.acceptView "bob" carol false
+    #[.after (encode pre.1)]) .ok (some (.viewed #[.record (.accepted (hashRecord pre.1))])),
+  ask "HAS bob pre: now a record" (.has "bob" (hashRecord pre.1)) .ok (some (.has true)),
+  ask "HEADS bob: unchanged" (.heads "bob") .ok (some (.digests storeG.headsArray)),
+  ask "ACCEPT_VIEW bob: later with welcome's opening" (.acceptView "bob" alice false
+    #[.addressed (encode later.1) true (some welcome.2)]) .ok
+    (some (.viewed #[.code .badOpening])),
+  ask "ACCEPT_VIEW bob: bytes that are not a record" (.acceptView "bob" alice false
+    #[.after ((encode later.1).push 0)]) .ok (some (.viewed #[.code .malformed])),
+  ask "ACCEPT_VIEW bob: an opening without field 201" (.acceptView "bob" alice false
+    #[.addressed (encode noAudience.1) false (some noAudience.2)]) .ok
+    (some (.viewed #[.code .noAudience])),
+  ask "ACCEPT_VIEW bob, an import: a disappearing message is refused" (.acceptView "bob" alice
+    true #[.addressed (encode timed.1) false (some timed.2)]) .ok
+    (some (.viewed #[.code .ephemeral])),
+  ask "ACCEPT_VIEW bob, a relay: the disappearing message is taken" (.acceptView "bob" alice
+    false #[.addressed (encode timed.1) false (some timed.2)]) .ok
+    (some (.viewed #[.record (.accepted (hashRecord timed.1))])),
+  ask "ACCEPT_VIEW bob: a record of another chat, and one whose link is unknown"
+    (.acceptView "bob" alice false #[.after (encode foreign), .after (encode b1)]) .ok
+    (some (.viewed #[.record .wrongChat, .record (.missing #[hashRecord a1])])),
+  ask "ACCEPT_VIEW in a chat that is not open" (.acceptView "nochat" alice false #[]) .noChat,
+  ask "LINKABLE in a chat that is not open" (.linkable "nochat" #[]) .noChat,
+  ask "MERGE a closed store's blob into bob" (.merge "bob" (s3 storeAB.encode)) .ok,
+  ask "HAS bob b1" (.has "bob" (hashRecord b1)) .ok (some (.has true))]
+
+/-- The checks on the `view` session's replies. -/
+def viewChecks (out : List (Step × ByteArray)) : Bool :=
+  let reply (name : String) : ByteArray := (out.find? (·.1.name == name)).elim .empty (·.2)
+  -- A closed store ignores the boundary entry, and the records that need it are missing.
+  reply "ACCEPT_VIEW into a closed store: pre ignored, so nothing resolves" ==
+    (Reply.viewed (aliceToBob.map fun
+      | .boundary d => .code (if d == hashRecord pre.1 then .ignored else .ok)
+      | .addressed r _ _ | .after r =>
+        .record (.missing #[(r.links[0]?).getD Digest.zero])).toArray).write &&
+  reply "ACCEPT_VIEW pre's record into the closed store, then Alice's view: all taken" ==
+    (Reply.viewed (#[.record (.accepted (hashRecord pre.1))] ++ (aliceToBob.map fun
+      | .boundary d => ViewResult.known d
+      | .addressed r _ _ | .after r => .record (.accepted (hashRecord r))).toArray)).write
+
+#guard viewChecks (viewSteps.toList.zip (session (viewSteps.map (·.request)).toList))
+
 /-- `2^32 - 1` as 4 bytes. -/
 def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
 
@@ -645,7 +837,7 @@ def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
 def fuzz : Array Step := #[
   raw "an empty payload" .empty .badRequest,
   raw "op 0x00" ⟨#[0x00]⟩ .unknownOp,
-  raw "op 0x14" ⟨#[0x14]⟩ .unknownOp,
+  raw "op 0x17" ⟨#[0x17]⟩ .unknownOp,
   raw "AUDIENCE with no body" ⟨#[0x11]⟩ .badRequest,
   raw "op 0xff with a body" ⟨#[0xff, 1, 2, 3]⟩ .unknownOp,
   raw "VERSION with a byte left over" ⟨#[0x01, 0x00]⟩ .badRequest,
@@ -666,14 +858,14 @@ def fuzz : Array Step := #[
   raw "OPEN a blob whose length field is 2^32 - 1"
     (Write.u8 0x03 ++ Write.str "c" ++ group.bytes ++ Write.u8 0 ++ ffff) .badRequest,
   ask "OPEN a blob whose header claims 2^32 - 1 records: too large, before any record is read"
-    (.open "c" group (.blob hugeCountBlob)) .tooLarge,
-  ask "SALVAGE the same blob" (.salvage "c" group (.blob hugeCountBlob)) .tooLarge,
+    (.open "c" group (.blob (s3 hugeCountBlob))) .tooLarge,
+  ask "SALVAGE the same blob" (.salvage "c" group (.blob (s3 hugeCountBlob))) .tooLarge,
   ask "OPEN a blob whose header claims 2^24 records: too large"
-    (.open "c" group (.blob (blobTag ++ group.bytes ++ u32be (2^24)))) .tooLarge,
+    (.open "c" group (.blob (s3 (blobTag ++ group.bytes ++ u32be (2^24))))) .tooLarge,
   ask "OPEN a blob of another group whose header claims 2^24 records: too large first"
-    (.open "c" group (.blob (blobTag ++ otherGroup.bytes ++ u32be (2^24)))) .tooLarge,
+    (.open "c" group (.blob (s3 (blobTag ++ otherGroup.bytes ++ u32be (2^24))))) .tooLarge,
   ask "OPEN a blob whose header claims 2^24 - 1 records and holds none: malformed"
-    (.open "c" group (.blob (blobTag ++ group.bytes ++ u32be (2^24 - 1)))) .malformed,
+    (.open "c" group (.blob (s3 (blobTag ++ group.bytes ++ u32be (2^24 - 1))))) .malformed,
   raw "COMMIT with the nonce cut short" (Write.u8 0x05 ++ group.bytes ++ alice.bytes ++
     ⟨Array.replicate 31 0x4e⟩) .badRequest,
   raw "COMMIT whose DataMessage length is past the end"
@@ -689,7 +881,7 @@ def fuzz : Array Step := #[
   raw "CLASSIFY with a disown count of 2^32 - 1" (Write.u8 0x0D ++ Write.str "c" ++ u32be 1 ++
     (dig 1).bytes ++ Write.u8 0 ++ ffff) .badRequest,
   raw "MERGE whose blob length is 2^32 - 1" (Write.u8 0x0C ++ Write.str "c" ++ ffff) .badRequest,
-  ask "MERGE a blob whose header claims 2^32 - 1 records: too large" (.merge "c" hugeCountBlob)
+  ask "MERGE a blob whose header claims 2^32 - 1 records: too large" (.merge "c" (s3 hugeCountBlob))
     .tooLarge,
   raw "ACCEPT_RECORD with opening flag 2" (Write.u8 0x10 ++ Write.str "c" ++
     Write.bytes (encode a1) ++ Write.u8 2) .badRequest,
@@ -725,12 +917,23 @@ def fuzz : Array Step := #[
     .badRequest,
   ask "SERVE in c: the store is empty, so no entries" (.serve "c" (serveFrom bob keyBob)) .ok
     (some (.served ⟨bob, Serve.keyTag keyBob, rid⟩ [])),
+  raw "ACCEPT_VIEW with entry kind 3" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
+    Write.u8 0 ++ u32be 1 ++ Write.u8 3) .badRequest,
+  raw "ACCEPT_VIEW with import flag 2" (Write.u8 0x14 ++ Write.str "c" ++ alice.bytes ++
+    Write.u8 2 ++ u32be 0) .badRequest,
+  raw "ACCEPT_VIEW whose entry count is 2^32 - 1" (Write.u8 0x14 ++ Write.str "c" ++
+    alice.bytes ++ Write.u8 0 ++ ffff) .badRequest,
+  raw "ACCEPT_VIEW with a boundary digest cut short" (Write.u8 0x14 ++ Write.str "c" ++
+    alice.bytes ++ Write.u8 0 ++ u32be 1 ++ Write.u8 2 ++ ⟨Array.replicate 31 1⟩) .badRequest,
+  raw "LINKABLE whose count is 2^32 - 1" (Write.u8 0x15 ++ Write.str "c" ++ ffff) .badRequest,
+  raw "NEW_RELATIVE with the group cut short" ((Request.newRelative "r" group).write.extract 0 20)
+    .badRequest,
   ask "HEADS c: the store is still empty" (.heads "c") .ok (some (.digests #[]))]
 
 /-- The sessions, each run on a fresh `zrdtd`. -/
 def sessions : Array (String × Array Step) :=
   #[("tour", tour), ("tooLarge", tooLargeSteps), ("acceptRecord", acceptRecordSteps),
-    ("join", joinSteps), ("fuzz", fuzz)]
+    ("join", joinSteps), ("view", viewSteps), ("fuzz", fuzz)]
 
 /-- The replies of a session's steps; `build` is the build text of `VERSION`. -/
 def replies (steps : Array Step) (build : String := buildId) : List ByteArray :=
@@ -753,9 +956,12 @@ def failures : List String :=
 #guard (List.range opNames.size).all fun i =>
   sessions.any fun (_, steps) => steps.any fun s => s.request[0]? == some (i + 1).toUInt8
 
--- Every status except `COLLISION` appears in some session.
-#guard (Code.all.filter (· != .collision)).all fun c =>
+-- Every status except `COLLISION` appears in some session: as the status of a reply, or for
+-- `EPHEMERAL` and `IGNORED`, as the result of an `ACCEPT_VIEW` entry.
+#guard (Code.all.filter (· ∉ [.collision, .ephemeral, .ignored])).all fun c =>
   sessions.any fun (_, steps) => steps.any (·.expect == c)
+#guard [Code.ephemeral, .ignored].all fun c =>
+  (replies viewSteps).any fun r => r[0]? == some 0 && containsBytes r c.write
 
 /-- The `sessions` section, for a `zrdtd` whose build text is `build`. -/
 def sessionsJson (build : String) : Json :=

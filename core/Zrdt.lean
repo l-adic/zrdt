@@ -3,9 +3,11 @@ import Zrdt.Sha256
 import Zrdt.Record
 import Zrdt.Encode
 import Zrdt.Store
+import Zrdt.RelStore
 import Zrdt.Provenance
 import Zrdt.Commit
 import Zrdt.Serve
+import Zrdt.ChatStore
 import Zrdt.Proto
 import Zrdt.Vectors
 
