@@ -289,6 +289,19 @@ example : Fetched Toy.hash (build Toy.hash [Toy.r0, Toy.r1, Toy.r3])
     CollisionIn Toy.hash (build Toy.hash [Toy.r0, Toy.r1, Toy.r3]) :=
   fetched_of_build Toy.hash _
 
+-- `r0` and `fake0` have the same hash, so they collide.
+example : Toy.r0 = Toy.fake0 ∨ CollisionIn Toy.hash {Toy.r0, Toy.fake0} :=
+  accept_unique Toy.hash (d := 0) rfl rfl
+
+-- Adding `r1` to `{r0}`: `r1` becomes the head, and `0` stops being one.
+example : heads Toy.hash (insert Toy.r1 {Toy.r0}) = insert 1 (heads Toy.hash {Toy.r0} \ {0}) ∨
+    CollisionIn Toy.hash (insert Toy.r1 {Toy.r0}) :=
+  heads_insert Toy.hash (by decide) (by decide) (by decide)
+
+example : ({Toy.r0, Toy.r1} : Store ℕ ℕ Unit) = {Toy.r1, Toy.r0} ∨
+    CollisionIn Toy.hash ({Toy.r0, Toy.r1} ∪ {Toy.r1, Toy.r0}) :=
+  eq_of_digests_eq Toy.hash (by decide)
+
 /-! ## Merging -/
 
 /-- In a fetched store every link resolves. -/
