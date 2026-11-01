@@ -139,8 +139,11 @@ zrdt/                              this repo (Lean, docs)
   Crdt/Merkle/Refine.lean          new: refinement theorems
   Crdt/Merkle/Api.lean             new: the advertised statements over CheckedStore (§3.2)
   Crdt/Merkle/EncodeProofs.lean    new: encode_injective
-  Test/Axioms.lean                 gate (extend; remove TaskList lines)
-  Test/Differential.lean           plausible: CheckedStore vs Finset model
+  Crdt/Merkle/LoadSpec.lean        new: salvage in the model (buildRetry inside every store that takes in u) [amendment]
+  Crdt/Merkle/LoadApi.lean         new: open and salvage in the model (open_ok_iff_model, salvage_ok_model) [amendment]
+  Crdt/Merkle/Classify*.lean       new: Classify, ClassifyFast, ClassifyStatus: CLASSIFY computes `status` [amendment]
+  Test/Axioms.lean                 gate: pins exactly the eleven Api names (§3.2)
+  Test/Differential.lean           plausible: CheckedStore vs Finset model (not written; see §10)
   vectors/vectors.json
   proxy/                           stretch only: TLS proxy against staging (APP.md §8b)
   docs/PLAN.md docs/PLAN_HUMANS.md docs/APP.md docs/RESTORE_PLAN.md
@@ -169,32 +172,59 @@ the `Zrdt.` prefix). Then dot notation (`c.agree`) works on the shipped type; in
 them. The axiom gate and the README pin these full names, and nothing else is advertised as a
 result. **[amendment]** (lead to confirm)
 
+**Proved and gated (2026-11-01).** **[amendment]** All eleven are in `Api.lean`, and
+`Test/Axioms.lean` pins exactly these names to `[propext, Classical.choice, Quot.sound]`. As
+stated in the code:
+
 ```lean
 theorem CheckedStore.fetched (c) : Fetched hashSpec (abs c) (heads hashSpec (abs c))   -- no collision disjunct
 theorem CheckedStore.no_collision (c) : ¬ CollisionIn hashSpec (abs c)
 theorem CheckedStore.agree (c d) (h : c.heads = d.heads) :                             -- ExtTreeSet: `=` is by content
     abs c = abs d ∨ CollisionIn hashSpec (abs c ∪ abs d)
-theorem CheckedStore.abs_accept   -- per result: accepted ⇒ abs c' = accept hashSpec (abs c) (toSpec r) ∧ digest = hashRecord r; missing/collision/wrongChat/tooLarge ⇒ c' = c ∧ (the reason holds)
+theorem CheckedStore.abs_accept (c) (r) : AcceptMeans c r (c.accept r)                  -- AcceptMeans: Refine.lean
 theorem CheckedStore.abs_merge (h : c.merge d = .ok e) : abs e = abs c ∪ abs d
-theorem CheckedStore.open_iff : open g b = .ok c ↔
-    ∃ u, decodeBlob b = some (g, u) ∧ WellSized u ∧ AcceptBuilt hashSpec (u.map toSpec) ∧
-      ¬ CollisionIn hashSpec (u.map toSpec) ∧ (∀ r ∈ u, r.group = g) ∧ abs c = u.map toSpec ∧ c.group = g
-theorem CheckedStore.salvage_spec : salvage g b = .ok (c, dropped) → (same hypotheses on u) →
-    abs c = buildRetry hashSpec (u.map toSpec) ∧ dropped = digests of the rest
-theorem CheckedStore.encode_open (c) : open c.group (encode c) = .ok c                 -- exact: extensional maps
-theorem CheckedStore.confirmed (c d) (hs) (hc : hs ⊆ c.keys) (hd : hs ⊆ d.keys) :      -- "held by the sender"
+theorem CheckedStore.open_iff : CheckedStore.open g b = .ok c ↔
+    ∃ u, decodeBlob b = some (g, u) ∧ WellSized u ∧ AcceptBuilt hashSpec (specOf u) ∧
+      ¬ CollisionIn hashSpec (specOf u) ∧ (∀ r ∈ u, r.group = g) ∧ abs c = specOf u ∧ c.group = g
+theorem CheckedStore.salvage_spec (h : salvage g b = .ok s) (hu : decodeBlob b = some (g, u)) :
+    ¬ CollisionIn hashSpec (specOf u) ∧ abs s.store = buildRetry hashSpec (specOf u) ∧
+      s.store.group = g ∧
+      (∀ d, d ∈ s.dropped ↔ d ∈ digests hashSpec (specOf u \ buildRetry hashSpec (specOf u))) ∧
+      StrictlySorted s.dropped
+theorem CheckedStore.encode_open (c) : CheckedStore.open c.group c.encode = .ok c      -- exact: extensional maps
+theorem CheckedStore.confirmed (c d) (hs : Array Digest)                                 -- "held by the sender"
+    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
     c.reachSet hs = d.reachSet hs ∨ CollisionIn hashSpec (abs c ∪ abs d)
-theorem CheckedStore.classify_spec   -- CLASSIFY computes the spec's provenance status (§3.5)
-theorem encode_injective : Function.Injective encode
+theorem CheckedStore.classify_spec (c) (facts) (d) (st : Zrdt.Status) :                  -- §3.5
+    (classify c facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧ status hashSpec (abs c) (liveOf facts) (toSpec r) = st.toSpec
+theorem encode_injective : Function.Injective encode                                   -- EncodeProofs.lean
 ```
+
+Differences from the earlier text **[amendment]**: `u.map toSpec` is `specOf u`, the *set* of
+`u`'s records (a repeated record counts once; order does not matter). `salvage_spec` needs only
+that the blob decodes; it concludes there was no collision. `confirmed` takes `c.has h = true` for
+each `h ∈ hs`. `classify_spec` uses the spec's `status`, whose `heldBy` names one member, the
+smallest holder in byte order of ACIs (§3.5).
+
+Where the proofs are **[amendment]**: `Bridge.lean` (`toSpec`, `hashSpec`, `abs`; `Built` gives
+`AcceptBuilt`, the heads and no collision), `Refine.lean` (accept, merge, observers, `reachSet`),
+`LoadSpec.lean` (salvage in the model) and `LoadApi.lean` (`open`, `salvage` in the model),
+`Classify.lean`, `ClassifyFast.lean`, `ClassifyStatus.lean` (`classify` equals the reference and
+computes the spec's `status`), `EncodeProofs.lean` (`encode_injective`).
 
 - `CheckedStore.confirmed` means "held by the sender": the member who sent a live message holds
   what its links reach. That the claimed author wrote a record needs `authorConfirmed` (§3.5),
   which `classify_spec` connects to the code.
-- The spec theorems in `Chat.lean` are proof obligations, not results: `fetched_agree`,
-  `fetched_build`, `fetched_union`, `acceptBuilt_union`, `salvage_built`, `salvage_maximal`,
-  `confirmed_exact`, `reach_implies_held`, `authorConfirmed_sound`.
-- The four limit examples (§4 A) are stated next to them and named in the README.
+- The spec theorems are proof obligations, not results: `fetched_agree` and `fetched_of_build`
+  (`Integrity.lean`; the list form), and in `Chat.lean` `fetched_build` (the `AcceptBuilt` form),
+  `fetched_union`, `acceptBuilt_union`, `acceptBuilt_insert`, `salvage_built`, `salvage_maximal`,
+  `confirmed_exact`, `reach_implies_held`, `authorConfirmed_sound` (with `LiveFacts`,
+  `HonestAuthor`, `authorConfirmed`, `foreignMarked`, `holders`, `status`). All are proved.
+  **[amendment]**
+- The four limit examples (§4 A) are stated next to them and named in the README:
+  `withheld_tail_undetectable`, `tail_replaced_passes_open`, `gap_indistinguishable`,
+  `relay_attribution_indistinguishable`.
 - The **closure gate** (§6, rung 2a) checks the other half of the contract: `zrdtd` links no
   Mathlib.
 
@@ -217,21 +247,29 @@ stub) and that phase C freezes.
 - Byte order is big-endian. Digests, group ids and nonces are 32 bytes; ACIs are 16. Every digest
   list in a reply is sorted. The exact body layout is fixed in `Proto.lean` and pinned by the
   vectors.
+- **Protocol 2** **[amendment]** (lane T5, `Proto.protocolVersion = 2`; `Proto.lean`'s header is
+  the reference): `ACCEPT` returns the record's bytes with its digest, `COMMIT` returns the
+  opening with the commitment, and `ACCEPT_RECORD` (`0x10`) accepts a relayed or imported record
+  given as bytes, with its opening if any. The host never builds record bytes or openings itself.
+  Status bytes: `OK 0x00`, `MISSING`, `COLLISION`, `WRONG_CHAT`, `TOO_LARGE`, `MALFORMED`,
+  `UNVERIFIABLE`, `NOT_FOUND`, `BAD_OPENING 0x08`; request errors from `0x80` (`BAD_REQUEST`,
+  `UNKNOWN_OP`, `NO_CHAT`, `CHAT_OPEN`) change nothing.
 
 **There is no unchecked store.** The table holds `CheckedStore` values, so every handle is checked
-by its type in the shipped code. A store comes only from `empty` (`NEW`), `accept` (`ACCEPT`), or
-the `acceptAll` worklist (`OPEN`, `SALVAGE`, `MERGE`). No op loads a store without checking it,
+by its type in the shipped code. A store comes only from `empty` (`NEW`), `accept` (`ACCEPT`,
+`ACCEPT_RECORD` **[amendment]**), or the `acceptAll` worklist (`OPEN`, `SALVAGE`, `MERGE`). No op loads a store without checking it,
 and there is no raw decode, so the host has nothing to remember to call.
 
 | Op | Request | Reply |
 |---|---|---|
-| `VERSION` | none | protocol version, git hash of the Lean build |
+| `VERSION` | none | protocol version (2), build id (package version and a hash of the Lean sources `zrdtd` runs) **[amendment]** |
 | `NEW` | chat key, group id (32) | `OK` |
 | `OPEN` | chat key, group id, blob, or a list of encoded records | `OK` \| `MALFORMED` \| `TOO_LARGE` \| `WRONG_CHAT` \| `COLLISION{digest}` \| `UNVERIFIABLE{unverifiable[], missing[]}` |
 | `SALVAGE` | same as `OPEN` | `OK{dropped[], missing[]}` (the store is loaded) \| `MALFORMED` \| `TOO_LARGE` \| `WRONG_CHAT` \| `COLLISION{digest}` |
-| `COMMIT` | group id, author (16), nonce (32), DataMessage bytes | commitment (32) |
+| `COMMIT` | group id, author (16), nonce (32), DataMessage bytes | commitment (32) ‖ opening (nonce ‖ the bytes without fields 15 and 200) \| `MALFORMED` **[amendment]** |
 | `HASH` | record parts | digest (no store needed) |
-| `ACCEPT` | chat key, record parts | `ACCEPTED{digest}` \| `MISSING{digests[]}` \| `COLLISION{digest}` \| `WRONG_CHAT` \| `TOO_LARGE` |
+| `ACCEPT` | chat key, record parts | `ACCEPTED{digest, record bytes}` \| `MISSING{digests[]}` \| `COLLISION{digest}` \| `WRONG_CHAT` \| `TOO_LARGE` **[amendment]** |
+| `ACCEPT_RECORD` (`0x10`) | chat key, record bytes, optional opening | as `ACCEPT`, plus `MALFORMED` (not a record's encoding) \| `BAD_OPENING` (the opening's commitment is not the record's commit, or it holds field 15 or 200). Checked before the store is touched. **[amendment]** |
 | `HEADS` / `HAS` / `GET` | chat key [, digest] | sorted digests / bool / record parts |
 | `REACH_SET` | chat key, from[] | sorted digests |
 | `MERGE` | chat key, blob | as `OPEN`, then union into the open store; `COLLISION`/`WRONG_CHAT` leave it unchanged |
@@ -241,12 +279,17 @@ and there is no raw decode, so the host has nothing to remember to call.
 
 What the replies mean:
 
-- `ACCEPTED{digest}`: inserted, or already present (idempotent); `digest = hashRecord r`. A
+- `ACCEPTED{digest, record bytes}`: inserted, or already present (idempotent);
+  `digest = hashRecord r`, and the bytes are the record's canonical encoding (links sorted,
+  repeats dropped), the bytes to relay or store. **[amendment]** A
   byte-identical duplicate is accepted, not a collision.
 - `MISSING{digests}`: store unchanged; exactly the links that do not resolve (non-empty).
 - `COLLISION{digest}`: store unchanged; a different record with this digest is already stored.
 - `WRONG_CHAT`: store unchanged; the record's group is not this store's group.
-- `TOO_LARGE`: store unchanged; beyond the limits of §3.4.
+- `TOO_LARGE`: store unchanged; beyond the limits of §3.4. A blob whose count field is 2^24 or
+  more is `TOO_LARGE` before any record is read. **[amendment]**
+- `BAD_OPENING` (`ACCEPT_RECORD` only): nothing changed; the opening does not belong to the
+  record. The fork then retries without the opening (structure only). **[amendment]**
 - `OPEN` → `OK`: every record was accepted. `UNVERIFIABLE`: no store is loaded; `unverifiable`
   lists every record that could never be accepted (a link to nothing, or a cycle), and `missing`
   the link digests that point to nothing. This is the "rejected restore" of demo beat 4.
@@ -294,9 +337,11 @@ into a `.node` (local-exec TLS); macOS is very likely fine.
   - The nonce is 32 random bytes per message, carried in `ZrdtMeta.nonce`.
 - **Store blob** (`encode` on a store): `"zrdtS2" ‖ group(32) ‖ u32 count ‖ (u32 len ‖ record)*`,
   sorted by digest. Heads are not stored; `open` recomputes them. `encode_open` is exact, because
-  the maps are extensional.
+  the maps are extensional. The decoder takes the records in any order, and a byte-identical
+  repeat counts once (`specOf`, §3.2). **[amendment]**
   - Limits: count < 2^24 and nlinks ≤ 4096. `Built` includes them; `accept` and `open` return
-    `TOO_LARGE` beyond them.
+    `TOO_LARGE` beyond them. A count field of 2^24 or more is `TOO_LARGE` before any record is
+    read (`blobTooLarge`). **[amendment]**
   - The decoder never sizes an allocation from an untrusted count. A fuzz vector checks this.
 - **The store holds structure only.** The content (the opening: the nonce plus exactly the
   committed bytes, i.e. the DataMessage with fields 15 and 200 already removed) lives in Desktop as
@@ -346,9 +391,14 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
 
 - The request goes 1:1 to the member whose message referenced the digest first, then to the
   group. Replies are always 1:1.
-- **Relay:** the responder sends `ZrdtResend{record, opening}`. The receiver checks
-  `HASH(record parts) == digest` and `COMMIT(opening) == record.commit`, then shows the message as
-  "relayed by X". It becomes normal once author-confirmed.
+- **Relay:** the responder sends `ZrdtResend{record, opening}` (the record bytes from its
+  `ACCEPT`/`GET`, the opening from its `COMMIT`). The receiver calls
+  `ACCEPT_RECORD(chat, record, opening)`: `zrdtd` checks that the bytes are a record and that the
+  opening's commitment is the record's commit, then accepts it; the returned digest must be one
+  that was asked for. On `BAD_OPENING` the receiver accepts the record without the opening
+  (structure only, "content unavailable"). It shows the message as "relayed by X"; it becomes
+  normal once author-confirmed. **[amendment]** (protocol 2; replaces the host-side `HASH` and
+  `COMMIT` comparison)
 - **Author fast path:** once the record arrives, the receiver knows its author and asks the
   author 1:1. The author re-sends the original through Desktop's sendLog/`SavedProto` path
   (`handleRetry.preload.ts:236-245`). That copy arrives `live`, so it is author-confirmed at once.
@@ -375,7 +425,8 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
   **[amendment]** (lead to confirm)
 - `CLASSIFY` takes the live facts (the provenance per record and the `disown` lists of live
   records) and returns per record: `confirmedByAuthor` (`authorConfirmed` holds); `heldBy(aci)`
-  (reached by a live record of another member); `unconfirmed` (no live record reaches it); or
+  (reached by a live record of another member; one ACI, the smallest in byte order, so every
+  device names the same member **[amendment]**, lane T5); `unconfirmed` (no live record reaches it); or
   `notConfirmedByAuthor` (the author has a live record concurrent with it and no live record from
   the author reaches it, or a live record from the author lists it in `disown`). When several
   statuses apply, the order is `confirmedByAuthor`, `notConfirmedByAuthor`, `heldBy`,
@@ -870,51 +921,47 @@ The beats total ≤ 4 minutes (235 s), leaving time for the intro and the proof 
    MacBook run the same build? Is its chip and RAM enough for four Electron instances plus the
    mock server? **[amendment]**
 
-## 10. Status snapshot (2026-11-01)
+## 10. Status snapshot (2026-11-01, wave 3) **[amendment]**
 
-**Exists and builds** (`lake build` clean, `make run` prints `axiom gate passed`; all listed
-theorems depend only on `[propext, Classical.choice, Quot.sound]`):
+**zrdt repo** (branch `review/2026-11-01-plan-amendments`, `7f327ff`): `lake build` is clean and
+runs the gate; `lake exe axiom_check` prints `axiom gate passed`.
 
-- `Crdt/Merkle/Defs.lean`: `Record`, `Store`, `CollisionIn`, `digests`, `Closed`, `heads`, `Reach`,
-  `Complete`, `Tight`, `Fetched`, `accept`, `build`, `Receipt`/`receipt`; proved `CollisionIn.of_mem`,
-  `CollisionIn.mono`, `mem_digests`, `digests_union`, `digests_empty`, `closed_empty`,
-  `closed_union`, `mem_heads`, `heads_subset_digests`, `complete_of_closed`, `Reach.mem_of_bound`,
-  `Reach.lift`, `accept_of_resolves`, `closed_accept`, `closed_build`, `heads_insert`,
-  `heads_insert_of_links_heads`, `receipt_heads_sound`, `receipt_confirms`, `merge_eq_union`,
-  `strong_eventual_consistency`, `eventual_agreement`. Also `Collision` and `CollisionIn.global`
-  (to delete in A).
-- `Crdt/Merkle/Integrity.lean`: proved `accept_unique`, `subset_of_digests_subset`,
-  `eq_of_digests_eq`, `reach_mono_of_complete`, `subset_of_fetched`, `fetched_agree`,
-  `merge_fetched`, `fetched_accept`, `fetched_build`; plus seven `*_global` forms (to delete in A).
-- `Crdt/Merkle/TaskList.lean`: proved task-list theorems and a scenario (to delete in A).
-- `Test/Axioms.lean`: eight Merkle gate lines (`accept_unique`, `fetched_agree`, `merge_fetched`,
-  `fetched_build`, `heads_insert`, `TaskList.add_wins`, `TaskList.fetched_live_agree`,
-  `TaskList.remove_requires_closure`); the last three go in A.
-- `README.md`: phase 1 write-up (to be rewritten for the chat in F).
-- Scratch only (not in repo): `TimeOrdered`, `time_le_of_reach`, `time_between` (timestamps; parked,
-  out of scope).
+- **Spec** (`Crdt/Merkle/`): `Defs`, `Integrity` (`fetched_agree`, `fetched_of_build`; the
+  `_global` forms are gone), `Chat` (`fetched_build`, `fetched_union`, `acceptBuilt_union`,
+  `acceptBuilt_insert`, `salvage_built`, `salvage_maximal`, `confirmed_exact`,
+  `reach_implies_held`, `LiveFacts`, `authorConfirmed`, `foreignMarked`, `holders`, `status` with a
+  single-holder `heldBy`, `HonestAuthor`, `authorConfirmed_sound`, the four limits), `LoadSpec`.
+  `TaskList.lean` is deleted.
+- **Proofs about the code**: `Bridge`, `Refine`, `EncodeProofs`, `LoadApi`, `Classify`,
+  `ClassifyFast`, `ClassifyStatus`, and `Api.lean` with the eleven statements of §3.2. The gate
+  pins exactly those names. No `sorry`, no `native_decide`.
+- **Core** (`core/`, Init and Std only): `Digest`, `Sha256`, `Record`, `Encode`, `Store`
+  (`CheckedStore`), `Commit`, `Provenance`, `Proto` (protocol 2: `ACCEPT` returns the record
+  bytes, `COMMIT` the opening, `ACCEPT_RECORD` `0x10` with `BAD_OPENING`; blob count limit),
+  `Vectors` (checked in `lake build`), and `zrdtd`. The closure check passes on the `zrdtd`
+  built at `79e3dfa` (`core/` is unchanged since).
+- **Not written**: `Test/Differential.lean` (rung 5), `Comparator/` and `make comparator`
+  (rung 9; wave 3 Lean lane), `proxy/` (stretch).
 
-**Proved in scratch, not yet in the repo**: `confirmed_exact` and its lemmas, and
-`reach_implies_held` (`RESTORE_PLAN.md` appendix). **[amendment]**
+**Fork** (`l-adic/signal-desktop-zrdt`, branch `zrdt`, `eb895b411`; Mac checkout with the zrdt
+submodule at `79e3dfa`): `ts/zrdt/` (service, backends daemon/stub/codec, scope, send, receive,
+resend, ui, ci), SQL migration 1850, Redux slice `ducks/zrdt`, Settings → Internal
+export/import/salvage, `demo/` (harness, launch, evil, rules, panel, doctor, smoke). `DEMO.md` is
+still to write.
 
-**Review of 2026-11-01** **[amendment]**: `docs/review-2026-11-01/` holds `REVIEW.md`,
-`UPDATE-690ae65.md` and `AMENDMENTS.md`. The review's prototypes (pure-Lean SHA-256, a
-Mathlib-free `CheckedStore` with `rawAccept_built`, a one-dispatcher daemon, the villain sketch) are
-not repo code; they are kept outside the repo (`~/devel/zrdt-review-spikes` on the reviewer's machine).
+**Wave results.**
 
-**Unwritten** **[amendment]**: all of `core/` (`Zrdt/*`, `Zrdtd/Main.lean`), `Chat.lean`,
-`Bridge.lean`, `Refine.lean`, `EncodeProofs.lean`, `Api.lean`, `Test/Differential.lean`,
-`vectors/`, the fork (`ts/zrdt/*`, `demo/*`), `proxy/*` (stretch), `Comparator/*`, `DEMO.md`.
+- First end-to-end run of `demo/smoke.ts` on the merged fork with the real `zrdtd`: **25/26 pass
+  in 43 s.** Beats 1 to 3 work: equal compare codes; drop → gap row → recovery; blackhole →
+  "Bob has 1 message you don't" → "Asked; no answer." → "Ask again" recovers; hold/release.
+- **The one failure** (beat 2): the check that the recovered copy is first "relayed by Bob" never
+  sees it. The author fast path upgrades it to live, "confirmed by Alice", too fast
+  (`zrdtStatus` shows `wasRelayed: true`, provenance live). Wave 3 fixes it (fork lane: hold
+  the fast path, or have the test accept a recorded relayed state). Beats 4 and 5 are not in the
+  smoke test yet.
+- Wave 3 (2–3 h): the beat 2 fix, beats 4 and 5 in the smoke test, `DEMO.md`, Comparator, this
+  README and these documents.
 
-**Git state** **[amendment]**:
-
-- Phase 1 is committed (`06192c1`: `Crdt/Merkle/` Defs, Integrity, TaskList; `README.md`; the gate
-  lines; the Makefile `help` and `graph` targets). The plan documents follow in
-  `383a9fb`..`690ae65`. The review (`52d9e15`) was merged into `main` in `e135eff` (PR #1); these
-  amendments to the four documents follow it.
-- During phase 1 another editor made `Toy` and several `Defs.lean` theorems (`digests_union`,
-  `digests_empty`, `mem_heads`) `private`; made `Crdt/Convergence.lean`'s
-  `converged_states_agree` `private`; changed `Crdt/ORSet.lean` (not inspected); restructured parts
-  of `TaskList.lean`. Phase A reverses the `private` changes that other modules need and deletes
-  `TaskList.lean`; the lead should confirm no phase 0 statement changed
-  (`git diff cc8a3be -- 'Crdt/*.lean'`).
+History: phase 1 is `06192c1`; the plan documents `383a9fb`..`690ae65`; the review `52d9e15`
+(merged in `e135eff`, PR #1); lanes L1 (`567c2be`), L2/L3 (`e2b3160`), T5 (`dcc2982`) and proofs
+P1–P4 (`7f327ff`).

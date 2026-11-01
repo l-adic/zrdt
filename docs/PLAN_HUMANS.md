@@ -259,10 +259,11 @@ definitions of §3:
 - `abs c` is the set of records `c` holds, as a spec `Store`.
 
 Each advertised statement is proved from a theorem about the plain `Store` of §3. Those spec
-theorems (`fetched_agree`, `fetched_build`, `fetched_union`, `acceptBuilt_union`, `salvage_built`,
-`salvage_maximal`, `confirmed_exact`, `reach_implies_held`, `authorConfirmed_sound`) are the proofs
-behind them; they are not advertised on their own. The axiom gate and the README pin the
-`CheckedStore` names, which live in `Crdt/Merkle/Api.lean`.
+theorems (`fetched_agree`, `fetched_of_build`, `fetched_build`, `fetched_union`,
+`acceptBuilt_union`, `salvage_built`, `salvage_maximal`, `confirmed_exact`, `reach_implies_held`,
+`authorConfirmed_sound`) are the proofs behind them; they are not advertised on their own. The
+axiom gate and the README pin the eleven names in `Crdt/Merkle/Api.lean`: the ten
+`Zrdt.CheckedStore.*` statements below and `Zrdt.encode_injective`. **[amendment]**
 
 **[amendment]** Below are seven groups of statements about the code, each with the spec theorem
 behind it, and four examples that mark the limits. Several conclusions end in
@@ -271,11 +272,13 @@ hash". That clause is how a hash collision shows up. It is never a hypothesis; i
 conclusion fails, the theorem hands you the two colliding records. One store on its own never has
 a collision (2), so the clause appears only when two stores meet.
 
-Status key: **proved** builds today with no `sorry` and only the standard axioms; **proved in
-scratch** is checked against today's build but not yet in the repository; **to prove** means the
-statement is settled and the proof is planned (`PLAN.md`). **[amendment]** Every `CheckedStore`
-statement is **to prove**, in phase B, after the code exists. The status given under each item is
-that of the spec theorem behind it.
+**Status (2026-11-01, wave 3)** **[amendment]**: everything in this section is **proved**. It
+builds with no `sorry` and only the standard axioms (`propext`, `Classical.choice`,
+`Quot.sound`), and the axiom gate (`Test/Axioms.lean`) pins the eleven advertised names. The
+code blocks below are shortened; `Api.lean` has the exact statements, each with an example.
+Where an exact statement differs from the plan: `u.map toSpec` is written `specOf u`, the *set*
+of `u`'s records (a repeat counts once, order does not matter); `confirmed` asks `c.has h` for
+each `h` in `hs`.
 
 ### (1) Same heads, same chat — `CheckedStore.agree`
 
@@ -291,7 +294,7 @@ theorem CheckedStore.agree (c d) (h : c.heads = d.heads) :
 ```
 
 Behind it, `fetched_agree`: two stores that both pass the check from the same heads are equal, or
-collide. **Proved** (`Integrity.lean`), from `reach_mono_of_complete` and `subset_of_fetched`.
+collide. Proved (`Integrity.lean`), from `reach_mono_of_complete` and `subset_of_fetched`.
 
 ```lean
 theorem fetched_agree (hS : Fetched hash s hs) (hT : Fetched hash t hs) :
@@ -310,14 +313,18 @@ theorem CheckedStore.fetched (c) : Fetched hashSpec (abs c) (heads hashSpec (abs
 theorem CheckedStore.no_collision (c) : ¬ CollisionIn hashSpec (abs c)
 ```
 
-Behind it, `fetched_build`: a phone that accepts records one at a time, each only once its links
-resolve, is always in a state the check accepts, and its heads are the correct digest of what it
-holds. **Proved**. It holds for *any* list of records. `Built` keeps such an order as its witness
-(§5), and the same fact makes salvage (4) work.
+Behind it, `fetched_of_build` (`Integrity.lean`): a phone that accepts records one at a time,
+each only once its links resolve, is always in a state the check accepts, and its heads are the
+correct digest of what it holds. It holds for *any* list of records. `Built` keeps such an order
+as its witness (§5), and the same fact makes salvage (4) work. `fetched_build` (`Chat.lean`) is
+the same for an accept-built store, which is the form the code's proofs use. **[amendment]**
+(name: the list form is `fetched_of_build`)
 
 ```lean
-theorem fetched_build (l : List (Record α H K)) :
+theorem fetched_of_build (l : List (Record α H K)) :
     Fetched hash (build hash l) (heads hash (build hash l)) ∨ CollisionIn hash (build hash l)
+theorem fetched_build (h : AcceptBuilt hash s) :
+    Fetched hash s (heads hash s) ∨ CollisionIn hash s
 ```
 
 ### (3) Accepting and catching up are safe — `CheckedStore.abs_accept`, `abs_merge` **[amendment]**
@@ -335,7 +342,8 @@ it. Sync never has to be re-verified from scratch. A merge that would bring in a
 record from another chat fails and leaves the store as it was.
 
 ```lean
-theorem CheckedStore.abs_accept
+theorem CheckedStore.abs_accept (c) (r) : AcceptMeans c r (c.accept r)
+  -- AcceptMeans (Refine.lean), one case per result:
   -- accepted d ⇒ abs c' = accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
   -- missing / collision / wrongChat / tooLarge ⇒ c' = c ∧ (the stated reason holds)
 theorem CheckedStore.abs_merge (h : c.merge d = .ok e) : abs e = abs c ∪ abs d
@@ -343,8 +351,8 @@ theorem CheckedStore.abs_merge (h : c.merge d = .ok e) : abs e = abs c ∪ abs d
 
 Behind them, `fetched_union`: merging two stores that pass the check gives a store that passes the
 check, from the union of their head sets; and `acceptBuilt_union`: the union of two accept-built
-stores (see (4)) is accept-built. **To prove**; no collision clause is needed, and both are true as
-stated even with collisions (update §2). (`heads hash (s ∪ t)` may be smaller than `hs₁ ∪ hs₂`
+stores (see (4)) is accept-built. Proved (`Chat.lean`); no collision clause is needed, and both
+are true as stated even with collisions (update §2). (`heads hash (s ∪ t)` may be smaller than `hs₁ ∪ hs₂`
 when one side has linked the other's heads; `Fetched` from `hs₁ ∪ hs₂` reaches the same records.)
 
 ```lean
@@ -363,33 +371,35 @@ fails, the answer names the records it could not accept and the link digests tha
 nothing.
 
 ```lean
-theorem CheckedStore.open_iff : open g b = .ok c ↔
-    ∃ u, decodeBlob b = some (g, u) ∧ WellSized u ∧ AcceptBuilt hashSpec (u.map toSpec) ∧
-      ¬ CollisionIn hashSpec (u.map toSpec) ∧ (∀ r ∈ u, r.group = g) ∧ abs c = u.map toSpec ∧
+theorem CheckedStore.open_iff : CheckedStore.open g b = .ok c ↔
+    ∃ u, decodeBlob b = some (g, u) ∧ WellSized u ∧ AcceptBuilt hashSpec (specOf u) ∧
+      ¬ CollisionIn hashSpec (specOf u) ∧ (∀ r ∈ u, r.group = g) ∧ abs c = specOf u ∧
       c.group = g
 ```
 
-`salvage` is "keep what verifies". On a blob that decodes, is within the limits, has no collision
-and is all in chat `g`, it accepts each record as soon as its links are present, repeating until
-nothing changes, and reports the rest by digest. The result is the largest set any client could
-ever have accepted from those records.
+`salvage` is "keep what verifies". It accepts each record as soon as its links are present,
+repeating until nothing changes, and reports the rest by digest. The result is the largest set
+any client could ever have accepted from those records. If it succeeds on a blob that decodes to
+`u`, then `u` had no collision. **[amendment]**
 
 ```lean
-theorem CheckedStore.salvage_spec : salvage g b = .ok (c, dropped) → (same hypotheses on u) →
-    abs c = buildRetry hashSpec (u.map toSpec) ∧ dropped = digests of the rest
+theorem CheckedStore.salvage_spec (h : salvage g b = .ok s) (hu : decodeBlob b = some (g, u)) :
+    ¬ CollisionIn hashSpec (specOf u) ∧ abs s.store = buildRetry hashSpec (specOf u) ∧
+      s.store.group = g ∧ (s.dropped = the sorted digests of the rest)
 ```
 
 Saving a store and opening it again gives back exactly the same store. `=` is exact here because
 the maps compare by content.
 
 ```lean
-theorem CheckedStore.encode_open (c) : open c.group (encode c) = .ok c
+theorem CheckedStore.encode_open (c) : CheckedStore.open c.group c.encode = .ok c
 ```
 
 Behind them, `salvage_built` and `salvage_maximal`. `buildRetry hash u` accepts each record of `u`
 once its links are present, until nothing changes. `AcceptBuilt` says some order accepted every
-record. **To prove**; `salvage_maximal` is true as stated, even with collisions, and `u.card`
-rounds of retrying are exactly enough (update §2).
+record. Proved (`Chat.lean`; `LoadSpec.lean` and `LoadApi.lean` carry them to the code);
+`salvage_maximal` is true as stated, even with collisions, and `u.card` rounds of retrying are
+exactly enough (update §2). **[amendment]**
 
 ```lean
 def AcceptBuilt (s : Store α H K) : Prop := ∃ l : List _, l.toFinset = s ∧ build hash l = s
@@ -420,12 +430,13 @@ It says the sender *holds* those records. It does not say who wrote them: a memb
 record they made up in someone else's name (update §4.4). Who wrote a record is (6).
 
 ```lean
-theorem CheckedStore.confirmed (c d) (hs) (hc : hs ⊆ c.keys) (hd : hs ⊆ d.keys) :
+theorem CheckedStore.confirmed (c d) (hs : Array Digest)
+    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
     c.reachSet hs = d.reachSet hs ∨ CollisionIn hashSpec (abs c ∪ abs d)
 ```
 
 Behind it, `confirmed_exact`, and `reach_implies_held` (a message reaches a record only if its
-sender held it). **Proved in scratch**, as (1) applied to `reachSet`, the records reachable from a
+sender held it). Proved (`Chat.lean`), as (1) applied to `reachSet`, the records reachable from a
 set of hashes; the lemma `fetched_reachSet` says that in a closed store the reachable part is
 itself fetched.
 
@@ -450,13 +461,17 @@ that it did not write (§6, the disown alarm).
 
 `authorConfirmed_sound`, a spec theorem: if an author's app is honest, meaning it disowns every
 accepted record in its own name that it did not create, then every author-confirmed record
-attributed to that author was created by it, or two records collide. **To prove** (phase A).
+attributed to that author was created by it, or two records collide. Proved (`Chat.lean`).
+`LiveFacts` is what the host knows (which records arrived live, and the disown lists of live
+messages); `HonestAuthor` is the "honest app" hypothesis. **[amendment]**
 
 `CheckedStore.classify_spec`: the app's `CLASSIFY` call computes the spec's status for every
 record:
 
 - **confirmed by author**;
-- **held by X**: a live message from another member X reaches it;
+- **held by X**: a live message from another member X reaches it. Only one name is shown: of
+  the members whose live messages reach it, the one with the smallest ACI in byte order, so every
+  device shows the same name **[amendment]**;
 - **unconfirmed**: nobody has confirmed holding it;
 - **not confirmed by author**: the author has a live message written in parallel with it (neither
   reaches the other) and no live message from the author reaches it, or a live message from the
@@ -465,8 +480,13 @@ record:
 The status is decided by links, never by arrival order, so the server cannot cause false
 accusations by reordering messages.
 
+The fourth label is `foreignMarked` in `Chat.lean`; when several labels apply, the order is
+confirmed, not confirmed, held by, unconfirmed (`status`). **[amendment]**
+
 ```lean
-theorem CheckedStore.classify_spec   -- CLASSIFY computes the spec's provenance status
+theorem CheckedStore.classify_spec (c) (facts) (d) (st) :
+    (classify c facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧ status hashSpec (abs c) (liveOf facts) (toSpec r) = st.toSpec
 ```
 
 Which records are live is host state, set by the app, not proved (§5, trusted base).
@@ -476,7 +496,7 @@ Which records are live is host state, set by the app, not proved (§5, trusted b
 Two different records never encode to the same bytes. This holds with no size bound, because
 every field of a record has a fixed size except the links, which are one array of fixed-size
 digests with its count in front. With it, a collision in the theorems above is a collision of
-SHA-256 itself, not an encoding bug. **To prove** (`Crdt/Merkle/EncodeProofs.lean`).
+SHA-256 itself, not an encoding bug. Proved (`Crdt/Merkle/EncodeProofs.lean`).
 
 ```lean
 theorem encode_injective : Function.Injective encode
@@ -579,7 +599,10 @@ about 70 lines, and checked against the NIST test vectors with `#guard`. There i
 (`decide +kernel`). `encode` is the fixed record format: `"zrdt2" ‖ chat id ‖ commitment ‖ link
 count ‖ links (sorted, no duplicates) ‖ author`. The chat id is inside, so a record from another
 chat is rejected on arrival (`WRONG_CHAT`). The commitment is computed in Lean too (`COMMIT`), so
-the host never hashes anything.
+the host never hashes anything. **[amendment]** (protocol 2) `COMMIT` also returns the opening
+(the salt and the committed bytes), `ACCEPT` returns the record's bytes, and `ACCEPT_RECORD`
+accepts a relayed record from its bytes and checks its opening (`BAD_OPENING` if it does not
+match). So the host never builds record bytes or openings either.
 
 **`zrdtd`** **[amendment]**. The app does not load Lean into Signal's window. It starts `zrdtd` as a
 child process and talks to it in frames over stdin and stdout. One dispatcher,
@@ -726,8 +749,9 @@ Details, protobuf changes, file paths and the demo script are in `APP.md`.
 - **Recovery by digest.** **[amendment]** Three new message types inside Signal's `Content`:
   `ZrdtResendRequest`, `ZrdtResend` and `ZrdtNotFound`. The request goes 1:1 to the member whose
   message referenced the digest, then to the group; replies are always 1:1. Anyone who holds the
-  record may relay it with its content. The receiver checks the record against the digest and the
-  content against the commitment, and shows it as "relayed by X". That proves it is the record that
+  record may relay it with its content. The receiver hands both to `zrdtd` (`ACCEPT_RECORD`), which
+  checks the content against the commitment before accepting the record **[amendment]**, and
+  shows it as "relayed by X". That proves it is the record that
   was linked, not who wrote it. The app then asks the author 1:1, and the author's app sends the
   original again through Signal's own resend path (within 24 hours). That copy arrives live, so it
   is confirmed by its author at once. A relayed message never changes anything outside itself, for
