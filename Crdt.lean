@@ -12,6 +12,7 @@ import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.Classify
 import Crdt.Merkle.ClassifyFast
+import Crdt.Merkle.ClassifyStatus
 import Crdt.Merkle.Api
 import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadSpec

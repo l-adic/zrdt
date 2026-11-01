@@ -7,6 +7,7 @@ import Mathlib
 import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.ClassifyFast
+import Crdt.Merkle.ClassifyStatus
 import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadApi
 
@@ -19,8 +20,8 @@ These are the advertised statements about the shipped code, `Zrdt.CheckedStore`,
 else is advertised. The axiom gate (`Test/Axioms.lean`) pins exactly these names. Each one is
 about `abs c`, the set of records the store holds, seen in the spec model (`Bridge.lean`), with
 `hashSpec` as the hash: the record digest the code computes. Each is a one-line corollary of a
-proof in `Bridge.lean`, `Refine.lean`, `LoadApi.lean`, `EncodeProofs.lean`, `ClassifyFast.lean`
-or the spec (`Defs.lean`, `Chat.lean`).
+proof in `Bridge.lean`, `Refine.lean`, `LoadApi.lean`, `EncodeProofs.lean`,
+`ClassifyStatus.lean` or the spec (`Defs.lean`, `Chat.lean`).
 
 In the order of docs/PLAN.md §3.2:
 
@@ -35,8 +36,8 @@ In the order of docs/PLAN.md §3.2:
 * `CheckedStore.encode_open`: a store's blob opens as exactly that store.
 * `CheckedStore.confirmed`: what a live message's links reach is the same in your store and in
   the sender's, or there is a collision.
-* `CheckedStore.classify_spec`: `CLASSIFY` gives each stored record the spec's status
-  (`StatusMeans`).
+* `CheckedStore.classify_spec`: `CLASSIFY` gives each stored record the spec's `status`
+  (`Chat.lean`), and nothing else a status.
 * `Zrdt.encode_injective`: different records have different encodings. It is declared in
   `EncodeProofs.lean` and not restated here; it is pinned by the gate with the others.
 
@@ -49,15 +50,17 @@ In the order of docs/PLAN.md §3.2:
 * `confirmed` asks `c.has h = true` for each `h ∈ hs` (PLAN: `hs ⊆ c.keys`).
 * `open_iff` and `salvage_spec` are about `decodeBlob` as it is, so they do not depend on how it
   frames records (lane T5: a count of `2^24` or more is refused, records in any order, repeats
-  allowed). `classify_spec` names one holder, the smallest (docs/review-2026-11-01 lead
-  decision 1, and `Chat.status` after lane T5).
+  allowed). `classify_spec` is stated with the spec's `status`, which names one holder, the
+  smallest (lead decision 1 of 2026-11-01, lane T5's `Chat.lean`); account ids are ordered byte
+  by byte (`Aci.instLinearOrder`, `ClassifyStatus.lean`), the order the code uses.
 
 **What the statements mean depends on** (the trusted surface, beyond the code under test):
 `abs`, `toSpec`, `hashSpec` (`Bridge.lean`); `specOf`, `AcceptMeans` (`Refine.lean`); the spec's
 `accept`, `digests`, `heads`, `Reach`, `Fetched`, `CollisionIn`, `AcceptBuilt`, `buildRetry`
 (`Defs.lean`, `Integrity.lean`); `WellSized`, `decodeBlob`, `encode` (`core/Zrdt/Encode.lean`).
-For `classify_spec` also: `liveOf`, `StatusMeans` (`Classify.lean`), and the spec's
-`liveRecords`, `authorConfirmed`, `foreignMarked`, `holders` (`Chat.lean`).
+For `classify_spec` also: `liveOf` (`Classify.lean`), `Status.toSpec` and the order on `Aci`
+(`ClassifyStatus.lean`), and the spec's `status`, `liveRecords`, `authorConfirmed`,
+`foreignMarked`, `holders` (`Chat.lean`).
 -/
 
 namespace Zrdt
@@ -303,37 +306,39 @@ example : Examples.s1.reachSet #[hashRecord Examples.a1] =
 
 /-- **`CLASSIFY` computes the spec's provenance status** (docs/PLAN.md §3.5). `classify c facts`
 gives digest `d` the status `st` exactly when `d` is the digest of a stored record `r` and `st`
-means, for `r`, what the spec says: `confirmedByAuthor` when `r` is confirmed by its author
-(`authorConfirmed`); otherwise `notConfirmedByAuthor` when it has the foreign marker
+is the spec's `status` of `r` (`Chat.lean`): `confirmedByAuthor` when `r` is confirmed by its
+author (`authorConfirmed`); otherwise `notConfirmedByAuthor` when it has the foreign marker
 (`foreignMarked`); otherwise `heldBy a` with `a` the smallest member (byte order) whose live
 records reach `r` (`holders`); otherwise `unconfirmed`. The spec's live facts are read from the
-host's facts (`liveOf`). -/
+host's facts (`liveOf`); `Status.toSpec` reads the code's label as the spec's (the same label).
+-/
 theorem CheckedStore.classify_spec (c : CheckedStore) (facts : Array Fact) (d : Digest)
     (st : Zrdt.Status) :
     (classify c facts)[d]? = some st ↔
-      ∃ r, c.get d = some r ∧ StatusMeans (abs c) (liveOf facts) (toSpec r) st :=
-  classify_getElem?_iff c facts d st
+      ∃ r, c.get d = some r ∧
+        Crdt.Merkle.status hashSpec (abs c) (liveOf facts) (toSpec r) = st.toSpec :=
+  CheckedStore.classify_eq_some_iff c facts d st
 
 example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
     (classify Examples.s1 facts)[d]? = some st ↔
       ∃ r, Examples.s1.get d = some r ∧
-        StatusMeans (abs Examples.s1) (liveOf facts) (toSpec r) st :=
+        Crdt.Merkle.status hashSpec (abs Examples.s1) (liveOf facts) (toSpec r) = st.toSpec :=
   CheckedStore.classify_spec _ _ _ _
-
-/-- `s1` holds `a1` under its digest (computed by the kernel). -/
-theorem Examples.s1_get_a1 : Examples.s1.get (hashRecord Examples.a1) = some Examples.a1 := by
-  decide +kernel
 
 -- With no facts, Alice's `a1` in `s1` is `unconfirmed`, and `CLASSIFY` cannot say otherwise.
 example : (classify Examples.s1 #[])[hashRecord Examples.a1]? = some .unconfirmed := by
   rw [CheckedStore.classify_spec]
   refine ⟨_, Examples.s1_get_a1, ?_⟩
-  simp [StatusMeans, authorConfirmed, foreignMarked, holders, liveRecords, liveOf, liveList]
+  simp [Crdt.Merkle.status, Status.toSpec, authorConfirmed, foreignMarked, holders, liveRecords,
+    liveOf, liveList]
 
 example : (classify Examples.s1 #[])[hashRecord Examples.a1]? ≠ some .confirmedByAuthor := by
   intro h
-  obtain ⟨r, -, hs⟩ := (CheckedStore.classify_spec _ _ _ _).mp h
-  simp [StatusMeans, authorConfirmed, liveRecords, liveOf, liveList] at hs
+  obtain ⟨r, hr, hs⟩ := (CheckedStore.classify_spec _ _ _ _).mp h
+  rw [Examples.s1_get_a1, Option.some.injEq] at hr
+  subst hr
+  simp [Crdt.Merkle.status, Status.toSpec, authorConfirmed, foreignMarked, holders, liveRecords,
+    liveOf, liveList] at hs
 
 -- Once `a1` is known to have arrived live, it is confirmed by its author.
 example : (classify Examples.s1 #[⟨hashRecord Examples.a1, .live, #[]⟩])[hashRecord Examples.a1]? =
@@ -342,13 +347,15 @@ example : (classify Examples.s1 #[⟨hashRecord Examples.a1, .live, #[]⟩])[has
   refine ⟨_, Examples.s1_get_a1, ?_⟩
   have hmem : toSpec Examples.a1 ∈ abs Examples.s1 :=
     ((Examples.s1.get_eq_some_iff).mp Examples.s1_get_a1).1
-  exact ⟨⟨toSpec Examples.a1, Finset.mem_filter.mpr ⟨hmem, by simp [liveOf, liveList], rfl⟩,
-    .head (Finset.mem_singleton_self _)⟩, fun y _ => by simp [liveOf, liveList]⟩
+  have hac : authorConfirmed hashSpec (abs Examples.s1)
+      (liveOf #[⟨hashRecord Examples.a1, .live, #[]⟩]) (toSpec Examples.a1) :=
+    ⟨⟨toSpec Examples.a1, Finset.mem_filter.mpr ⟨hmem, by simp [liveOf, liveList], rfl⟩,
+      .head (Finset.mem_singleton_self _)⟩, fun y _ => by simp [liveOf, liveList]⟩
+  simp [Crdt.Merkle.status, Status.toSpec, hac]
 
--- A record with no live record anywhere is `unconfirmed`, and not `confirmedByAuthor`.
-example (x : SpecRec) : StatusMeans ∅ ⟨∅, ∅⟩ x .unconfirmed ∧
-    ¬ StatusMeans ∅ ⟨∅, ∅⟩ x .confirmedByAuthor := by
-  simp [StatusMeans, authorConfirmed, foreignMarked, holders, liveRecords]
+-- A record with no live record anywhere is `unconfirmed` (so not `confirmedByAuthor`).
+example (x : SpecRec) : Crdt.Merkle.status hashSpec ∅ ⟨∅, ∅⟩ x = .unconfirmed := by
+  simp [Crdt.Merkle.status, authorConfirmed, foreignMarked, holders, liveRecords]
 
 /-! ## The encoding
 
