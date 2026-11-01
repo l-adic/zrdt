@@ -772,6 +772,20 @@ theorem acceptRecord_accepted {build : String} {t t' : Table} {chat : String} {b
         · simp at h
       · simp at h
 
+/-- **`COMMIT`'s opening matches its commitment.** If `COMMIT` replies with commitment `d` and
+opening `o`, then `o` passes `openingMatches` for the same group and author: the opening check of
+`ACCEPT_RECORD` accepts it with a record of that group, author and commit. -/
+theorem commit_openingMatches {build : String} {t t' : Table} {g : GroupId} {a : Aci} {n : Nonce}
+    {m : ByteArray} {d : Digest} {o : ByteArray}
+    (h : run build t (.commit g a n m) = (.committed d o, t')) : openingMatches g a d o = true := by
+  simp only [run] at h
+  split at h
+  · rename_i d' o' hc
+    simp only [Prod.mk.injEq, Reply.committed.injEq] at h
+    obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+    exact commitWithOpening_matches hc
+  · simp at h
+
 /-- Answer one request payload: the reply payload and the new table. A request that cannot be
 read gets `UNKNOWN_OP` or `BAD_REQUEST` and changes nothing. -/
 def step (build : String) (t : Table) (payload : ByteArray) : ByteArray × Table :=

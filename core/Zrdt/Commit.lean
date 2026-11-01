@@ -28,8 +28,10 @@ than 10 bytes, a key does not fit in 32 bits, a field number is 0, or a wire typ
 (3 and 4 are protobuf's old "groups", which Signal's `DataMessage` does not use). The empty input
 is a valid, empty message.
 
-This code is not proved. It is small and in the trusted base. The examples below and the vectors
-(`Zrdt.Vectors`) pin what it does.
+What the scan keeps is not proved against a protobuf parser: that part is small and in the
+trusted base, and the examples below and the vectors (`Zrdt.Vectors`) pin what it does. What is
+proved: removing the fields again changes nothing (`committedBytes_idem`), and the opening `COMMIT`
+returns always matches its commitment (`commitWithOpening_matches`).
 -/
 
 namespace Zrdt
@@ -227,6 +229,368 @@ theorem openingMatches_spec {group : GroupId} {author : Aci} {c : Digest} {o : B
   · rename_i n m hs
     obtain ⟨h1, h2⟩ := of_decide_eq_true h
     exact ⟨n, m, splitOpening_eq hs, h1, h2⟩
+
+/-! ## Removing the fields again changes nothing
+
+`committedBytes_idem`: the committed bytes are a well-formed message with no field 15 or 200, so
+removing those fields from them again gives them back. `commitWithOpening_matches`: so the opening
+that `COMMIT` returns always passes `openingMatches`, under the same group and author. The proof
+glues the kept fields back together (`chunks`), and shows that reading the glued bytes finds the
+same fields, moved (`packed`): a field read only looks at its own bytes (`readField_shift`). -/
+
+/-- A varint read ends after it starts, and inside the input. -/
+theorem readVarint_go_bounds {b : ByteArray} : ∀ {left i shift acc v e : Nat},
+    readVarint.go b i shift acc left = some (v, e) → i < e ∧ e ≤ b.size
+  | 0, _, _, _, _, _, h => by simp [readVarint.go] at h
+  | left + 1, i, shift, acc, v, e, h => by
+    unfold readVarint.go at h
+    split at h
+    · rename_i hi
+      dsimp only at h
+      split at h
+      · simp only [Option.some.injEq, Prod.mk.injEq] at h
+        omega
+      · have := readVarint_go_bounds h
+        omega
+    · simp at h
+
+/-- A varint read only looks at its own bytes: the same bytes at another place, in another
+input, read the same. -/
+theorem readVarint_go_shift {b b' : ByteArray} : ∀ {left i i' shift acc v e : Nat},
+    readVarint.go b i shift acc left = some (v, e) →
+    (∀ k, i + k < e → b'[i' + k]? = b[i + k]?) →
+    readVarint.go b' i' shift acc left = some (v, i' + (e - i))
+  | 0, _, _, _, _, _, _, h, _ => by simp [readVarint.go] at h
+  | left + 1, i, i', shift, acc, v, e, h, hb => by
+    have ⟨hie, heb⟩ := readVarint_go_bounds h
+    have h0 := hb 0 (by omega)
+    simp only [Nat.add_zero] at h0
+    unfold readVarint.go at h ⊢
+    have hi : i < b.size := by omega
+    simp only [hi, ↓reduceDIte] at h
+    rw [getElem?_pos b i hi] at h0
+    have hi' : i' < b'.size := by
+      rcases Nat.lt_or_ge i' b'.size with hlt | hge
+      · exact hlt
+      · rw [getElem?_neg b' i' (by omega)] at h0; cases h0
+    rw [getElem?_pos b' i' hi', Option.some.injEq] at h0
+    simp only [hi', ↓reduceDIte, h0]
+    split at h
+    · rename_i hlt
+      simp only [hlt, ↓reduceIte]
+      simp only [Option.some.injEq, Prod.mk.injEq] at h ⊢
+      omega
+    · rename_i hlt
+      simp only [hlt, ↓reduceIte]
+      have := readVarint_go_shift (i' := i' + 1) h (fun k hk => by
+        have := hb (k + 1) (by omega)
+        rwa [show i' + (k + 1) = i' + 1 + k by omega, show i + (k + 1) = i + 1 + k by omega]
+          at this)
+      rw [this]
+      have := readVarint_go_bounds h
+      congr 2
+      omega
+
+/-- See `readVarint_go_bounds`. -/
+theorem readVarint_bounds {b : ByteArray} {i v e : Nat} (h : readVarint b i = some (v, e)) :
+    i < e ∧ e ≤ b.size := readVarint_go_bounds h
+
+/-- See `readVarint_go_shift`. -/
+theorem readVarint_shift {b b' : ByteArray} {i i' v e : Nat} (h : readVarint b i = some (v, e))
+    (hb : ∀ k, i + k < e → b'[i' + k]? = b[i + k]?) :
+    readVarint b' i' = some (v, i' + (e - i)) := readVarint_go_shift h hb
+
+/-- A field read only looks at its own bytes: it ends after it starts and inside the input, and
+the same bytes at another place, in another input with room for them, read as the same field
+moved there. -/
+theorem readField_shift {b b' : ByteArray} {pos pos' : Nat} {f : Field}
+    (h : readField b pos = some f)
+    (hb : ∀ k, pos + k < f.stop → b'[pos' + k]? = b[pos + k]?) :
+    f.start = pos ∧ pos < f.stop ∧ f.stop ≤ b.size ∧
+      (pos' + (f.stop - pos) ≤ b'.size →
+        readField b' pos' = some ⟨f.num, pos', pos' + (f.stop - pos)⟩) := by
+  have hsub : ∀ q, pos ≤ q → ∀ k, q + k < f.stop → b'[pos' + (q - pos) + k]? = b[q + k]? := by
+    intro q hq k hk
+    have := hb (q - pos + k) (by omega)
+    rwa [show pos + (q - pos + k) = q + k by omega,
+      show pos' + (q - pos + k) = pos' + (q - pos) + k by omega] at this
+  unfold readField at h ⊢
+  cases hk : readVarint b pos with
+  | none => simp [hk] at h
+  | some kp =>
+    obtain ⟨key, p⟩ := kp
+    have ⟨hpp, hpb⟩ := readVarint_bounds hk
+    simp only [hk, Option.bind_eq_bind, Option.bind_some] at h
+    by_cases hg : key < 2 ^ 32 ∧ key >>> 3 ≠ 0
+    case neg => simp [guard, hg, failure] at h
+    have hgt : (key < 2 ^ 32 ∧ key >>> 3 ≠ 0) = True := eq_true hg
+    simp only [guard, hgt, ite_true, pure, Option.bind_some] at h
+    have hk' : ∀ e, p ≤ e → pos + (e - pos) ≤ f.stop →
+        readVarint b' pos' = some (key, pos' + (p - pos)) := fun e hpe hef =>
+      readVarint_shift hk (fun k hk => by simpa using hsub pos (Nat.le_refl _) k (by omega))
+    split at h
+    · rename_i heq
+      cases hv : readVarint b p with
+      | none => simp [hv] at h
+      | some w =>
+        obtain ⟨v, e⟩ := w
+        have ⟨hpe, heb⟩ := readVarint_bounds hv
+        simp only [hv, Option.map_some, Option.bind_some, Option.some.injEq] at h
+        subst h
+        have hv' := readVarint_shift (b' := b') (i' := pos' + (p - pos)) hv
+          (fun k hk => hsub p (by omega) k (by simp; omega))
+        simp only [hk' e (by omega) (by simp; omega), hv', Option.bind_eq_bind, Option.bind_some,
+          guard, hgt, ite_true, pure, Option.map_some, heq]
+        refine ⟨trivial, by omega, heb, fun _ => ?_⟩
+        congr 2
+        omega
+    · rename_i heq
+      split at h
+      · rename_i h8
+        simp only [Option.some.injEq] at h
+        subst h
+        simp only [hk' (p + 8) (by omega) (by simp; omega), Option.bind_eq_bind, Option.bind_some,
+          guard, hgt, ite_true, pure, heq]
+        refine ⟨trivial, by omega, h8, fun hsz => ?_⟩
+        split
+        · congr 2; omega
+        · rename_i hn; exact absurd (by omega) hn
+      · simp at h
+    · rename_i heq
+      cases hv : readVarint b p with
+      | none => simp [hv] at h
+      | some w =>
+        obtain ⟨len, q⟩ := w
+        have ⟨hpq, hqb⟩ := readVarint_bounds hv
+        simp only [hv, Option.bind_some] at h
+        split at h
+        · rename_i hql
+          simp only [Option.some.injEq] at h
+          subst h
+          have hv' := readVarint_shift (b' := b') (i' := pos' + (p - pos)) hv
+            (fun k hk => hsub p (by omega) k (by simp; omega))
+          simp only [hk' (q + len) (by omega) (by simp; omega), hv', Option.bind_eq_bind,
+            Option.bind_some, guard, hgt, ite_true, pure, heq]
+          refine ⟨trivial, by omega, hql, fun hsz => ?_⟩
+          split
+          · congr 2; omega
+          · rename_i hn; exact absurd (by omega) hn
+        · simp at h
+    · rename_i heq
+      split at h
+      · rename_i h4
+        simp only [Option.some.injEq] at h
+        subst h
+        simp only [hk' (p + 4) (by omega) (by simp; omega), Option.bind_eq_bind, Option.bind_some,
+          guard, hgt, ite_true, pure, heq]
+        refine ⟨trivial, by omega, h4, fun hsz => ?_⟩
+        split
+        · congr 2; omega
+        · rename_i hn; exact absurd (by omega) hn
+      · simp at h
+    · simp at h
+
+/-- A field read from `b` at `pos` starts at `pos`, takes at least one byte, and ends inside `b`. -/
+theorem readField_bounds {b : ByteArray} {pos : Nat} {f : Field} (h : readField b pos = some f) :
+    f.start = pos ∧ pos < f.stop ∧ f.stop ≤ b.size :=
+  let ⟨h1, h2, h3, _⟩ := readField_shift (b' := b) (pos' := pos) h (fun _ _ => rfl)
+  ⟨h1, h2, h3⟩
+
+/-- Every field that `fields.go` returns, past those in `acc`, is read at its own start. -/
+theorem fields_go_mem {b : ByteArray} : ∀ {fuel pos acc fs}, fields.go b pos acc fuel = some fs →
+    ∀ f ∈ fs, f ∈ acc ∨ readField b f.start = some f
+  | 0, _, _, _, h => by simp [fields.go] at h
+  | fuel + 1, pos, acc, fs, h => by
+    unfold fields.go at h
+    split at h
+    · cases hf : readField b pos with
+      | none => simp [hf] at h
+      | some f =>
+        simp only [hf, Option.bind_eq_bind, Option.bind_some] at h
+        intro g hg
+        rcases fields_go_mem h g hg with h1 | h1
+        · rw [Array.mem_push] at h1
+          rcases h1 with h1 | rfl
+          · exact Or.inl h1
+          · right; rw [(readField_bounds hf).1]; exact hf
+        · exact Or.inr h1
+    · simp only [Option.some.injEq] at h
+      subst h
+      exact fun f hf => Or.inl hf
+
+/-! ### Gluing fields back together -/
+
+/-- A byte of `P ++ X ++ Y` in the `X` part. -/
+theorem getElem?_mid {P X Y : ByteArray} {k : Nat} (hk : k < X.size) :
+    (P ++ X ++ Y)[P.size + k]? = X[k]? := by
+  have h1 : P.size + k < (P ++ X ++ Y).size := by simp; omega
+  rw [getElem?_pos (P ++ X ++ Y) _ h1, getElem?_pos X k hk, Option.some.injEq,
+    ByteArray.getElem_append_left (by simp; omega), ByteArray.getElem_append_right (by omega)]
+  simp
+
+/-- A byte of `b.extract i j`, read in `b`. -/
+theorem getElem?_extract' {b : ByteArray} {i j k : Nat} (hk : i + k < j) (hj : j ≤ b.size) :
+    (b.extract i j)[k]? = b[i + k]? := by
+  have h1 : k < (b.extract i j).size := by simp; omega
+  rw [getElem?_pos (b.extract i j) k h1, getElem?_pos b (i + k) (by omega),
+    ByteArray.getElem_extract]
+
+/-- The bytes of the fields `fs` of `b`, one after the other. -/
+def chunks (b : ByteArray) : List Field → ByteArray
+  | [] => ByteArray.empty
+  | f :: fs => b.extract f.start f.stop ++ chunks b fs
+
+/-- The fields `fs`, moved so that the first starts at `pos` and each starts where the one before
+stops. -/
+def packed (pos : Nat) : List Field → List Field
+  | [] => []
+  | f :: fs => ⟨f.num, pos, pos + (f.stop - f.start)⟩ :: packed (pos + (f.stop - f.start)) fs
+
+/-- A field read from `b` takes at least one byte, so the glued bytes are at least as many as the
+fields. -/
+theorem length_le_size_chunks {b : ByteArray} :
+    ∀ {fs : List Field}, (∀ f ∈ fs, readField b f.start = some f) → fs.length ≤ (chunks b fs).size
+  | [], _ => by simp
+  | f :: fs, h => by
+    have ⟨_, h1, h2⟩ := readField_bounds (h f (by simp))
+    have := length_le_size_chunks (fun g hg => h g (List.mem_cons_of_mem _ hg))
+    simp only [chunks, ByteArray.size_append, ByteArray.size_extract, List.length_cons]
+    omega
+
+/-- Reading the glued bytes gives back the glued fields, moved. -/
+theorem fields_go_chunks {b s : ByteArray} :
+    ∀ {R : List Field} {P : ByteArray} {acc : Array Field} {fuel : Nat},
+      (∀ f ∈ R, readField b f.start = some f) → R.length < fuel → s = P ++ chunks b R →
+      fields.go s P.size acc fuel = some (acc ++ (packed P.size R).toArray)
+  | [], P, acc, fuel + 1, _, _, hs => by
+    unfold fields.go
+    subst hs
+    simp [chunks, packed]
+  | f :: R, P, acc, fuel + 1, hR, hfuel, hs => by
+    have hf := hR f (by simp)
+    have ⟨hst, hlt, hle⟩ := readField_bounds hf
+    have hsz : (b.extract f.start f.stop).size = f.stop - f.start := by simp; omega
+    have hs' : s = P ++ b.extract f.start f.stop ++ chunks b R := by
+      rw [hs, chunks, ByteArray.append_assoc]
+    have hread : readField s P.size = some ⟨f.num, P.size, P.size + (f.stop - f.start)⟩ := by
+      have := (readField_shift (b' := s) (pos' := P.size) hf (fun k hk => by
+        rw [hs', getElem?_mid (by omega), getElem?_extract' (by omega) hle])).2.2.2
+      rw [hst] at this
+      exact this (by rw [hs']; simp; omega)
+    unfold fields.go
+    have hpos : P.size < s.size := by rw [hs']; simp; omega
+    simp only [hpos, ↓reduceIte, hread, Option.bind_eq_bind, Option.bind_some]
+    have ih := fields_go_chunks (s := s) (P := P ++ b.extract f.start f.stop)
+      (acc := acc.push ⟨f.num, P.size, P.size + (f.stop - f.start)⟩) (fuel := fuel)
+      (fun g hg => hR g (List.mem_cons_of_mem _ hg)) (by simp at hfuel; omega) hs'
+    rw [ByteArray.size_append, hsz] at ih
+    rw [ih]
+    simp [packed]
+
+/-- Removing nothing from the glued bytes gives them back. -/
+theorem foldl_packed {b s : ByteArray} {drop : Nat → Bool} :
+    ∀ {R : List Field} {P out : ByteArray},
+      (∀ f ∈ R, readField b f.start = some f ∧ drop f.num = false) → s = P ++ chunks b R →
+      (packed P.size R).foldl
+          (fun out f => if drop f.num then out else out ++ s.extract f.start f.stop) out =
+        out ++ chunks b R
+  | [], _, _, _, _ => by simp [packed, chunks]
+  | f :: R, P, out, hR, hs => by
+    have ⟨hf, hd⟩ := hR f (by simp)
+    have ⟨_, hlt, hle⟩ := readField_bounds hf
+    have hsz : (b.extract f.start f.stop).size = f.stop - f.start := by simp; omega
+    have hs' : s = P ++ b.extract f.start f.stop ++ chunks b R := by
+      rw [hs, chunks, ByteArray.append_assoc]
+    have hex : s.extract P.size (P.size + (f.stop - f.start)) = b.extract f.start f.stop := by
+      rw [hs', ByteArray.append_assoc, ByteArray.extract_append, Nat.sub_self,
+        Nat.add_sub_cancel_left, ByteArray.extract_append_eq_left hsz.symm]
+      rw [ByteArray.extract_eq_empty_iff.mpr (Nat.min_le_right _ _), ByteArray.empty_append]
+    have ih := foldl_packed (P := P ++ b.extract f.start f.stop)
+      (out := out ++ b.extract f.start f.stop) (fun g hg => hR g (List.mem_cons_of_mem _ hg)) hs'
+    rw [ByteArray.size_append, hsz] at ih
+    simp only [packed, List.foldl_cons, hd, Bool.false_eq_true, ↓reduceIte, hex]
+    rw [ih, chunks, ByteArray.append_assoc]
+
+/-- The fold in `dropFields` glues the bytes of the kept fields. -/
+theorem foldl_keep {b : ByteArray} {drop : Nat → Bool} : ∀ (fs : List Field) (out : ByteArray),
+    fs.foldl (fun out f => if drop f.num then out else out ++ b.extract f.start f.stop) out =
+      out ++ chunks b (fs.filter fun f => !drop f.num)
+  | [], out => by simp [chunks]
+  | f :: fs, out => by
+    simp only [List.foldl_cons]
+    rw [foldl_keep fs]
+    by_cases hd : drop f.num
+    · simp [hd]
+    · simp [hd, chunks, ByteArray.append_assoc]
+
+/-- **Removing fields twice changes nothing.** If `dropFields drop b` is `s`, then `s` is
+well-formed, and removing the same fields from it again gives `s`. -/
+theorem dropFields_idem {drop : Nat → Bool} {b s : ByteArray} (h : dropFields drop b = some s) :
+    dropFields drop s = some s := by
+  unfold dropFields at h
+  cases hf : fields b with
+  | none => simp [hf] at h
+  | some fs =>
+    simp only [hf, Option.map_some, Option.some.injEq] at h
+    rw [← Array.foldl_toList, foldl_keep] at h
+    have he : ByteArray.emptyWithCapacity b.size = ByteArray.empty := rfl
+    rw [he, ByteArray.empty_append] at h
+    generalize hKdef : fs.toList.filter (fun f => !drop f.num) = K at h
+    have hK : ∀ f ∈ K, readField b f.start = some f ∧ drop f.num = false := by
+      intro f hfK
+      rw [← hKdef, List.mem_filter] at hfK
+      obtain ⟨hmem, hd⟩ := hfK
+      refine ⟨?_, by simpa using hd⟩
+      rcases fields_go_mem hf f (by simpa using hmem) with h1 | h1
+      · simp at h1
+      · exact h1
+    have hlen := length_le_size_chunks (fun f hf => (hK f hf).1)
+    have hfs : fields s = some (#[] ++ (packed 0 K).toArray) := by
+      have := fields_go_chunks (s := s) (P := ByteArray.empty) (acc := #[]) (fuel := s.size + 1)
+        (fun f hf => (hK f hf).1) (by rw [← h]; omega) (by rw [← h, ByteArray.empty_append])
+      unfold fields; simpa using this
+    unfold dropFields
+    rw [hfs]
+    have hfold := foldl_packed (s := s) (drop := drop) (P := ByteArray.empty)
+      (out := ByteArray.empty) hK (by rw [← h, ByteArray.empty_append])
+    simp only [ByteArray.size_empty, ByteArray.empty_append] at hfold
+    simp only [Option.map_some, Option.some.injEq, Array.empty_append, List.foldl_toArray']
+    have he' : ByteArray.emptyWithCapacity s.size = ByteArray.empty := rfl
+    rw [he', hfold, h]
+
+/-- **The committed bytes are already committed bytes.** Removing fields 15 and 200 again changes
+nothing. -/
+theorem committedBytes_idem {b s : ByteArray} (h : committedBytes b = some s) :
+    committedBytes s = some s :=
+  dropFields_idem h
+
+/-- An opening made of a nonce and bytes splits back into them. -/
+theorem splitOpening_append (n : Nonce) (m : ByteArray) :
+    splitOpening (n.bytes ++ m) = some (n, m) := by
+  obtain ⟨nb, hn⟩ := n
+  have h1 : (nb ++ m).extract 0 32 = nb := ByteArray.extract_append_eq_left hn.symm
+  have h2 : (nb ++ m).extract 32 (nb ++ m).size = m :=
+    ByteArray.extract_append_eq_right hn.symm (by simp [hn])
+  simp only [splitOpening, h1, h2, Nonce.ofBytes?, hn, Option.bind_eq_bind, Option.pure_def]
+  rfl
+
+/-- **`COMMIT`'s opening matches its commitment.** The opening that `commitWithOpening` returns
+next to commitment `c` passes `openingMatches` for the same group and author: it holds no field 15
+or 200, and its commitment is `c`. -/
+theorem commitWithOpening_matches {group : GroupId} {author : Aci} {nonce : Nonce}
+    {dataMessage : ByteArray} {c : Digest} {o : ByteArray}
+    (h : commitWithOpening group author nonce dataMessage = some (c, o)) :
+    openingMatches group author c o = true := by
+  unfold commitWithOpening at h
+  cases hs : committedBytes dataMessage with
+  | none => simp [hs] at h
+  | some s =>
+    simp only [hs, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    have hidem := committedBytes_idem hs
+    unfold openingMatches
+    rw [splitOpening_append]
+    simp [hidem, commit]
 
 /-! ## Examples -/
 

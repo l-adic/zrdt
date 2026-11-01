@@ -243,8 +243,8 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 #guard_msgs in #print axioms Zrdt.encode_injective
 
 -- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
--- above stand on (`Crdt/Merkle/Chat.lean`), and the two checks of lane T5 in the shipped code
--- (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
+-- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
+-- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
 -- axiom in them fails the build too; they are not part of what docs/PLAN.md §3.2 promises, and
 -- `comparator.json` does not list them.
 
@@ -265,6 +265,17 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.openingMatches_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.openingMatches_spec
+
+-- `COMMIT`'s opening always passes `openingMatches` (`core/Zrdt/Commit.lean`, `Proto.lean`).
+
+/-- info: 'Zrdt.committedBytes_idem' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.committedBytes_idem
+
+/-- info: 'Zrdt.commitWithOpening_matches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.commitWithOpening_matches
+
+/-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
