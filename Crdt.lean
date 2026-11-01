@@ -11,4 +11,5 @@ import Crdt.Merkle.Chat
 import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.Classify
+import Crdt.Merkle.ClassifyFast
 import Crdt.Merkle.Api
