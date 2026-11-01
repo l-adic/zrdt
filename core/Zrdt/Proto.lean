@@ -118,7 +118,9 @@ under one chat key a store only grows, until `CLOSE`. A failed `OPEN`, `SALVAGE`
 changes nothing. `CLOSE` on a chat key that is not in use replies `OK`.
 
 `ACCEPT` and `MERGE` take the store out of the table before they change it, and put the result
-back. The table then holds no second reference to the store, so `accept` updates it in place.
+back. For `ACCEPT` the table then holds no second reference to the store, so `accept` updates it
+in place. `MERGE` keeps the original to put back if the merge fails; the merged store shares most
+of its tree with it.
 -/
 
 namespace Zrdt.Proto
