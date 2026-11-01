@@ -41,6 +41,8 @@ the requested chat, and then load its records (`openRecords`, `salvageRecords`),
   as above, and `dropped` the digests of every batch record not stored.
 - `salvageRecords_ok_of`, `salvage_ok_of`: salvage refuses only for `TOO_LARGE`, `WRONG_CHAT` or a
   real collision (and `MALFORMED` for bytes that do not decode).
+- `salvageRecords_noCollision`: and it does refuse every collision: a successful salvage had none
+  (`noCollision_of_findCollision`).
 
 `LoadSpec.lean` has the model's side: `buildRetry` is inside every store that "takes in" the
 batch, which is what `acceptAll_closed` gives. Together: `salvage_spec`, and the "if" direction of
@@ -505,6 +507,129 @@ theorem findCollision_eq_none {c : CheckedStore} {left : Array Rec}
           cases hd
           exact ⟨hr, hk⟩
         · exact h0 d o hd
+
+/-- What `findCollision` looks up for a digest: the stored record, or else the one seen so far. -/
+def lookup (c : CheckedStore) (seen : RecMap) (d : Digest) : Option Rec :=
+  (c.get d).orElse fun _ => seen[d]?
+
+example : lookup (empty Examples.group) ∅ (hashRecord Examples.a1) = none := by
+  simp [lookup, get, empty]
+
+/-- Adding a record at a digest where the lookup found nothing changes no other lookup that
+found something. -/
+theorem lookup_insert {c : CheckedStore} {seen : RecMap} {d d' : Digest} {y z : Rec}
+    (hnone : lookup c seen d' = none) (h : lookup c seen d = some z) :
+    lookup c (seen.insert d' y) d = some z := by
+  unfold lookup at *
+  cases hg : c.get d with
+  | some w => simp_all [Option.orElse]
+  | none =>
+    simp only [hg, Option.orElse] at h ⊢
+    rw [Std.ExtTreeMap.getElem?_insert]
+    split
+    · rename_i hk
+      rw [Std.LawfulEqCmp.compare_eq_iff_eq] at hk
+      subst hk
+      cases hg' : c.get d' with
+      | some w => rw [hg] at hg'; cases hg'
+      | none => simp [hg', Option.orElse, h] at hnone
+    · exact h
+
+/-- The fold inside `findCollision`, given by what each step does. If it ends with nothing
+found, then nothing was found before, every lookup that found a record still finds it, and every
+record of the list is what the final lookup finds at its digest. -/
+theorem fold_lookup {c : CheckedStore} {F : RecMap × DigestSet → Rec → RecMap × DigestSet}
+    (h1 : ∀ seen found y, lookup c seen (hashRecord y) = some y → F (seen, found) y = (seen, found))
+    (h2 : ∀ seen found y z, lookup c seen (hashRecord y) = some z → z ≠ y →
+      F (seen, found) y = (seen, found.insert (hashRecord y)))
+    (h3 : ∀ seen found y, lookup c seen (hashRecord y) = none →
+      F (seen, found) y = (seen.insert (hashRecord y) y, found)) :
+    ∀ (l : List Rec) (seen : RecMap) (found : DigestSet), (l.foldl F (seen, found)).2 = ∅ →
+      found = ∅ ∧
+        (∀ d z, lookup c seen d = some z → lookup c (l.foldl F (seen, found)).1 d = some z) ∧
+        ∀ y ∈ l, lookup c (l.foldl F (seen, found)).1 (hashRecord y) = some y := by
+  intro l
+  induction l with
+  | nil => intro seen found h; exact ⟨h, fun _ _ h => h, by simp⟩
+  | cons y ys ih =>
+    intro seen found h
+    simp only [List.foldl_cons] at h ⊢
+    cases hl : lookup c seen (hashRecord y) with
+    | some z =>
+      by_cases hz : z = y
+      · subst hz
+        rw [h1 _ _ _ hl] at h ⊢
+        obtain ⟨hf, hst, hall⟩ := ih seen found h
+        refine ⟨hf, hst, ?_⟩
+        intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact hst _ _ hl
+        · exact hall x hx
+      · rw [h2 _ _ _ _ hl hz] at h
+        exact absurd (ih seen _ h).1 Std.ExtTreeSet.insert_ne_empty
+    | none =>
+      rw [h3 _ _ _ hl] at h ⊢
+      obtain ⟨hf, hst, hall⟩ := ih _ found h
+      have hy : lookup c (seen.insert (hashRecord y) y) (hashRecord y) = some y := by
+        unfold lookup at hl ⊢
+        cases hg : c.get (hashRecord y) with
+        | some w => simp [hg, Option.orElse] at hl
+        | none => simp [Option.orElse]
+      refine ⟨hf, fun d z hd => hst d z (lookup_insert hl hd), ?_⟩
+      intro x hx
+      rcases List.mem_cons.mp hx with rfl | hx
+      · exact hst _ _ hy
+      · exact hall x hx
+
+/-- **`findCollision` is right:** when it finds nothing, no record left over shares its digest
+with a different record left over or stored. -/
+theorem noCollision_of_findCollision {c : CheckedStore} {left : Array Rec}
+    (h : findCollision c (withDigests left) = none) :
+    ∀ x ∈ left, ∀ y, (y ∈ left ∨ y ∈ c.records) → hashRecord x = hashRecord y → x = y := by
+  simp only [findCollision, withDigests, ← Array.foldl_toList, Array.toList_map, List.foldl_map,
+    Std.ExtTreeSet.min?_eq_none_iff] at h
+  obtain ⟨-, -, hall⟩ := fold_lookup (c := c)
+    (fun seen found y hl => by simp only [lookup] at hl; dsimp only; rw [hl]; simp)
+    (fun seen found y z hl hz => by simp only [lookup] at hl; dsimp only; rw [hl]; simp [hz])
+    (fun seen found y hl => by simp only [lookup] at hl; dsimp only; rw [hl])
+    left.toList ∅ ∅ h
+  intro x hx y hy hxy
+  have hlx := hall x (Array.mem_toList_iff.mpr hx)
+  rcases hy with hy | hy
+  · have hly := hall y (Array.mem_toList_iff.mpr hy)
+    rw [hxy, hly] at hlx
+    exact (Option.some.inj hlx).symm
+  · have hs : c.get (hashRecord y) = some y := mem_records_iff.mp hy
+    unfold lookup at hlx
+    rw [hxy, hs] at hlx
+    exact (Option.some.inj hlx).symm
+
+/-- **A successful salvage had no collision.** If `salvageRecords g u` loads something, no two
+different records of `u` have the same digest. -/
+theorem salvageRecords_noCollision {g : GroupId} {u : Array Rec} {s : Salvaged}
+    (h : salvageRecords g u = .ok s) : NoCollision u := by
+  unfold salvageRecords at h
+  split at h
+  · simp at h
+  have hleft := @mem_acceptAll_left (empty g) u
+  have hstore := noCollision_records ((empty g).acceptAll u).1
+  generalize (empty g).acceptAll u = res at h hleft hstore
+  obtain ⟨e, left⟩ := res
+  dsimp only at h hleft hstore
+  split at h
+  · simp at h
+  rename_i hf
+  have hcol := noCollision_of_findCollision hf
+  -- a record of `u` is left over or stored
+  have hor : ∀ y ∈ u, y ∈ left ∨ y ∈ e.records := fun y hy =>
+    if hl : y ∈ left then Or.inl hl
+    else Or.inr (Classical.byContradiction fun hn => hl (hleft.mpr ⟨hy, hn⟩))
+  intro x hx y hy hxy
+  rcases hor x hx with hxl | hxs
+  · exact hcol x hxl y (hor y hy) hxy
+  · rcases hor y hy with hyl | hys
+    · exact (hcol y hyl x (Or.inr hxs) hxy.symm).symm
+    · exact hstore x hxs y hys hxy
 
 /-- **When salvage succeeds.** `salvageRecords` loads something whenever the records are within
 the size limits, all of chat `g`, and no two different records share a digest. So it refuses
