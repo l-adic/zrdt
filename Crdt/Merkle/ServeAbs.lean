@@ -160,7 +160,7 @@ theorem mem_boundarySpec {me : Me} {d : Digest} : d ∈ boundarySpec me ↔ d �
 /-! ## The walks, in the spec's words -/
 
 /-- `Serve.linkedByMap` is `linkedBy` of `core/Zrdt/Provenance.lean`: the same fold. -/
-theorem linkedByMap_eq (c : CheckedStore) : linkedByMap c = linkedBy c := rfl
+theorem linkedByMap_eq (c : CheckedStore) : linkedByMap c.raw = linkedBy c := rfl
 
 /-- Reaching from a list of start digests is reaching from one of them. -/
 theorem walkReach_iff_exists {β : Type} {m : Std.ExtTreeMap Digest β compare}
@@ -190,15 +190,16 @@ theorem mem_walk_linkedBy (c : CheckedStore) (L : List Digest) {x : Digest} :
 
 /-- `sinceReach` is the spec's reachability from `since` joined with the responder's own. -/
 theorem mem_sinceReach {c : CheckedStore} {q : Query} {d : Digest} :
-    d ∈ sinceReach c q ↔
+    d ∈ sinceReach c.raw q ↔
       d ∈ c.raw.map ∧ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset d := by
-  rw [sinceReach, CheckedStore.reachSet, mem_walk_iff, CheckedStore.walkReach_iff]
+  rw [sinceReach, ← CheckedStore.reachSet_raw, CheckedStore.reachSet, mem_walk_iff,
+    CheckedStore.walkReach_iff]
 
 /-- `visList` lists the stored records that `entitledHere` seats `q` in and that `since` does not
 reach. -/
 theorem mem_visList {c : CheckedStore} {held : HeldMap} {q : Query} {v : Digest} :
-    v ∈ visList c held q ↔
-      ∃ r, c.get v = some r ∧ entitledHere held q v r = true ∧ v ∉ sinceReach c q := by
+    v ∈ visList c.raw held q ↔
+      ∃ r, c.get v = some r ∧ entitledHere held q v r = true ∧ v ∉ sinceReach c.raw q := by
   simp only [visList, List.mem_filterMap, Option.ite_none_right_eq_some, Bool.and_eq_true,
     Bool.not_eq_true', Prod.exists, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some,
     Bool.eq_false_iff, ne_eq, Std.ExtTreeSet.contains_iff_mem, Option.some.injEq]
@@ -210,13 +211,13 @@ theorem mem_visList {c : CheckedStore} {held : HeldMap} {q : Query} {v : Digest}
 
 /-- `upSet` holds the stored records from which a `visList` record is reachable. -/
 theorem mem_upSet {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} :
-    d ∈ upSet c held q ↔
-      d ∈ c.raw.map ∧ ∃ v ∈ visList c held q, Reach hashSpec (abs c) {d} v :=
+    d ∈ upSet c.raw held q ↔
+      d ∈ c.raw.map ∧ ∃ v ∈ visList c.raw held q, Reach hashSpec (abs c) {d} v :=
   mem_walk_linkedBy c _
 
-/-- `Serve.linksOf c ds` holds the links of the stored records among `ds`. -/
+/-- `Serve.linksOf c.raw ds` holds the links of the stored records among `ds`. -/
 theorem mem_linksOf_code {c : CheckedStore} {ds : List Digest} {d : Digest} :
-    d ∈ Serve.linksOf c ds ↔ ∃ k ∈ ds, ∃ r, c.get k = some r ∧ d ∈ r.links := by
+    d ∈ Serve.linksOf c.raw ds ↔ ∃ k ∈ ds, ∃ r, c.get k = some r ∧ d ∈ r.links := by
   have key : ∀ (ds : List Digest) (acc : DigestSet),
       d ∈ ds.foldl (fun acc d => match c.get d with
         | some r => r.links.foldl (fun s l => s.insert l) acc
@@ -258,8 +259,8 @@ theorem mem_linksOf_code {c : CheckedStore} {ds : List Digest} {d : Digest} :
 /-- When a digest that is neither `addressed` nor `after` goes as a boundary digest in a catch-up:
 a record of the walk links it, or no stored record links it (it is a head). -/
 def boundaryCond (c : CheckedStore) (held : HeldMap) (q : Query) (d : Digest) : Prop :=
-  d ∈ Serve.linksOf c (upSet c held q).toList ∨
-    d ∉ Serve.linksOf c (c.raw.map.toList.map (·.1))
+  d ∈ Serve.linksOf c.raw (upSet c.raw held q).toList ∨
+    d ∉ Serve.linksOf c.raw (c.raw.map.toList.map (·.1))
 
 -- In the empty store nothing links anything, so every digest meets the condition.
 example (g : GroupId) (held : HeldMap) (q : Query) (d : Digest) :
@@ -274,14 +275,14 @@ walk, else a `boundary` entry when `boundaryCond` holds; each digest of the resp
 boundary that the store does not hold gives a `boundary` entry when `boundaryCond` holds. -/
 theorem mem_serve_catchup {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
     (hq : q.wanted = none) {e : Entry} :
-    e ∈ serve c me held q ↔
+    e ∈ serve c.raw me held q ↔
       (∃ d r, c.get d = some r ∧
-        ((entitledHere held q d r = true ∧ d ∉ sinceReach c q ∧
+        ((entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q ∧
             e = .addressed r ((held.getD d {}).opening.filter (serveOpening me q d r))
               (authorCopy me d r)) ∨
-          (¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c q) ∧ d ∈ upSet c held q ∧
+          (¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q) ∧ d ∈ upSet c.raw held q ∧
             e = .after r) ∨
-          (¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c q) ∧ d ∉ upSet c held q ∧
+          (¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q) ∧ d ∉ upSet c.raw held q ∧
             boundaryCond c held q d ∧ e = .boundary d))) ∨
       (∃ d, d ∈ me.boundary ∧ d ∉ c.raw.map ∧ boundaryCond c held q d ∧ e = .boundary d) := by
   simp only [serve, hq, List.mem_append, List.mem_filterMap, Option.map_none, Option.getD_none,
@@ -328,13 +329,13 @@ theorem visSpec_toSpec {c : CheckedStore} {held : HeldMap} {q : Query} {r : Rec}
 reach it. -/
 theorem visSpec_of_get {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} {r : Rec}
     (h : c.get d = some r) :
-    visSpec c held q (toSpec r) ↔ entitledHere held q d r = true ∧ d ∉ sinceReach c q := by
+    visSpec c held q (toSpec r) ↔ entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q := by
   rw [visSpec_toSpec, hash_of_get h, mem_sinceReach]
   exact and_congr_right fun _ => ⟨fun hn hm => hn hm.2, fun hn hR => hn ⟨mem_map_of_get h, hR⟩⟩
 
 /-- `visList` lists the digests of the records in `visSpec`. -/
 theorem mem_visList_spec {c : CheckedStore} {held : HeldMap} {q : Query} {v : Digest} :
-    v ∈ visList c held q ↔ ∃ t ∈ abs c, visSpec c held q t ∧ hashSpec t = v := by
+    v ∈ visList c.raw held q ↔ ∃ t ∈ abs c, visSpec c held q t ∧ hashSpec t = v := by
   rw [mem_visList]
   constructor
   · rintro ⟨r, hget, hv⟩
@@ -349,7 +350,7 @@ theorem mem_visList_spec {c : CheckedStore} {held : HeldMap} {q : Query} {v : Di
 spec's `servedF`. -/
 theorem mem_upSet_of_get {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} {r : Rec}
     (h : c.get d = some r) :
-    d ∈ upSet c held q ↔ toSpec r ∈ servedF hashSpec (abs c) (visSpec c held q) := by
+    d ∈ upSet c.raw held q ↔ toSpec r ∈ servedF hashSpec (abs c) (visSpec c held q) := by
   rw [mem_upSet, mem_servedF, hashSpec_toSpec, hash_of_get h]
   simp only [mem_visList_spec]
   constructor
@@ -361,7 +362,7 @@ theorem mem_upSet_of_get {c : CheckedStore} {held : HeldMap} {q : Query} {d : Di
 /-- The records of `servedF` are the stored records in `upSet`. -/
 theorem mem_servedF_iff {c : CheckedStore} {held : HeldMap} {q : Query} {x : SpecRec} :
     x ∈ servedF hashSpec (abs c) (visSpec c held q) ↔
-      ∃ d r, c.get d = some r ∧ d ∈ upSet c held q ∧ toSpec r = x := by
+      ∃ d r, c.get d = some r ∧ d ∈ upSet c.raw held q ∧ toSpec r = x := by
   constructor
   · intro hx
     obtain ⟨r, rfl, hr⟩ := c.built.exists_of_mem_abs (servedF_subset hashSpec _ _ hx)
@@ -371,12 +372,13 @@ theorem mem_servedF_iff {c : CheckedStore} {held : HeldMap} {q : Query} {x : Spe
 
 /-- `upSet` holds only stored digests. -/
 theorem upSet_subset {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest}
-    (h : d ∈ upSet c held q) : d ∈ c.raw.map :=
+    (h : d ∈ upSet c.raw held q) : d ∈ c.raw.map :=
   (mem_upSet.mp h).1
 
 /-- The digests of `servedF` are `upSet`. -/
 theorem mem_digests_servedF {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} :
-    d ∈ digests hashSpec (servedF hashSpec (abs c) (visSpec c held q)) ↔ d ∈ upSet c held q := by
+    d ∈ digests hashSpec (servedF hashSpec (abs c) (visSpec c held q)) ↔
+      d ∈ upSet c.raw held q := by
   rw [mem_digests]
   constructor
   · rintro ⟨x, hx, rfl⟩
@@ -390,7 +392,7 @@ theorem mem_digests_servedF {c : CheckedStore} {held : HeldMap} {q : Query} {d :
 /-- The links of `servedF` are what `serve` computes as `linkedByUp`. -/
 theorem mem_linksOf_servedF {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} :
     d ∈ Crdt.Merkle.linksOf (servedF hashSpec (abs c) (visSpec c held q)) ↔
-      d ∈ Serve.linksOf c (upSet c held q).toList := by
+      d ∈ Serve.linksOf c.raw (upSet c.raw held q).toList := by
   rw [mem_linksOf, mem_linksOf_code]
   constructor
   · rintro ⟨x, hx, hd⟩
@@ -402,7 +404,7 @@ theorem mem_linksOf_servedF {c : CheckedStore} {held : HeldMap} {q : Query} {d :
 
 /-- The links of the store are what `serve` computes as `linkedAny`. -/
 theorem mem_linksOf_abs {c : CheckedStore} {d : Digest} :
-    d ∈ Crdt.Merkle.linksOf (abs c) ↔ d ∈ Serve.linksOf c (c.raw.map.toList.map (·.1)) := by
+    d ∈ Crdt.Merkle.linksOf (abs c) ↔ d ∈ Serve.linksOf c.raw (c.raw.map.toList.map (·.1)) := by
   rw [mem_linksOf, mem_linksOf_code]
   constructor
   · rintro ⟨x, hx, hd⟩
@@ -414,15 +416,16 @@ theorem mem_linksOf_abs {c : CheckedStore} {d : Digest} :
 
 /-- A record `q` may see is in the walk (the walk starts at it). -/
 theorem mem_upSet_of_vis {c : CheckedStore} {held : HeldMap} {q : Query} {d : Digest} {r : Rec}
-    (h : c.get d = some r) (hv : entitledHere held q d r = true ∧ d ∉ sinceReach c q) :
-    d ∈ upSet c held q :=
-  mem_upSet.mpr ⟨mem_map_of_get h, d, mem_visList.mpr ⟨r, h, hv⟩, .head (Finset.mem_singleton_self _)⟩
+    (h : c.get d = some r) (hv : entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q) :
+    d ∈ upSet c.raw held q :=
+  mem_upSet.mpr ⟨mem_map_of_get h, d, mem_visList.mpr ⟨r, h, hv⟩,
+    .head (Finset.mem_singleton_self _)⟩
 
 /-- In a catch-up, a record goes `addressed` exactly when `q` may see it. -/
 theorem addressed_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
     (hq : q.wanted = none) {r : Rec} :
-    (∃ o ac, Entry.addressed r o ac ∈ serve c me held q) ↔
-      ∃ d, c.get d = some r ∧ entitledHere held q d r = true ∧ d ∉ sinceReach c q := by
+    (∃ o ac, Entry.addressed r o ac ∈ serve c.raw me held q) ↔
+      ∃ d, c.get d = some r ∧ entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q := by
   constructor
   · rintro ⟨o, ac, he⟩
     rcases (mem_serve_catchup hq).mp he with
@@ -437,9 +440,9 @@ theorem addressed_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Q
 /-- In a catch-up, a record goes `after` exactly when `q` may not see it and it is in the walk. -/
 theorem after_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
     (hq : q.wanted = none) {r : Rec} :
-    Entry.after r ∈ serve c me held q ↔
-      ∃ d, c.get d = some r ∧ ¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c q) ∧
-        d ∈ upSet c held q := by
+    Entry.after r ∈ serve c.raw me held q ↔
+      ∃ d, c.get d = some r ∧ ¬ (entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q) ∧
+        d ∈ upSet c.raw held q := by
   constructor
   · intro he
     rcases (mem_serve_catchup hq).mp he with
@@ -455,8 +458,8 @@ theorem after_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query
 (a stored record or its own boundary), it is not in the walk, and `boundaryCond` holds. -/
 theorem boundary_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
     (hq : q.wanted = none) {d : Digest} :
-    Entry.boundary d ∈ serve c me held q ↔
-      (d ∈ c.raw.map ∨ d ∈ me.boundary) ∧ d ∉ upSet c held q ∧ boundaryCond c held q d := by
+    Entry.boundary d ∈ serve c.raw me held q ↔
+      (d ∈ c.raw.map ∨ d ∈ me.boundary) ∧ d ∉ upSet c.raw held q ∧ boundaryCond c held q d := by
   constructor
   · intro he
     rcases (mem_serve_catchup hq).mp he with
@@ -472,6 +475,24 @@ theorem boundary_mem_serve {c : CheckedStore} {me : Me} {held : HeldMap} {q : Qu
         .inr (.inr ⟨fun hv => hu (mem_upSet_of_vis hr hv), hu, h3, rfl⟩)⟩)
     · exact (mem_serve_catchup hq).mpr (.inr ⟨d, hdb.resolve_left hm, hm, h3, rfl⟩)
 
+/-! ## The examples' store, checked
+
+`core/Zrdt/Serve.lean`'s examples serve from `Examples.store`, a `RawStore` (`serve` takes the
+data of a closed or a relative store). The statements below are over `abs` of a `CheckedStore`,
+so the examples use the checked store that data comes from. -/
+
+namespace Examples
+open Zrdt.Examples
+
+/-- The checked store whose data is `Examples.store`: Carol's `pre`, Alice's `welcome`, Carol's
+`stale` and Alice's `later`, accepted into an empty store of the examples' group. -/
+def checkedStore : CheckedStore :=
+  ((CheckedStore.empty group).acceptAll #[pre.1, welcome.1, stale.1, later.1]).1
+
+example : checkedStore.raw = store := rfl
+
+end Examples
+
 /-! ## The bridge -/
 
 /-- **`SERVE`'s catch-up reply is the spec's served view** (JOIN_PLAN §7.2). For a catch-up
@@ -486,9 +507,9 @@ Which `addressed` entries carry an opening is `serve_content` and `serve_content
 (`core/Zrdt/Serve.lean`). -/
 theorem serve_abs (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
     (hq : q.wanted = none) :
-    replyAddressed (serve c me held q) = (abs c).filter (visSpec c held q) ∧
-      replyRecords (serve c me held q) = servedF hashSpec (abs c) (visSpec c held q) ∧
-      replyBoundary (serve c me held q) =
+    replyAddressed (serve c.raw me held q) = (abs c).filter (visSpec c held q) ∧
+      replyRecords (serve c.raw me held q) = servedF hashSpec (abs c) (visSpec c held q) ∧
+      replyBoundary (serve c.raw me held q) =
         servedB' hashSpec (abs c) (visSpec c held q) (boundarySpec me) := by
   refine ⟨?_, ?_, ?_⟩
   · ext x
@@ -508,7 +529,7 @@ theorem serve_abs (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
       · exact ⟨d, r, hr, mem_upSet_of_vis hr hv, rfl⟩
       · exact ⟨d, r, hr, hu, rfl⟩
     · rintro ⟨d, r, hr, hu, rfl⟩
-      by_cases hv : entitledHere held q d r = true ∧ d ∉ sinceReach c q
+      by_cases hv : entitledHere held q d r = true ∧ d ∉ sinceReach c.raw q
       · exact ⟨r, .inl ⟨d, hr, hv⟩, rfl⟩
       · exact ⟨r, .inr ⟨d, hr, hv, hu⟩, rfl⟩
   · ext d
@@ -519,15 +540,16 @@ theorem serve_abs (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
     rw [hm]
 
 -- On the store of the examples of `core/Zrdt/Serve.lean`: Bob's catch-up from Alice.
-example : replyRecords (serve Examples.store Examples.meAlice Examples.held
+example : replyRecords (serve Examples.checkedStore.raw Examples.meAlice Examples.held
       (Examples.rq Zrdt.Examples.bob Examples.keyBob)) =
-    servedF hashSpec (abs Examples.store)
-      (visSpec Examples.store Examples.held (Examples.rq Zrdt.Examples.bob Examples.keyBob)) :=
+    servedF hashSpec (abs Examples.checkedStore)
+      (visSpec Examples.checkedStore Examples.held
+        (Examples.rq Zrdt.Examples.bob Examples.keyBob)) :=
   (serve_abs _ _ _ _ rfl).2.1
 
 /-- The records of any reply are records of the store. -/
 theorem replyRecords_subset (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query) :
-    replyRecords (serve c me held q) ⊆ abs c := by
+    replyRecords (serve c.raw me held q) ⊆ abs c := by
   intro x hx
   obtain ⟨r, ⟨o, ac, he⟩ | he, rfl⟩ := mem_replyRecords.mp hx
   · obtain ⟨d, hget, -⟩ := serve_addressed he
@@ -579,18 +601,19 @@ catch-up reply (its `addressed` and `after` records, and its boundary digests) h
 heads of the responder's view: its store and its own boundary. No collision clause. -/
 theorem serve_heads (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
     (hq : q.wanted = none) :
-    headsRel hashSpec (replyRecords (serve c me held q)) (replyBoundary (serve c me held q)) =
+    headsRel hashSpec (replyRecords (serve c.raw me held q))
+        (replyBoundary (serve c.raw me held q)) =
       headsRel hashSpec (abs c) (boundarySpec me) := by
   obtain ⟨-, hF, hB⟩ := serve_abs c me held q hq
   rw [hF, hB]
   exact served_heads' hashSpec _ _ _
 
 example : headsRel hashSpec
-      (replyRecords (serve Examples.store Examples.meAlice Examples.held
+      (replyRecords (serve Examples.checkedStore.raw Examples.meAlice Examples.held
         (Examples.rq Zrdt.Examples.bob Examples.keyBob)))
-      (replyBoundary (serve Examples.store Examples.meAlice Examples.held
+      (replyBoundary (serve Examples.checkedStore.raw Examples.meAlice Examples.held
         (Examples.rq Zrdt.Examples.bob Examples.keyBob))) =
-    headsRel hashSpec (abs Examples.store) (boundarySpec Examples.meAlice) :=
+    headsRel hashSpec (abs Examples.checkedStore) (boundarySpec Examples.meAlice) :=
   serve_heads _ _ _ _ rfl
 
 /-- **Rejecting:** a reply with no entries to Alice's catch-up from `selfStore` would not have
@@ -611,35 +634,36 @@ example : headsRel hashSpec (replyRecords []) (replyBoundary []) ≠
 is a record of the reply or one of its boundary digests. -/
 theorem serve_closed (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
     (hq : q.wanted = none) :
-    ClosedRel hashSpec (replyRecords (serve c me held q)) (replyBoundary (serve c me held q)) := by
+    ClosedRel hashSpec (replyRecords (serve c.raw me held q))
+      (replyBoundary (serve c.raw me held q)) := by
   obtain ⟨-, hF, hB⟩ := serve_abs c me held q hq
   rw [hF, hB]
   exact served_closed' hashSpec (c.closedRel _)
 
 example : ClosedRel hashSpec
-    (replyRecords (serve Examples.store Examples.meAlice Examples.held
+    (replyRecords (serve Examples.checkedStore.raw Examples.meAlice Examples.held
       (Examples.rq Zrdt.Examples.bob Examples.keyBob)))
-    (replyBoundary (serve Examples.store Examples.meAlice Examples.held
+    (replyBoundary (serve Examples.checkedStore.raw Examples.meAlice Examples.held
       (Examples.rq Zrdt.Examples.bob Examples.keyBob))) :=
   serve_closed _ _ _ _ rfl
 
 /-- **Nothing extra**: every record of a catch-up reply is reachable from the reply's heads. -/
 theorem serve_tight (c : CheckedStore) (me : Me) (held : HeldMap) (q : Query)
     (hq : q.wanted = none) :
-    Tight hashSpec (replyRecords (serve c me held q))
-      (headsRel hashSpec (replyRecords (serve c me held q))
-        (replyBoundary (serve c me held q))) := by
+    Tight hashSpec (replyRecords (serve c.raw me held q))
+      (headsRel hashSpec (replyRecords (serve c.raw me held q))
+        (replyBoundary (serve c.raw me held q))) := by
   obtain ⟨-, hF, hB⟩ := serve_abs c me held q hq
   rw [hF, hB]
   exact served_tight' hashSpec (c.tightRel _)
 
 example : Tight hashSpec
-    (replyRecords (serve Examples.store Examples.meAlice Examples.held
+    (replyRecords (serve Examples.checkedStore.raw Examples.meAlice Examples.held
       (Examples.rq Zrdt.Examples.bob Examples.keyBob)))
     (headsRel hashSpec
-      (replyRecords (serve Examples.store Examples.meAlice Examples.held
+      (replyRecords (serve Examples.checkedStore.raw Examples.meAlice Examples.held
         (Examples.rq Zrdt.Examples.bob Examples.keyBob)))
-      (replyBoundary (serve Examples.store Examples.meAlice Examples.held
+      (replyBoundary (serve Examples.checkedStore.raw Examples.meAlice Examples.held
         (Examples.rq Zrdt.Examples.bob Examples.keyBob)))) :=
   serve_tight _ _ _ _ rfl
 
@@ -647,7 +671,7 @@ example : Tight hashSpec
 spec's words). A boundary digest of a catch-up reply is a digest the responder's view knows, and
 from it, following links through the store, no record `q` may see is reachable. -/
 theorem serve_boundary_spec {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query}
-    (hq : q.wanted = none) {d : Digest} (hb : Entry.boundary d ∈ serve c me held q) :
+    (hq : q.wanted = none) {d : Digest} (hb : Entry.boundary d ∈ serve c.raw me held q) :
     d ∈ inView hashSpec (abs c) (boundarySpec me) ∧
       ∀ t ∈ abs c, visSpec c held q t → ¬ Reach hashSpec (abs c) {d} (hashSpec t) := by
   obtain ⟨-, -, hB⟩ := serve_abs c me held q hq
@@ -658,7 +682,7 @@ theorem serve_boundary_spec {c : CheckedStore} {me : Me} {held : HeldMap} {q : Q
 reachable from it. It carries structure, never content. This holds for per-digest requests
 too. -/
 theorem serve_after_reaches {c : CheckedStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
-    (he : Entry.after r ∈ serve c me held q) :
+    (he : Entry.after r ∈ serve c.raw me held q) :
     toSpec r ∈ abs c ∧
       ∃ t ∈ abs c, visSpec c held q t ∧ Reach hashSpec (abs c) {hashRecord r} (hashSpec t) := by
   obtain ⟨d, hget, hup⟩ := serve_after he

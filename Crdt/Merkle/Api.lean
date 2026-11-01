@@ -443,7 +443,7 @@ host seals the reply to. No audience cache, no `since`, no strict or export flag
 provenance enters, so none of them can widen it. -/
 theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Serve.HeldMap}
     {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
-    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c me held q) :
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
     toSpec r ∈ abs c ∧ openingMatches r.group r.author r.commit op = true ∧
       ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true := by
   obtain ⟨d, hget, h⟩ := Serve.serve_content he
@@ -463,8 +463,8 @@ theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
         ¬ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
       ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
     Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
-      Serve.serve c me held q := by
-  have hget : c.get (hashRecord r) = some r := (c.get_eq_some_iff).mpr ⟨hr, rfl⟩
+      Serve.serve c.raw me held q := by
+  have hget : c.raw.map[hashRecord r]? = some r := (c.get_eq_some_iff).mpr ⟨hr, rfl⟩
   rcases hmode with ⟨hq, hn⟩ | ⟨ws, hq, hw⟩
   · refine Serve.serve_content_complete hget hop hs (by simp [hq]) (.inr ?_)
     rw [Bool.eq_false_iff, ne_eq, Std.ExtTreeSet.contains_iff_mem, Serve.mem_sinceReach]
@@ -481,10 +481,10 @@ and `selfMsg`, Alice's message to herself, small enough for the kernel to hash. 
 /-- Bob's catch-up from Alice: the reply of `SERVE` for Bob, under his key, from Alice's store
 with the four records. -/
 def Examples.bobReply : List Serve.Entry :=
-  Serve.serve Serve.Examples.store Serve.Examples.meAlice Serve.Examples.held
+  Serve.serve Serve.Examples.checkedStore.raw Serve.Examples.meAlice Serve.Examples.held
     (Serve.Examples.rq Examples.bob Serve.Examples.keyBob)
 
-example : Examples.bobReply = Serve.serve Serve.Examples.store Serve.Examples.meAlice
+example : Examples.bobReply = Serve.serve Serve.Examples.checkedStore.raw Serve.Examples.meAlice
     Serve.Examples.held (Serve.Examples.rq Examples.bob Serve.Examples.keyBob) := rfl
 
 -- `agree_rel` on Bob's view after that catch-up, against Alice's store: `serve_heads` and
@@ -492,14 +492,15 @@ example : Examples.bobReply = Serve.serve Serve.Examples.store Serve.Examples.me
 example : ∀ d, Reach hashSpec (Serve.replyRecords Examples.bobReply)
       (headsRel hashSpec (Serve.replyRecords Examples.bobReply)
         (Serve.replyBoundary Examples.bobReply)) d →
-    (d ∈ digests hashSpec (abs Serve.Examples.store) ∧
+    (d ∈ digests hashSpec (abs Serve.Examples.checkedStore) ∧
         ∀ r ∈ Serve.replyRecords Examples.bobReply, hashSpec r = d →
-          r ∈ abs Serve.Examples.store) ∨
+          r ∈ abs Serve.Examples.checkedStore) ∨
       (d ∈ Serve.boundarySpec Serve.Examples.meAlice ∧
-        d ∉ digests hashSpec (abs Serve.Examples.store) ∧
+        d ∉ digests hashSpec (abs Serve.Examples.checkedStore) ∧
         ∀ r ∈ Serve.replyRecords Examples.bobReply, hashSpec r ≠ d) ∨
-      CollisionIn hashSpec (abs Serve.Examples.store ∪ Serve.replyRecords Examples.bobReply) :=
-  Serve.Examples.store.agree_rel _ (Serve.serve_heads _ _ _ _ rfl) fun r hr _ =>
+      CollisionIn hashSpec
+        (abs Serve.Examples.checkedStore ∪ Serve.replyRecords Examples.bobReply) :=
+  Serve.Examples.checkedStore.agree_rel _ (Serve.serve_heads _ _ _ _ rfl) fun r hr _ =>
     (mem_digests hashSpec).mpr ⟨r, Serve.replyRecords_subset _ _ _ _ hr, rfl⟩
 
 -- `agree_rel` with no boundary on either side: Bob's store and Alice's store, built in
@@ -570,7 +571,7 @@ theorem Examples.not_reach_empty (s : SpecStore) (d : Digest) : ¬ Reach hashSpe
 example : Serve.Entry.addressed Serve.Examples.selfMsg.1 (some Serve.Examples.selfMsg.2)
       (Serve.authorCopy Serve.Examples.selfMe (hashRecord Serve.Examples.selfMsg.1)
         Serve.Examples.selfMsg.1) ∈
-    Serve.serve Serve.Examples.selfStore Serve.Examples.selfMe Serve.Examples.selfHeld
+    Serve.serve Serve.Examples.selfStore.raw Serve.Examples.selfMe Serve.Examples.selfHeld
       (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice) :=
   Serve.Examples.selfStore.serve_content_complete
     ((Serve.Examples.selfStore.get_eq_some_iff).mp Serve.Examples.selfStore_get).1

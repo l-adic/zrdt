@@ -95,7 +95,7 @@ theorem CheckedStore.agree_rel (c : CheckedStore) (BS : Finset Digest) {F : Spec
 
 theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Serve.HeldMap}
     {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
-    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c me held q) :
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
     toSpec r ∈ abs c ∧ openingMatches r.group r.author r.commit op = true ∧
       ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
   sorry
@@ -108,7 +108,7 @@ theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
         ¬ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
       ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
     Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
-      Serve.serve c me held q :=
+      Serve.serve c.raw me held q :=
   sorry
 
 end Zrdt
