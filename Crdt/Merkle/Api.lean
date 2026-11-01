@@ -6,6 +6,7 @@ Authors: zrdt contributors
 import Mathlib
 import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
+import Crdt.Merkle.ClassifyFast
 
 set_option linter.unusedSectionVars false
 
@@ -30,9 +31,11 @@ Part 2 (proofs in `Refine.lean`):
 * `CheckedStore.encode_open`: a store's blob opens as exactly that store.
 * `CheckedStore.confirmed`: what a live message's links reach is the same in your store and in
   the sender's, or there is a collision.
+* `CheckedStore.classify_spec`: `CLASSIFY` gives each stored record the spec's status
+  (`StatusMeans`, proofs in `Classify.lean` and `ClassifyFast.lean`).
 
 TODO (other lanes): `open_iff`, `salvage_spec` (in `LoadApi.lean`, lane
-build/encode-proofs-api), `classify_spec`, `encode_injective` (`EncodeProofs.lean`).
+build/encode-proofs-api), `encode_injective` (`EncodeProofs.lean`).
 -/
 
 namespace Zrdt
@@ -222,5 +225,30 @@ example : Examples.s1.reachSet #[hashRecord Examples.a1] =
     CollisionIn hashSpec (abs Examples.s1 ∪ abs Examples.s2) :=
   CheckedStore.confirmed _ _ _ (fun h hh => by simp at hh; subst hh; exact Examples.s1_has_a1)
     (fun h hh => by simp at hh; subst hh; exact Examples.s2_has_a1)
+
+/-! ## Part 3: who confirmed a record -/
+
+/-- **`CLASSIFY` computes the spec's provenance status** (docs/PLAN.md §3.5). `classify c facts`
+gives digest `d` the status `st` exactly when `d` is the digest of a stored record `r` and `st`
+means, for `r`, what the spec says: `confirmedByAuthor` when `r` is confirmed by its author
+(`authorConfirmed`); otherwise `notConfirmedByAuthor` when it has the foreign marker
+(`foreignMarked`); otherwise `heldBy a` with `a` the smallest member (byte order) whose live
+records reach `r` (`holders`); otherwise `unconfirmed`. The spec's live facts are read from the
+host's facts (`liveOf`). -/
+theorem CheckedStore.classify_spec (c : CheckedStore) (facts : Array Fact) (d : Digest)
+    (st : Zrdt.Status) :
+    (classify c facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧ StatusMeans (abs c) (liveOf facts) (toSpec r) st :=
+  classify_getElem?_iff c facts d st
+
+example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
+    (classify Examples.s1 facts)[d]? = some st ↔
+      ∃ r, Examples.s1.get d = some r ∧ StatusMeans (abs Examples.s1) (liveOf facts) (toSpec r) st :=
+  CheckedStore.classify_spec _ _ _ _
+
+-- A record with no live record anywhere is `unconfirmed`, and not `confirmedByAuthor`.
+example (x : SpecRec) : StatusMeans ∅ ⟨∅, ∅⟩ x .unconfirmed ∧
+    ¬ StatusMeans ∅ ⟨∅, ∅⟩ x .confirmedByAuthor := by
+  simp [StatusMeans, authorConfirmed, foreignMarked, holders, liveRecords]
 
 end Zrdt

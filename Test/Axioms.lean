@@ -257,5 +257,8 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.CheckedStore.confirmed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.confirmed
 
+/-- info: 'Zrdt.CheckedStore.classify_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.classify_spec
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

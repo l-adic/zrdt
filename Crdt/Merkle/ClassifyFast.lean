@@ -20,6 +20,10 @@ file shows the same for `classify`, the one `zrdtd` runs, step by step:
 * `authorViews` holds, for each author with a stored live record, what those records reach, what
   they disown, and the records that reach all of them;
 * `authors.find?` picks the smallest holder, as the authors are sorted.
+
+`classify_getElem?_iff`: `classify` gives each stored record the status that means what the spec
+says (`StatusMeans`), and gives nothing else a status. `classify_eq_classifyRef`: it computes the
+same map as the literal reference.
 -/
 
 namespace Crdt.Merkle
@@ -728,5 +732,135 @@ theorem mem_holders_iff (c : CheckedStore) (facts : Array Fact) {r : Rec} {d : D
     obtain ⟨y, hy, hRy⟩ := ((authorViews_some c facts hw hdm).1).mp hR
     obtain ⟨hy, hl, ha⟩ := Finset.mem_filter.mp hy
     exact ⟨y, Finset.mem_filter.mpr ⟨hy, hl, ha ▸ hne, hRy⟩, ha⟩
+
+/-! ## `classify` computes the spec's status -/
+
+/-- **`status` computes the spec's status.** For a stored record `r` (under its digest `d`), the
+status `classify` gives means exactly what the spec says (`StatusMeans`). -/
+theorem status_spec (c : CheckedStore) (facts : Array Fact) {d : Digest} {r : Rec}
+    (h : c.raw.map[d]? = some r) :
+    StatusMeans (abs c) (liveOf facts) (toSpec r)
+      (status (authorViews c (liveFacts facts)) (authorViews c (liveFacts facts)).toList d r) := by
+  have hd : hashRecord r = d := c.built.hash_eq d r h
+  have hdm : d ∈ c.raw.map := Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp [h])
+  have hhr : hashSpec (toSpec r) = d := by rw [hashSpec_toSpec, hd]
+  have hauth : (toSpec r).author = r.author := rfl
+  -- "Held by" or "unconfirmed", when neither of the author's labels applies.
+  have hHU : ¬ authorConfirmed hashSpec (abs c) (liveOf facts) (toSpec r) →
+      ¬ foreignMarked hashSpec (abs c) (liveOf facts) (toSpec r) →
+      StatusMeans (abs c) (liveOf facts) (toSpec r)
+        (match List.find? (fun x => x.1 != r.author && Std.ExtTreeSet.contains x.2.reach d)
+            (authorViews c (liveFacts facts)).toList with
+          | some (a, _) => Zrdt.Status.heldBy a
+          | none => Zrdt.Status.unconfirmed) := by
+    intro hAC hFM
+    cases hf : List.find? (fun x => x.1 != r.author && Std.ExtTreeSet.contains x.2.reach d)
+        (authorViews c (liveFacts facts)).toList with
+    | none =>
+      refine ⟨hAC, hFM, ?_⟩
+      rw [List.find?_eq_none] at hf
+      apply Finset.eq_empty_of_forall_notMem
+      intro b hb
+      obtain ⟨hne, w, hw, hR⟩ := (mem_holders_iff c facts hd hdm b).mp hb
+      apply hf (b, w) (Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mpr hw)
+      simp [hne, hR]
+    | some p =>
+      obtain ⟨a, w⟩ := p
+      obtain ⟨hp, as, bs, heq, has⟩ := List.find?_eq_some_iff_append.mp hf
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at hp
+      have haw : (a, w) ∈ (authorViews c (liveFacts facts)).toList := by rw [heq]; simp
+      have hw := Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mp haw
+      refine ⟨hAC, hFM, (mem_holders_iff c facts hd hdm a).mpr ⟨hp.1, w, hw, hp.2⟩,
+        fun b hb => ?_⟩
+      obtain ⟨hne, w', hw', hR'⟩ := (mem_holders_iff c facts hd hdm b).mp hb
+      have hbw := Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mpr hw'
+      have hord := Std.ExtTreeMap.ordered_keys_toList (t := authorViews c (liveFacts facts))
+      rw [heq] at hbw hord
+      rcases List.mem_append.mp hbw with hb' | hb'
+      · have := has _ hb'
+        simp [hne, hR'] at this
+      · rcases List.mem_cons.mp hb' with he | hb'
+        · cases he
+          simp [Std.ReflCmp.compare_self]
+        · rw [List.pairwise_append, List.pairwise_cons] at hord
+          have := hord.2.1.1 _ hb'
+          simp only at this
+          rw [this]
+          decide
+  unfold status
+  dsimp only
+  cases hv : (authorViews c (liveFacts facts))[r.author]? with
+  | none =>
+    have hLR := (authorViews_none c facts r.author).mp hv
+    apply hHU
+    · rintro ⟨⟨y, hy, -⟩, -⟩
+      rw [hauth, hLR] at hy
+      simp at hy
+    · rintro (⟨y, hy, -⟩ | ⟨⟨y, hy, -⟩, -⟩) <;> (rw [hauth, hLR] at hy; simp at hy)
+  | some v =>
+    obtain ⟨eR, eD, s, hs, eS⟩ := authorViews_some c facts hv hdm
+    have hAC : authorConfirmed hashSpec (abs c) (liveOf facts) (toSpec r) ↔
+        v.reach.contains d = true ∧ ¬ v.disowned.contains d = true := by
+      rw [authorConfirmed, hhr, hauth, eR, eD]
+      constructor
+      · rintro ⟨h1, h2⟩
+        exact ⟨h1, fun ⟨y, hy, he⟩ => h2 y hy he⟩
+      · rintro ⟨h1, h2⟩
+        exact ⟨h1, fun y hy he => h2 ⟨y, hy, he⟩⟩
+    have hFM : foreignMarked hashSpec (abs c) (liveOf facts) (toSpec r) ↔
+        v.disowned.contains d = true ∨
+          (¬ s.contains d = true ∧ ¬ v.reach.contains d = true) := by
+      rw [foreignMarked, hhr, hauth, eR, eD, eS]
+      constructor
+      · rintro (h1 | ⟨⟨y, hy, -, hny⟩, h2⟩)
+        · exact Or.inl h1
+        · exact Or.inr ⟨fun h => hny (h y hy), fun ⟨y', hy', hR⟩ => h2 y' hy' hR⟩
+      · rintro (h1 | ⟨h1, h2⟩)
+        · exact Or.inl h1
+        · right
+          push Not at h1
+          obtain ⟨y, hy, hny⟩ := h1
+          exact ⟨⟨y, hy, fun hR => h2 ⟨y, hy, hR⟩, hny⟩, fun y hy hR => h2 ⟨y, hy, hR⟩⟩
+    dsimp only
+    rw [hs]
+    dsimp only
+    generalize v.reach.contains d = RB at hAC hFM ⊢
+    generalize v.disowned.contains d = DB at hAC hFM ⊢
+    generalize s.contains d = SB at hFM ⊢
+    cases RB <;> cases DB <;> cases SB <;>
+      simp only [Bool.not_true, Bool.not_false, Bool.and_true, Bool.and_false, Bool.false_eq_true,
+        ↓reduceIte] <;>
+      simp only [Bool.false_eq_true, not_false_eq_true, not_true_eq_false, and_true, and_false,
+        or_false, iff_true, iff_false, or_true] at hAC hFM <;>
+      first
+      | exact hAC
+      | exact ⟨hAC, hFM⟩
+      | exact hHU hAC hFM
+
+/-- **`classify` computes the spec's status of every stored record, and of nothing else**
+(advertised as `CheckedStore.classify_spec` in `Api.lean`). -/
+theorem classify_getElem?_iff (c : CheckedStore) (facts : Array Fact) (d : Digest)
+    (st : Zrdt.Status) :
+    (classify c facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧ StatusMeans (abs c) (liveOf facts) (toSpec r) st := by
+  rw [classify, Std.ExtTreeMap.getElem?_map]
+  constructor
+  · intro h
+    obtain ⟨r, hr, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact ⟨r, hr, status_spec c facts hr⟩
+  · rintro ⟨r, hr, hs⟩
+    have hr' : c.raw.map[d]? = some r := hr
+    rw [hr', Option.map_some, StatusMeans.unique (status_spec c facts hr') hs]
+
+/-- The fast `classify` and the literal reference `classifyRef` give the same map. -/
+theorem classify_eq_classifyRef (c : CheckedStore) (facts : Array Fact) :
+    classify c facts = classifyRef c facts := by
+  apply Std.ExtTreeMap.ext_getElem?
+  intro d
+  apply Option.ext
+  intro st
+  rw [classify_getElem?_iff, classifyRef_spec]
+
+example (c : CheckedStore) : classify c #[] = classifyRef c #[] := classify_eq_classifyRef c #[]
 
 end Zrdt
