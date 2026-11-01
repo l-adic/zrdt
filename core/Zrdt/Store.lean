@@ -65,6 +65,23 @@ inductive AcceptOrder : List Rec → Prop
       (∀ d ∈ r.links, ∃ r' ∈ older, hashRecord r' = d) → AcceptOrder older →
       AcceptOrder (r :: older)
 
+/-- Every record reached through an accept order is stored, if each record of the order whose
+links are stored is itself stored. -/
+theorem AcceptOrder.all_stored {m : RecMap} {l : List Rec} (hl : AcceptOrder l)
+    (hstep : ∀ x ∈ l, (∀ d ∈ x.links, d ∈ m) → m[hashRecord x]? = some x) :
+    ∀ x ∈ l, m[hashRecord x]? = some x := by
+  induction hl with
+  | nil => simp
+  | @cons r older hr _ ih =>
+    have ih' := ih (fun x hx => hstep x (List.mem_cons_of_mem _ hx))
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · apply hstep x List.mem_cons_self
+      intro d hd
+      obtain ⟨r', hr', rfl⟩ := hr d hd
+      exact Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp [ih' r' hr'])
+    · exact ih' x hx
+
 /-- What makes a raw store correct. -/
 structure Built (c : RawStore) : Prop where
   /-- Every record is stored under its own digest. -/
@@ -615,13 +632,39 @@ decreasing_by
 def leftovers (rs : Array Rec) (done : Array Bool) : Array Rec :=
   (rs.zip done).filterMap fun (r, ok) => if ok then none else some r
 
-/-- Accept a batch of records, in any order that lets their links resolve (Kahn's algorithm).
-Every record goes through `accept`. Returns the new store and the records that were not accepted,
-in input order. -/
-def acceptAll (c : CheckedStore) (rs : Array Rec) : CheckedStore × Array Rec :=
+/-- Accept a batch of records in an order that lets their links resolve (Kahn's algorithm).
+Returns the new store and the records that were not accepted, in input order. -/
+def kahn (c : CheckedStore) (rs : Array Rec) : CheckedStore × Array Rec :=
   let (counts, waiting, ready) := plan c rs
   let (c', done) := acceptLoop rs c counts waiting (Array.replicate rs.size false) ready
   (c', leftovers rs done)
+
+/-- Offer each record to `accept` once, in order. Returns the new store and, after `keep`, the
+records that were not accepted. -/
+def retryPass (c : CheckedStore) (keep : Array Rec) : List Rec → CheckedStore × Array Rec
+  | [] => (c, keep)
+  | r :: rest =>
+    match c.accept r with
+    | (.accepted _, c') => retryPass c' keep rest
+    | (_, c') => retryPass c' (keep.push r) rest
+
+/-- Offer the records to `accept` again and again, until a pass accepts none of them. Returns
+the new store and the records never accepted. -/
+def retry (c : CheckedStore) (left : Array Rec) : CheckedStore × Array Rec :=
+  let (c', keep) := retryPass c #[] left.toList
+  if keep.size < left.size then retry c' keep else (c', keep)
+termination_by left.size
+
+/-- Accept a batch of records, in any order that lets their links resolve. Every record goes
+through `accept`. Returns the new store and the records that were not accepted.
+
+The work is done by `kahn`. Then `retry` offers the records left over to `accept` once more,
+repeating while that accepts any. When `kahn` is right, that pass accepts nothing and costs one
+`accept` per leftover record; it is there so that "no leftover record could still be accepted"
+(`acceptAll_stuck`) is simple to prove. -/
+def acceptAll (c : CheckedStore) (rs : Array Rec) : CheckedStore × Array Rec :=
+  let (c', left) := kahn c rs
+  retry c' left
 
 /-! ### What `acceptAll` guarantees -/
 
@@ -735,19 +778,18 @@ theorem mem_leftovers {rs : Array Rec} {done : Array Bool} (hs : done.size = rs.
     rw [Array.mem_iff_getElem]
     exact ⟨i, by simp; omega, by simp [Array.getElem_zip, this]⟩
 
-/-- **What `acceptAll` guarantees** (whatever order the worklist takes): the chat is the same;
-every record of `c` is kept; every stored record comes from `c` or from the batch; every record
-of the batch that is not left over is stored under its digest; and every left-over record is
-from the batch. So a mistake in the worklist could only leave records over, never add a wrong
-one or lose one. -/
-theorem acceptAll_sound (c : CheckedStore) (rs : Array Rec) :
-    (c.acceptAll rs).1.group = c.group ∧
-    (∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → (c.acceptAll rs).1.raw.map[k]? = some x) ∧
-    (∀ (k : Digest) (x : Rec), (c.acceptAll rs).1.raw.map[k]? = some x →
+/-- What `kahn` guarantees (whatever order the worklist takes): the chat is the same; every
+record of `c` is kept; every stored record comes from `c` or from the batch; every record of the
+batch that is not left over is stored under its digest; every left-over record is from the
+batch. -/
+theorem kahn_sound (c : CheckedStore) (rs : Array Rec) :
+    (kahn c rs).1.group = c.group ∧
+    (∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → (kahn c rs).1.raw.map[k]? = some x) ∧
+    (∀ (k : Digest) (x : Rec), (kahn c rs).1.raw.map[k]? = some x →
       c.raw.map[k]? = some x ∨ x ∈ rs) ∧
-    (∀ x ∈ rs, x ∉ (c.acceptAll rs).2 → (c.acceptAll rs).1.raw.map[hashRecord x]? = some x) ∧
-    (∀ x ∈ (c.acceptAll rs).2, x ∈ rs) := by
-  unfold acceptAll
+    (∀ x ∈ rs, x ∉ (kahn c rs).2 → (kahn c rs).1.raw.map[hashRecord x]? = some x) ∧
+    (∀ x ∈ (kahn c rs).2, x ∈ rs) := by
+  unfold kahn
   generalize plan c rs = p
   obtain ⟨counts, waiting, ready⟩ := p
   dsimp only
@@ -766,6 +808,174 @@ theorem acceptAll_sound (c : CheckedStore) (rs : Array Rec) :
   · intro x hx
     obtain ⟨i, hi, rfl, _⟩ := (mem_leftovers h.size_eq).mp hx
     exact Array.getElem_mem hi
+
+/-- What a store change `c → e` that adds records from `src` and leaves `left` over guarantees:
+the chat is the same, `c`'s records are kept, new records come from `src`, records of `src` not
+left over are stored under their digest, and left-over records come from `src`. -/
+structure Adds (c e : CheckedStore) (src left : List Rec) : Prop where
+  group_eq : e.group = c.group
+  keeps : ∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → e.raw.map[k]? = some x
+  only : ∀ (k : Digest) (x : Rec), e.raw.map[k]? = some x → c.raw.map[k]? = some x ∨ x ∈ src
+  stored : ∀ x ∈ src, x ∉ left → e.raw.map[hashRecord x]? = some x
+  left_sub : ∀ x ∈ left, x ∈ src
+
+/-- Two such changes in a row, where the second works on what the first left over. -/
+theorem Adds.trans {c d e : CheckedStore} {src mid left : List Rec} (h₁ : Adds c d src mid)
+    (h₂ : Adds d e mid left) : Adds c e src left where
+  group_eq := h₂.group_eq.trans h₁.group_eq
+  keeps := fun k x hk => h₂.keeps k x (h₁.keeps k x hk)
+  only := fun k x hk => by
+    rcases h₂.only k x hk with hd | hm
+    · exact h₁.only k x hd
+    · exact Or.inr (h₁.left_sub x hm)
+  stored := fun x hx hl => by
+    by_cases hm : x ∈ mid
+    · exact h₂.stored x hm hl
+    · exact h₂.keeps _ x (h₁.stored x hx hm)
+  left_sub := fun x hx => h₁.left_sub x (h₂.left_sub x hx)
+
+/-- What one pass of `retryPass` does. Started with `keep`, it ends with `keep` followed by the
+records it did not accept, and it adds the others. If it accepted none, the store is unchanged
+and `accept` refuses each of them. -/
+theorem retryPass_spec (c : CheckedStore) (keep : Array Rec) (l : List Rec) :
+    (∃ more : List Rec, (retryPass c keep l).2 = keep ++ more.toArray ∧
+      Adds c (retryPass c keep l).1 l more ∧ more.length ≤ l.length) ∧
+    ((retryPass c keep l).2.size = keep.size + l.length →
+      (retryPass c keep l).1 = c ∧ ∀ x ∈ l, ∀ d, (c.accept x).1 ≠ .accepted d) := by
+  induction l generalizing c keep with
+  | nil =>
+    refine ⟨⟨[], by simp [retryPass], ⟨rfl, fun _ _ h => h, fun _ _ h => Or.inl h,
+      by simp, by simp⟩, Nat.le_refl _⟩, fun _ => ⟨rfl, by simp⟩⟩
+  | cons r rest ih =>
+    simp only [retryPass]
+    split
+    · rename_i d c' hacc
+      obtain ⟨⟨more, hmore, hadds, hlen⟩, _⟩ := ih c' keep
+      have hstep : Adds c c' [r] [] := by
+        have hraw : rawAccept c.raw r = (.accepted d, c'.raw) := by
+          have h1 : (c.accept r).1 = .accepted d := by rw [hacc]
+          have h2 : (c.accept r).2.raw = c'.raw := by rw [hacc]
+          rw [accept_fst] at h1
+          rw [accept_raw] at h2
+          exact Prod.ext h1 h2
+        obtain ⟨rfl, hg, hmap, hold⟩ := rawAccept_accepted hraw
+        refine ⟨hg, fun k x hk => ?_, fun k x hk => ?_, fun x hx _ => ?_, by simp⟩
+        · rw [hmap, Std.ExtTreeMap.getElem?_insert]
+          split
+          · rename_i he
+            rw [Std.LawfulEqCmp.compare_eq_iff_eq] at he
+            subst he
+            rw [hold x hk]
+          · exact hk
+        · rw [hmap, Std.ExtTreeMap.getElem?_insert] at hk
+          split at hk
+          · cases hk; exact Or.inr (by simp)
+          · exact Or.inl hk
+        · simp only [List.mem_singleton] at hx
+          subst hx
+          simp [hmap]
+      refine ⟨⟨more, hmore, ?_, by simp; omega⟩, fun hsize => ?_⟩
+      · refine ⟨hadds.group_eq.trans hstep.group_eq, fun k x hk => hadds.keeps k x
+          (hstep.keeps k x hk), fun k x hk => ?_, fun x hx hl => ?_, fun x hx => ?_⟩
+        · rcases hadds.only k x hk with h' | h'
+          · rcases hstep.only k x h' with h'' | h''
+            · exact Or.inl h''
+            · exact Or.inr (by simp at h''; simp [h''])
+          · exact Or.inr (List.mem_cons_of_mem _ h')
+        · rcases List.mem_cons.mp hx with rfl | hx'
+          · exact hadds.keeps _ x (hstep.stored x (by simp) (by simp))
+          · exact hadds.stored x hx' hl
+        · exact List.mem_cons_of_mem _ (hadds.left_sub x hx)
+      · exfalso
+        rw [hmore] at hsize
+        simp at hsize
+        omega
+    · rename_i res c' hres hacc
+      have hc' : c' = c := by
+        have := accept_unchanged (c := c) (r := r) (by rw [hacc]; exact fun d e => hres d e)
+        rwa [hacc] at this
+      subst c'
+      obtain ⟨⟨more, hmore, hadds, hlen⟩, hstuck⟩ := ih c (keep.push r)
+      refine ⟨⟨r :: more, by rw [hmore]; simp, ?_, by simp; omega⟩, fun hsize => ?_⟩
+      · refine ⟨hadds.group_eq, hadds.keeps, fun k x hk => ?_, fun x hx hl => ?_,
+          fun x hx => ?_⟩
+        · rcases hadds.only k x hk with h' | h'
+          · exact Or.inl h'
+          · exact Or.inr (List.mem_cons_of_mem _ h')
+        · rcases List.mem_cons.mp hx with rfl | hx'
+          · simp at hl
+          · exact hadds.stored x hx' (fun h => hl (List.mem_cons_of_mem _ h))
+        · rcases List.mem_cons.mp hx with rfl | hx'
+          · exact List.mem_cons_self
+          · exact List.mem_cons_of_mem _ (hadds.left_sub x hx')
+      · have hsize' :
+            (retryPass c (keep.push r) rest).2.size = (keep.push r).size + rest.length := by
+          simp at hsize ⊢; omega
+        obtain ⟨heq, hrest⟩ := hstuck hsize'
+        refine ⟨heq, fun x hx d => ?_⟩
+        rcases List.mem_cons.mp hx with rfl | hx'
+        · rw [hacc]; exact fun h => hres d h
+        · exact hrest x hx' d
+
+/-- What `retry` guarantees: it adds records as `Adds` says, and `accept` refuses every record it
+leaves over, in the final store. -/
+theorem retry_spec (c : CheckedStore) (left : Array Rec) :
+    Adds c (retry c left).1 left.toList (retry c left).2.toList ∧
+      ∀ x ∈ (retry c left).2, ∀ d, ((retry c left).1.accept x).1 ≠ .accepted d := by
+  fun_induction retry c left with
+  | case1 c left c' keep hpass hlt ih =>
+    rw [hpass]
+    dsimp only
+    simp only [hlt, ↓reduceIte]
+    obtain ⟨⟨more, hmore, hadds, _⟩, _⟩ := retryPass_spec c #[] left.toList
+    rw [hpass] at hmore hadds
+    dsimp only at hmore hadds
+    subst hmore
+    simp only [List.toList_toArray, Array.empty_append] at ih hadds ⊢
+    exact ⟨hadds.trans ih.1, ih.2⟩
+  | case2 c left c' keep hpass hge =>
+    rw [hpass]
+    dsimp only
+    simp only [hge, ↓reduceIte]
+    obtain ⟨⟨more, hmore, hadds, hlen⟩, hstuck⟩ := retryPass_spec c #[] left.toList
+    rw [hpass] at hmore hadds hstuck
+    dsimp only at hmore hadds hstuck
+    subst hmore
+    have hsize : (#[] ++ more.toArray).size = (#[] : Array Rec).size + left.toList.length := by
+      simp at hge hlen ⊢; omega
+    obtain ⟨rfl, hrefuse⟩ := hstuck hsize
+    simp only [List.toList_toArray, Array.empty_append] at hadds ⊢
+    refine ⟨hadds, fun x hx d => ?_⟩
+    have hx' : x ∈ left.toList := hadds.left_sub x (by simpa using hx)
+    exact hrefuse x hx' d
+
+/-- **What `acceptAll` guarantees.** The chat is the same; every record of `c` is kept; every
+stored record comes from `c` or from the batch; every record of the batch that is not left over is
+stored under its digest; every left-over record is from the batch. So a mistake in the worklist
+could only leave records over, never add a wrong one or lose one. -/
+theorem acceptAll_sound (c : CheckedStore) (rs : Array Rec) :
+    (c.acceptAll rs).1.group = c.group ∧
+    (∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → (c.acceptAll rs).1.raw.map[k]? = some x) ∧
+    (∀ (k : Digest) (x : Rec), (c.acceptAll rs).1.raw.map[k]? = some x →
+      c.raw.map[k]? = some x ∨ x ∈ rs) ∧
+    (∀ x ∈ rs, x ∉ (c.acceptAll rs).2 → (c.acceptAll rs).1.raw.map[hashRecord x]? = some x) ∧
+    (∀ x ∈ (c.acceptAll rs).2, x ∈ rs) := by
+  obtain ⟨hg, hkeep, honly, hstored, hsub⟩ := kahn_sound c rs
+  have hk : Adds c (kahn c rs).1 rs.toList (kahn c rs).2.toList :=
+    ⟨hg, hkeep, fun k x hx => by simpa using honly k x hx,
+      fun x hx hl => hstored x (by simpa using hx) (by simpa using hl),
+      fun x hx => by simpa using hsub x (by simpa using hx)⟩
+  have h := hk.trans (retry_spec (kahn c rs).1 (kahn c rs).2).1
+  unfold acceptAll
+  refine ⟨h.group_eq, h.keeps, fun k x hx => by simpa using h.only k x hx,
+    fun x hx hl => h.stored x (by simpa using hx) (by simpa using hl),
+    fun x hx => by simpa using h.left_sub x (by simpa using hx)⟩
+
+/-- **Nothing left over could still be accepted:** `accept` refuses every left-over record in
+the final store. -/
+theorem acceptAll_stuck (c : CheckedStore) (rs : Array Rec) :
+    ∀ x ∈ (c.acceptAll rs).2, ∀ d, ((c.acceptAll rs).1.accept x).1 ≠ .accepted d :=
+  (retry_spec (kahn c rs).1 (kahn c rs).2).2
 
 /-! ## Loading and merging -/
 
@@ -966,6 +1176,139 @@ theorem openRecords_ok {g : GroupId} {u : Array Rec} {c : CheckedStore}
     · rintro ⟨hu, rfl⟩
       exact hall x hu (hnil x)
   · simp at h
+
+/-- A map whose keys are all digests of records of `u`, and which misses the digest of one record
+of `u`, has fewer keys than `u` has entries. -/
+theorem size_lt_of_keys {β : Type} {m : Std.ExtTreeMap Digest β compare} {u : Array Rec}
+    {r : Rec} (hk : ∀ k ∈ m, ∃ x ∈ u, hashRecord x = k) (hr : r ∈ u) (hn : hashRecord r ∉ m) :
+    m.size < u.size := by
+  rw [← Std.ExtTreeMap.length_keys]
+  have hsub : m.keys ⊆ (u.toList.map hashRecord).filter (· != hashRecord r) := by
+    intro k hkm
+    have hkm' := Std.ExtTreeMap.mem_keys.mp hkm
+    obtain ⟨x, hx, rfl⟩ := hk _ hkm'
+    simp only [List.mem_filter, List.mem_map, Array.mem_toList_iff, bne_iff_ne, ne_eq]
+    exact ⟨⟨x, hx, rfl⟩, fun h => hn (h ▸ hkm')⟩
+  have h1 := Std.ExtTreeMap.nodup_keys.length_le_of_subset hsub
+  have h2 : ((u.toList.map hashRecord).filter (· != hashRecord r)).length <
+      (u.toList.map hashRecord).length :=
+    List.length_filter_lt_length_iff_exists.mpr
+      ⟨hashRecord r, List.mem_map.mpr ⟨r, by simpa using hr, rfl⟩, by simp⟩
+  simp only [List.length_map, Array.length_toList] at h2
+  omega
+
+/-- **Completeness of `openRecords`.** Records within the size limits, all of chat `g`, with no
+two different records sharing a digest, and that can be listed in an accept order, are all
+loaded. -/
+theorem openRecords_complete {g : GroupId} {u : Array Rec} (hw : WellSized u)
+    (hg : ∀ r ∈ u, r.group = g)
+    (hcol : ∀ x ∈ u, ∀ y ∈ u, hashRecord x = hashRecord y → x = y)
+    (hord : ∃ l, AcceptOrder l ∧ ∀ r, r ∈ l ↔ r ∈ u) :
+    ∃ c, openRecords g u = .ok c := by
+  have hchat : allInChat g u = true := by
+    simp only [allInChat, Array.all_eq_true_iff_forall_mem, beq_iff_eq]
+    exact hg
+  have hcheck : checkInput g u = none := by simp [checkInput, hw, hchat]
+  unfold openRecords
+  rw [hcheck]
+  dsimp only
+  obtain ⟨hgrp, _, honly, hstored, hleftsub⟩ := acceptAll_sound (empty g) u
+  have hstuck := acceptAll_stuck (empty g) u
+  generalize (empty g).acceptAll u = res at hgrp honly hstored hleftsub hstuck ⊢
+  obtain ⟨e, left⟩ := res
+  dsimp only at hgrp honly hstored hleftsub hstuck ⊢
+  have honly' : ∀ k x, e.raw.map[k]? = some x → x ∈ u := fun k x hk =>
+    (honly k x hk).resolve_left (by simp [empty])
+  have hegrp : e.raw.group = g := hgrp
+  -- `accept` takes any record of `u` whose links are all stored.
+  have hok : ∀ x ∈ u, (∀ d ∈ x.links, d ∈ e.raw.map) →
+      (rawAccept e.raw x).1 = .accepted (hashRecord x) := by
+    intro x hx hl
+    apply rawAccept_of_ok ((hg x hx).trans hegrp.symm) (hw.2 x hx) hl
+    · intro old hold
+      exact hcol old (honly' _ _ hold) x hx (e.built.hash_eq _ _ hold)
+    · intro hn
+      have := size_lt_of_keys (m := e.raw.map) (u := u) (r := x) (fun k hk => by
+        obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp
+          (Std.ExtTreeMap.mem_iff_isSome_getElem?.mp hk)
+        exact ⟨y, honly' k y hy, e.built.hash_eq k y hy⟩) hx hn
+      have := hw.1
+      omega
+  -- So every record of `u` is stored: by the accept order.
+  obtain ⟨l, hl, hmem⟩ := hord
+  have hall : ∀ x ∈ l, e.raw.map[hashRecord x]? = some x := by
+    apply hl.all_stored
+    intro x hx hlinks
+    have hxu := (hmem x).mp hx
+    by_cases hxl : x ∈ left
+    · exact absurd (by rw [accept_fst]; exact hok x hxu hlinks) (hstuck x hxl (hashRecord x))
+    · exact hstored x hxu hxl
+  -- And nothing is left over.
+  have hleft : left = #[] := by
+    rw [Array.eq_empty_iff_forall_not_mem]
+    intro x hx
+    have hxu := hleftsub x hx
+    have hs := hall x ((hmem x).mpr hxu)
+    exact hstuck x hx (hashRecord x) (by
+      rw [accept_fst]
+      exact hok x hxu (fun d hd => e.built.closed _ x hs d hd))
+  simp [hleft]
+
+/-- **A store reopens as itself:** opening the blob of a store, under its own chat, gives back
+exactly that store (the maps are extensional, so `=` compares contents). -/
+theorem encode_reopens (c : CheckedStore) : CheckedStore.open c.group c.encode = .ok c := by
+  have hmemr : ∀ x, x ∈ c.records ↔ ∃ k : Digest, c.raw.map[k]? = some x := fun _ => mem_records
+  have hws : WellSized c.records := by
+    refine ⟨?_, fun r hr => ?_⟩
+    · simp only [records, List.size_toArray, List.length_map, Std.ExtTreeMap.length_toList]
+      exact c.built.size_lt
+    · obtain ⟨k, hk⟩ := (hmemr r).mp hr
+      exact c.built.wellSized k r hk
+  have hkey : ∀ k x, c.raw.map[k]? = some x ↔ x ∈ c.records ∧ hashRecord x = k := by
+    intro k x
+    constructor
+    · intro hk
+      exact ⟨(hmemr x).mpr ⟨k, hk⟩, c.built.hash_eq k x hk⟩
+    · rintro ⟨hx, rfl⟩
+      obtain ⟨k', hk'⟩ := (hmemr x).mp hx
+      rwa [c.built.hash_eq k' x hk']
+  unfold CheckedStore.open encode
+  rw [decodeBlob_encodeBlob _ _ hws]
+  dsimp only
+  simp only [ne_eq, not_true_eq_false, ↓reduceIte]
+  obtain ⟨e, he⟩ := openRecords_complete hws
+    (fun r hr => by obtain ⟨k, hk⟩ := (hmemr r).mp hr; exact c.built.group_eq k r hk)
+    (fun x hx y hy hxy => by
+      obtain ⟨kx, hkx⟩ := (hmemr x).mp hx
+      obtain ⟨ky, hky⟩ := (hmemr y).mp hy
+      rw [c.built.hash_eq kx x hkx, c.built.hash_eq ky y hky] at hxy
+      subst hxy
+      rw [hkx] at hky
+      exact Option.some.inj hky)
+    (by
+      obtain ⟨l, hl, hmem⟩ := c.built.order
+      exact ⟨l, hl, fun r => (hmem r).trans (hmemr r).symm⟩)
+  change openRecords c.raw.group c.records = .ok c
+  rw [he]
+  obtain ⟨hgrp, _, _, hemap⟩ := openRecords_ok he
+  have hmap : e.raw.map = c.raw.map := by
+    apply Std.ExtTreeMap.ext_getElem?
+    intro k
+    apply Option.ext
+    intro x
+    rw [hemap k x, hkey k x]
+  have hheads : e.raw.heads = c.raw.heads := by
+    apply Std.ExtTreeSet.ext_mem
+    intro d
+    rw [e.built.heads_iff, c.built.heads_iff, hmap]
+  congr 1
+  apply ext
+  have hg' : e.raw.group = c.raw.group := hgrp
+  cases he' : e.raw
+  cases hc' : c.raw
+  rw [he', hc'] at hg' hmap hheads
+  simp only at hg' hmap hheads
+  rw [hg', hmap, hheads]
 
 end CheckedStore
 
