@@ -348,6 +348,9 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.Proto.accept_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.accept_accepted
 
+/-- info: 'Zrdt.Proto.accept_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.accept_refused
+
 /-- info: 'Zrdt.Proto.run_serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.run_serve_content
 
@@ -413,6 +416,30 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.Proto.run_acceptView' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.run_acceptView
+
+-- Boundary admission (docs/JOIN_PLAN.md §4.4, round 2): a per-digest `ACCEPT_VIEW` keeps a
+-- boundary digest only if a stored record links it, so it adds no head that is not a stored record.
+
+/-- info: 'Zrdt.rawAcceptRel_fst_mono' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.rawAcceptRel_fst_mono
+
+/-- info: 'Zrdt.RelStore.prune_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.prune_spec
+
+/-- info: 'Zrdt.ChatStore.prune_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ChatStore.prune_spec
+
+/-- info: 'Zrdt.ChatStore.accept_fst_mono' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ChatStore.accept_fst_mono
+
+/-- info: 'Zrdt.Proto.acceptView_boundary_linked' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_boundary_linked
+
+/-- info: 'Zrdt.Proto.acceptView_heads' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptView_heads
+
+/-- info: 'Zrdt.Proto.run_acceptView_heads' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_acceptView_heads
 
 /-- info: 'Zrdt.Proto.run_linkable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.run_linkable
