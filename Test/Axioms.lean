@@ -209,23 +209,11 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Crdt.Merkle.fetched_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.fetched_agree
 
-/-- info: 'Crdt.Merkle.merge_fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.merge_fetched
-
-/-- info: 'Crdt.Merkle.fetched_build' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.fetched_build
+/-- info: 'Crdt.Merkle.fetched_of_build' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.fetched_of_build
 
 /-- info: 'Crdt.Merkle.heads_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.heads_insert
-
-/-- info: 'Crdt.Merkle.TaskList.add_wins' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.add_wins
-
-/-- info: 'Crdt.Merkle.TaskList.fetched_live_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.fetched_live_agree
-
-/-- info: 'Crdt.Merkle.TaskList.remove_requires_closure' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.remove_requires_closure
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

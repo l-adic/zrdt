@@ -7,4 +7,3 @@ import Crdt.Sequence
 import Crdt.AuthorityFrontier
 import Crdt.Merkle.Defs
 import Crdt.Merkle.Integrity
-import Crdt.Merkle.TaskList

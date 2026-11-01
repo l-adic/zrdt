@@ -16,13 +16,11 @@ and links. This file proves what those checks buy.
 
 * `fetched_agree` (headline): two replicas that fetched everything reachable from the same heads,
   and nothing else, hold the same store. Or two records in their stores have the same hash.
-* `merge_fetched`: so they also agree after merging in their own records.
-* `fetched_build`: an honest replica, which accepts records one at a time, is fetched from its
-  own heads. Or two records in its store have the same hash. So the headline's hypotheses are
-  met by honest replicas.
+* `fetched_of_build`: a replica that accepts records one at a time is fetched from its own
+  heads. Or two records in its store have the same hash. So the headline's hypotheses are met
+  by honest replicas. `Chat.lean` restates it over `AcceptBuilt` as `fetched_build`.
 
-Every theorem ends in `∨ CollisionIn hash u`, where `u` is the stores involved. The `_global`
-versions at the end replace that with the weaker `∨ Collision hash`.
+Every theorem ends in `∨ CollisionIn hash u`, where `u` is the stores involved.
 -/
 
 namespace Crdt.Merkle
@@ -102,12 +100,6 @@ theorem fetched_agree (hS : Fetched hash s hs) (hT : Fetched hash t hs) :
     · exact subset_of_fetched hash hc hT.1 hS.2
     · exact subset_of_fetched hash (by rwa [Finset.union_comm]) hS.1 hT.2
 
-/-- Two replicas that fetched the same heads still agree after each merges in the same store
-`own`. Or two records in the fetched stores have the same hash. -/
-theorem merge_fetched (own : Store α H K) (hS : Fetched hash s hs) (hT : Fetched hash t hs) :
-    merge own s = merge own t ∨ CollisionIn hash (s ∪ t) :=
-  (fetched_agree hash hS hT).imp (congrArg (merge own)) id
-
 /-! ## Honest replicas are fetched from their own heads -/
 
 /-- Accepting one record keeps a closed store fetched from its own heads. Or two records in the
@@ -148,7 +140,7 @@ private theorem fetched_accept (hc : Closed hash s)
 
 /-- A store built by accepting records one at a time is fetched from its own heads. Or two
 records in it have the same hash. -/
-theorem fetched_build (l : List (Record α H K)) :
+theorem fetched_of_build (l : List (Record α H K)) :
     Fetched hash (build hash l) (heads hash (build hash l)) ∨ CollisionIn hash (build hash l) := by
   have hempty : Fetched hash (∅ : Store α H K) (heads hash ∅) :=
     ⟨complete_of_closed hash (closed_empty hash) (heads_subset_digests hash ∅),
@@ -164,41 +156,5 @@ theorem fetched_build (l : List (Record α H K)) :
     intro s hc hf
     rw [List.foldl_cons]
     exact ih _ (closed_accept hash hc r) (fetched_accept hash hc hf r)
-
-/-! ## Weaker forms with a collision anywhere -/
-
-/-- `accept_unique` with a collision anywhere. -/
-theorem accept_unique_global {a b : Record α H K} {d : H} (ha : hash a = d) (hb : hash b = d) :
-    a = b ∨ Collision hash :=
-  (accept_unique hash ha hb).imp_right (CollisionIn.global hash)
-
-/-- `subset_of_digests_subset` with a collision anywhere. -/
-private theorem subset_of_digests_subset_global (h : digests hash s ⊆ digests hash t) :
-    s ⊆ t ∨ Collision hash :=
-  (subset_of_digests_subset hash h).imp_right (CollisionIn.global hash)
-
-/-- `eq_of_digests_eq` with a collision anywhere. -/
-theorem eq_of_digests_eq_global (h : digests hash s = digests hash t) : s = t ∨ Collision hash :=
-  (eq_of_digests_eq hash h).imp_right (CollisionIn.global hash)
-
-/-- `reach_mono_of_complete`, assuming no collision anywhere. -/
-private theorem reach_mono_of_complete_global (hc : ¬ Collision hash) (ht : Complete hash t hs) :
-    ∀ d, Reach hash s hs d → Reach hash t hs d :=
-  reach_mono_of_complete hash (fun h ↦ hc (CollisionIn.global hash h)) ht
-
-/-- `subset_of_fetched`, assuming no collision anywhere. -/
-private theorem subset_of_fetched_global (hc : ¬ Collision hash) (ht : Complete hash t hs)
-    (hs' : Tight hash s hs) : s ⊆ t :=
-  subset_of_fetched hash (fun h ↦ hc (CollisionIn.global hash h)) ht hs'
-
-/-- `fetched_agree` with a collision anywhere. -/
-theorem fetched_agree_global (hS : Fetched hash s hs) (hT : Fetched hash t hs) :
-    s = t ∨ Collision hash :=
-  (fetched_agree hash hS hT).imp_right (CollisionIn.global hash)
-
-/-- `merge_fetched` with a collision anywhere. -/
-theorem merge_fetched_global (own : Store α H K) (hS : Fetched hash s hs)
-    (hT : Fetched hash t hs) : merge own s = merge own t ∨ Collision hash :=
-  (merge_fetched hash own hS hT).imp_right (CollisionIn.global hash)
 
 end Crdt.Merkle

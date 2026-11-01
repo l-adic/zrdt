@@ -29,37 +29,38 @@ records it holds. `Closed`, `heads`, `accept` and `digests` are all computable.
 namespace Crdt.Merkle
 
 /-- A record: a payload, the hashes of the records its author had seen when writing it (its
-links), and the author's name. In phase 1 nothing checks the author. -/
+links), and the author's name. The author is only a claim; `authorConfirmed` (`Chat.lean`)
+says when it can be believed. -/
 structure Record (α H K : Type*) where
   /-- The data the record carries. -/
   payload : α
   /-- Hashes of the records the author had seen (the author's heads at write time). -/
   links : Finset H
-  /-- Who claims to have written the record. Not checked in phase 1. -/
+  /-- Who claims to have written the record. Nothing in this file checks it. -/
   author : K
 deriving DecidableEq
 
 /-- A store: a finite set of records. Merging two stores is set union. -/
 abbrev Store (α H K : Type*) := Finset (Record α H K)
 
-/-! ## A toy setting for the examples in this file -/
+/-! ## A toy setting for the examples -/
 
 namespace Toy
 
 /-- Toy records: numbers as payloads and as hashes, one author. -/
-private abbrev R := Record ℕ ℕ Unit
+abbrev R := Record ℕ ℕ Unit
 
 /-- Toy hash: a record's hash is its payload. Records with equal payloads collide. -/
-private def hash (r : R) : ℕ := r.payload
+def hash (r : R) : ℕ := r.payload
 
 /-- A record with no links. Hash `0`. -/
-private def r0 : R := ⟨0, ∅, ()⟩
+def r0 : R := ⟨0, ∅, ()⟩
 
 /-- A record written after seeing `r0`. Hash `1`. -/
-private def r1 : R := ⟨1, {0}, ()⟩
+def r1 : R := ⟨1, {0}, ()⟩
 
 /-- A different record that also has hash `0`, so it collides with `r0`. -/
-private def fake0 : R := ⟨0, {7}, ()⟩
+def fake0 : R := ⟨0, {7}, ()⟩
 
 end Toy
 
@@ -68,12 +69,9 @@ variable (hash : Record α H K → H)
 
 /-! ## Collisions -/
 
-/-- Two different records, anywhere, have the same hash. For a hash with a fixed output size
-this is always true, so it is only useful as a weak form of `CollisionIn`. -/
-def Collision : Prop := ∃ x y : Record α H K, x ≠ y ∧ hash x = hash y
-
 /-- Two different records in `u` have the same hash. This is the collision the integrity
-theorems produce: it points to records the replicas actually hold. -/
+theorems produce: it points to records the replicas actually hold. (A collision "somewhere"
+always exists for a hash with a fixed output size, so it would make every theorem empty.) -/
 def CollisionIn (u : Store α H K) : Prop := ∃ x ∈ u, ∃ y ∈ u, x ≠ y ∧ hash x = hash y
 
 instance (u : Store α H K) : Decidable (CollisionIn hash u) := by
@@ -86,11 +84,6 @@ example : ¬ CollisionIn Toy.hash {Toy.r0, Toy.r1} := by decide
 theorem CollisionIn.of_mem {u : Store α H K} {x y : Record α H K} (hx : x ∈ u) (hy : y ∈ u)
     (hne : x ≠ y) (heq : hash x = hash y) : CollisionIn hash u :=
   ⟨x, hx, y, hy, hne, heq⟩
-
-/-- A collision inside `u` is a collision. -/
-theorem CollisionIn.global {u : Store α H K} (h : CollisionIn hash u) : Collision hash := by
-  obtain ⟨x, -, y, -, hne, heq⟩ := h
-  exact ⟨x, y, hne, heq⟩
 
 /-- A collision inside `u` is also inside any bigger store. -/
 theorem CollisionIn.mono {u v : Store α H K} (huv : u ⊆ v) (h : CollisionIn hash u) :
@@ -109,12 +102,12 @@ theorem mem_digests {s : Store α H K} {d : H} : d ∈ digests hash s ↔ ∃ r 
   Finset.mem_image
 
 /-- The hashes of a merged store are the hashes of both stores. -/
-private theorem digests_union (s t : Store α H K) :
+theorem digests_union (s t : Store α H K) :
     digests hash (s ∪ t) = digests hash s ∪ digests hash t :=
   Finset.image_union s t
 
 /-- The empty store has no hashes. -/
-private theorem digests_empty : digests hash (∅ : Store α H K) = ∅ :=
+theorem digests_empty : digests hash (∅ : Store α H K) = ∅ :=
   Finset.image_empty hash
 
 /-! ## Closed stores -/
@@ -155,7 +148,7 @@ example : heads Toy.hash {Toy.r0} = {0} := by decide
 example : heads Toy.hash {Toy.r0, Toy.r1} = {1} := by decide
 
 /-- `d` is a head of `s` when some record in `s` has hash `d` and no record in `s` links `d`. -/
-private theorem mem_heads {s : Store α H K} {d : H} :
+theorem mem_heads {s : Store α H K} {d : H} :
     d ∈ heads hash s ↔ ∃ r ∈ s, hash r = d ∧ ∀ r' ∈ s, d ∉ r'.links := by
   simp only [heads, Finset.mem_image, Finset.mem_filter]
   constructor
@@ -256,7 +249,7 @@ theorem closed_accept {s : Store α H K} (hs : Closed hash s) (r : Record α H K
   · exact hs
 
 /-- A store built by `accept` is closed. -/
-private theorem closed_build (l : List (Record α H K)) : Closed hash (build hash l) := by
+theorem closed_build (l : List (Record α H K)) : Closed hash (build hash l) := by
   unfold build
   suffices ∀ s, Closed hash s → Closed hash (l.foldl (accept hash) s) from
     this ∅ (closed_empty hash)
@@ -304,47 +297,6 @@ theorem heads_insert {s : Store α H K} {r : Record α H K} (hs : Closed hash s)
       rcases Finset.mem_insert.mp hy with rfl | hy
       · exact hnl
       · exact hh y hy
-
-/-- A new record that links all current heads becomes the only head. Or two records in the new
-store collide. -/
-theorem heads_insert_of_links_heads {s : Store α H K} {r : Record α H K} (hs : Closed hash s)
-    (hr : r ∉ s) (hl : r.links = heads hash s) :
-    heads hash (insert r s) = {hash r} ∨ CollisionIn hash (insert r s) := by
-  have hl' : r.links ⊆ digests hash s := by rw [hl]; exact heads_subset_digests hash s
-  refine (heads_insert hash hs hr hl').imp (fun h ↦ ?_) id
-  rw [h, hl]
-  simp
-
-/-! ## Receipts -/
-
-/-- What a store reports after it is asked to accept one record. -/
-structure Receipt (H : Type*) where
-  /-- The hash of the record that was offered. -/
-  digest : H
-  /-- The store's heads afterwards. -/
-  heads : Finset H
-deriving DecidableEq
-
-/-- The receipt for offering `r` to `s`. -/
-def receipt (s : Store α H K) (r : Record α H K) : Receipt H :=
-  ⟨hash r, heads hash (accept hash s r)⟩
-
-example : receipt Toy.hash {Toy.r0} Toy.r1 = ⟨1, {1}⟩ := by decide
-
-/-- A receipt names the offered record and the heads of the store after accepting it. -/
-private theorem receipt_heads_sound (s : Store α H K) (r : Record α H K) :
-    (receipt hash s r).digest = hash r ∧ (receipt hash s r).heads = heads hash (accept hash s r) :=
-  ⟨rfl, rfl⟩
-
-/-- If a new record's links resolve, its receipt lists it as a head. Or two records in the new
-store collide. -/
-theorem receipt_confirms {s : Store α H K} {r : Record α H K} (hs : Closed hash s) (hr : r ∉ s)
-    (hl : r.links ⊆ digests hash s) :
-    (receipt hash s r).digest ∈ (receipt hash s r).heads ∨ CollisionIn hash (insert r s) := by
-  refine (heads_insert hash hs hr hl).imp (fun h ↦ ?_) id
-  show hash r ∈ heads hash (accept hash s r)
-  rw [accept_of_resolves hash hl, h]
-  exact Finset.mem_insert_self _ _
 
 /-! ## Convergence carries over from phase 0 -/
 
