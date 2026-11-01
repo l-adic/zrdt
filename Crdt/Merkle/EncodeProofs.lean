@@ -39,9 +39,17 @@ the requested chat, and then load its records (`openRecords`, `salvageRecords`),
   not store.
 - `salvageRecords_ok`: what a successful salvage returns: a store of records of the batch, closed
   as above, and `dropped` the digests of every batch record not stored.
+- `salvageRecords_ok_of`, `salvage_ok_of`: salvage refuses only for `TOO_LARGE`, `WRONG_CHAT` or a
+  real collision (and `MALFORMED` for bytes that do not decode).
+
+`LoadSpec.lean` has the model's side: `buildRetry` is inside every store that "takes in" the
+batch, which is what `acceptAll_closed` gives. Together: `salvage_spec`, and the "if" direction of
+`open_iff`.
 
 **Stores.** `CheckedStore.eq_of_records`: two stores of the same chat with the same records are
-equal. (The keys are the records' digests, and the heads are computed from the map.)
+equal. (The keys are the records' digests, and the heads are computed from the map.) A store's
+records are well-sized, of its chat, and free of collisions (`wellSized_records`,
+`group_of_mem_records`, `noCollision_records`).
 -/
 
 namespace Zrdt
@@ -154,6 +162,29 @@ theorem eq_of_records {c d : CheckedStore} (hg : c.group = d.group)
   rw [hg, hm, hh]
 
 example (c : CheckedStore) : c = c := eq_of_records rfl fun _ => Iff.rfl
+
+/-- The records of a store are within the size limits. -/
+theorem wellSized_records (c : CheckedStore) : WellSized c.records := by
+  refine ⟨?_, fun r hr => ?_⟩
+  · simp only [records, List.size_toArray, List.length_map, Std.ExtTreeMap.length_toList]
+    exact c.built.size_lt
+  · obtain ⟨k, hk⟩ := mem_records.mp hr
+    exact c.built.wellSized k r hk
+
+/-- The records of a store all belong to its chat. -/
+theorem group_of_mem_records {c : CheckedStore} {r : Rec} (h : r ∈ c.records) :
+    r.group = c.group := by
+  obtain ⟨k, hk⟩ := mem_records.mp h
+  exact c.built.group_eq k r hk
+
+/-- No two different records of a store have the same digest. -/
+theorem noCollision_records (c : CheckedStore) : NoCollision c.records := by
+  intro x hx y hy hxy
+  have h1 := mem_records_iff.mp hx
+  rw [hxy, mem_records_iff.mp hy] at h1
+  exact (Option.some.inj h1).symm
+
+example : NoCollision Examples.all4.records := noCollision_records _
 
 /-! ## `accept` and `acceptAll` -/
 
@@ -430,6 +461,81 @@ theorem salvageRecords_ok {g : GroupId} {u : Array Rec} {s : Salvaged}
     exact ⟨r, hr.1, hr.2, rfl⟩
   · rintro ⟨r, hr, hn, rfl⟩
     exact ⟨_, ⟨r, ⟨hr, hn⟩, rfl⟩, rfl⟩
+
+/-- `findCollision` finds nothing when no record left over shares its digest with a different
+record left over or stored. -/
+theorem findCollision_eq_none {c : CheckedStore} {left : Array Rec}
+    (hcol : ∀ x ∈ left, ∀ y, (y ∈ left ∨ y ∈ c.records) → hashRecord x = hashRecord y → x = y) :
+    findCollision c (withDigests left) = none := by
+  simp only [findCollision, withDigests, ← Array.foldl_toList, Array.toList_map, List.foldl_map]
+  have h0 : ∀ d o, (∅ : RecMap)[d]? = some o → o ∈ left ∧ hashRecord o = d := by simp
+  have hl : ∀ x ∈ left.toList, x ∈ left := fun x hx => Array.mem_toList_iff.mp hx
+  generalize (∅ : RecMap) = seen at h0 ⊢
+  generalize left.toList = l at hl ⊢
+  suffices h : (List.foldl _ (seen, (∅ : DigestSet)) l).snd = ∅ by rw [h]; simp
+  induction l generalizing seen with
+  | nil => rfl
+  | cons r rs ih =>
+    simp only [List.foldl_cons]
+    have hr : r ∈ left := hl r List.mem_cons_self
+    have hrs : ∀ x ∈ rs, x ∈ left := fun x hx => hl x (List.mem_cons_of_mem _ hx)
+    cases hg : c.get (hashRecord r) with
+    | some other =>
+      have hg' : c.raw.map[hashRecord r]? = some other := hg
+      have : other = r := by
+        obtain ⟨ho, hh⟩ := getElem?_eq_some_iff.mp hg'
+        exact (hcol r hr other (Or.inr ho) hh.symm).symm
+      simp only [Option.orElse, this, ↓reduceIte]
+      exact ih seen h0 hrs
+    | none =>
+      cases hs : seen[hashRecord r]? with
+      | some other =>
+        obtain ⟨ho, hh⟩ := h0 _ _ hs
+        have : other = r := (hcol r hr other (Or.inl ho) hh.symm).symm
+        simp only [Option.orElse, this, ↓reduceIte]
+        exact ih seen h0 hrs
+      | none =>
+        simp only [Option.orElse]
+        refine ih _ ?_ hrs
+        intro d o hd
+        rw [Std.ExtTreeMap.getElem?_insert] at hd
+        split at hd
+        · rename_i hk
+          rw [Std.LawfulEqCmp.compare_eq_iff_eq] at hk
+          cases hd
+          exact ⟨hr, hk⟩
+        · exact h0 d o hd
+
+/-- **When salvage succeeds.** `salvageRecords` loads something whenever the records are within
+the size limits, all of chat `g`, and no two different records share a digest. So it refuses
+only for `TOO_LARGE`, `WRONG_CHAT`, or a real collision. -/
+theorem salvageRecords_ok_of {g : GroupId} {u : Array Rec} (hw : WellSized u)
+    (hg : ∀ r ∈ u, r.group = g) (hcol : NoCollision u) : ∃ s, salvageRecords g u = .ok s := by
+  have hcheck := checkInput_eq_none_iff.mpr ⟨hw, hg⟩
+  obtain ⟨_, honly⟩ := acceptAll_empty_records (g := g) (u := u)
+  have hleft := @mem_acceptAll_left (empty g) u
+  unfold salvageRecords
+  rw [hcheck]
+  dsimp only
+  generalize (empty g).acceptAll u = res at honly hleft ⊢
+  obtain ⟨e, left⟩ := res
+  dsimp only at honly hleft ⊢
+  rw [findCollision_eq_none (fun x hx y hy hxy =>
+    hcol x (hleft.mp hx).1 y (hy.elim (fun h => (hleft.mp h).1) (honly y)) hxy)]
+  exact ⟨_, rfl⟩
+
+/-- `salvage` on a blob: it loads something whenever the blob decodes for chat `g` and its records
+satisfy the conditions of `salvageRecords_ok_of`. -/
+theorem salvage_ok_of {g : GroupId} {b : ByteArray} {u : Array Rec}
+    (hb : decodeBlob b = some (g, u)) (hw : WellSized u) (hg : ∀ r ∈ u, r.group = g)
+    (hcol : NoCollision u) : ∃ s, salvage g b = .ok s := by
+  obtain ⟨s, hs⟩ := salvageRecords_ok_of hw hg hcol
+  exact ⟨s, salvage_eq_ok_iff.mpr ⟨u, hb, hs⟩⟩
+
+/-- A store's own blob salvages (so `salvageRecords_ok` has inputs that satisfy it). -/
+example (c : CheckedStore) : ∃ s, salvage c.group c.encode = .ok s :=
+  salvage_ok_of (decodeBlob_encodeBlob _ _ c.wellSized_records) c.wellSized_records
+    (fun _ h => group_of_mem_records h) c.noCollision_records
 
 end CheckedStore
 
