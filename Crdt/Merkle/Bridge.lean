@@ -113,6 +113,10 @@ def toSpec (r : Rec) : SpecRec := ⟨(r.group, r.commit), r.links.toList.toFinse
 
 example : (toSpec Examples.first).links = ∅ := rfl
 
+/-- The links of `toSpec r` are the links of `r`. -/
+@[simp] theorem mem_toSpec_links {r : Rec} {d : Digest} : d ∈ (toSpec r).links ↔ d ∈ r.links := by
+  simp [toSpec]
+
 /-- The links of a spec record in increasing order, with no repeats. -/
 theorem sort_links_strictlySorted (x : SpecRec) :
     StrictlySorted (x.links.sort (fun a b : Digest => a ≤ b)).toArray := by
@@ -281,5 +285,30 @@ theorem closed_abs (h : Built c) : Closed hashSpec c.abs := by
   exact (mem_digests hashSpec).mp ((h.mem_digests_abs).mpr (h.closed k r hk d hd'))
 
 end Built
+
+/-! ## The bridge for checked stores -/
+
+namespace CheckedStore
+
+/-- A checked store's head cache holds exactly the heads of its spec store. -/
+theorem mem_heads_iff (c : CheckedStore) {d : Digest} :
+    d ∈ c.heads ↔ d ∈ Crdt.Merkle.heads hashSpec (abs c) :=
+  c.built.mem_heads_iff
+
+/-- A checked store holds a digest exactly when its spec store has a record with that hash. -/
+theorem mem_digests_abs (c : CheckedStore) {d : Digest} :
+    d ∈ digests hashSpec (abs c) ↔ d ∈ c.raw.map :=
+  c.built.mem_digests_abs
+
+/-- A checked store's spec store is accept-built. -/
+theorem acceptBuilt (c : CheckedStore) : AcceptBuilt hashSpec (abs c) := c.built.acceptBuilt
+
+/-- A checked store's spec store is closed. -/
+theorem closed (c : CheckedStore) : Closed hashSpec (abs c) := c.built.closed_abs
+
+example : AcceptBuilt hashSpec (abs (CheckedStore.empty Examples.group)) :=
+  (CheckedStore.empty Examples.group).acceptBuilt
+
+end CheckedStore
 
 end Zrdt

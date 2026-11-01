@@ -9,3 +9,4 @@ import Crdt.Merkle.Defs
 import Crdt.Merkle.Integrity
 import Crdt.Merkle.Chat
 import Crdt.Merkle.Bridge
+import Crdt.Merkle.Api
