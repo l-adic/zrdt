@@ -19,3 +19,9 @@ import Crdt.Merkle.LoadSpec
 import Crdt.Merkle.LoadApi
 import Crdt.Merkle.Rel
 import Crdt.Merkle.ServeAbs
+import Crdt.Merkle.RelSpec
+import Crdt.Merkle.RelBridge
+import Crdt.Merkle.RelRefine
+import Crdt.Merkle.ClassifyRel
+import Crdt.Merkle.ServeAbsRel
+import Crdt.Merkle.ServeExamples

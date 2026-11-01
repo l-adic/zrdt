@@ -99,7 +99,8 @@ theorem mem_digests_abs (c : ReadyStore) {d : Digest} :
     rw [hashSpec_toSpec, c.hash_eq k r hk]
     exact ⟨r, hk⟩
   · rintro ⟨r, hr⟩
-    exact ⟨toSpec r, RawStore.mem_abs.mpr ⟨d, r, hr, rfl⟩, by rw [hashSpec_toSpec, c.hash_eq d r hr]⟩
+    exact ⟨toSpec r, RawStore.mem_abs.mpr ⟨d, r, hr, rfl⟩,
+      by rw [hashSpec_toSpec, c.hash_eq d r hr]⟩
 
 /-- The walk's reachability is the spec's `Reach`, from the same digests. -/
 theorem walkReach_iff (c : ReadyStore) (hs : Array Digest) {d : Digest} :
@@ -311,7 +312,8 @@ def authorStep (c : ReadyStore) (m : Std.ExtTreeMap Aci (Array Digest × DigestS
   | none => m
 
 -- A live digest that is not stored adds nothing.
-example : authorStep (ReadyStore.ofChecked (CheckedStore.empty Examples.group)) ∅ (Examples.dig 9, #[]) = ∅ := rfl
+example : authorStep (ReadyStore.ofChecked (CheckedStore.empty Examples.group)) ∅
+    (Examples.dig 9, #[]) = ∅ := rfl
 
 /-- The view of one author, from its live digests `ls` and disowned digests `ds`. -/
 def viewOf (c : ReadyStore) (p : Array Digest × DigestSet) : AuthorView :=
@@ -480,7 +482,8 @@ theorem viewOf_reachesAllLive (c : ReadyStore) (p : Array Digest × DigestSet) :
 
 /-- A stored record reaches `l` if it reaches a link of the record stored under `l`. -/
 theorem reach_of_link (c : ReadyStore) {l k x : Digest} {y : Rec} (hy : c.get l = some y)
-    (hk : k ∈ y.links) (hR : Reach hashSpec (c.raw.abs) {k} x) : Reach hashSpec (c.raw.abs) {l} x := by
+    (hk : k ∈ y.links) (hR : Reach hashSpec (c.raw.abs) {k} x) :
+    Reach hashSpec (c.raw.abs) {l} x := by
   obtain ⟨hy', rfl⟩ := (c.get_eq_some_iff).mp hy
   refine Reach.trans hashSpec ?_ hR
   refine .link hy' ?_ (mem_toSpec_links.mpr hk)
@@ -534,7 +537,8 @@ theorem mem_of_mem_newestOf {c : ReadyStore} {ls : Array Digest} {n : Digest}
 /-- **What `viewOf` says reaches every live record**: for a non-empty list, `reachesAllLive` is
 `some s`, and a stored digest is in `s` exactly when it reaches every record of the list. -/
 theorem viewOf_reachesAllLive_spec (c : ReadyStore) (p : Array Digest × DigestSet)
-    (hne : ∃ l, l ∈ p.1) (hst : ∀ l ∈ p.1, l ∈ c.raw.map) : ∃ s, (viewOf c p).reachesAllLive = some s ∧
+    (hne : ∃ l, l ∈ p.1) (hst : ∀ l ∈ p.1, l ∈ c.raw.map) :
+    ∃ s, (viewOf c p).reachesAllLive = some s ∧
       ∀ x ∈ c.raw.map, x ∈ s ↔ ∀ l ∈ p.1, Reach hashSpec (c.raw.abs) {x} l := by
   obtain ⟨hnone, hsome⟩ := reachersOfAll_spec (linkedByRaw c.raw) (newestOf c p.1)
   rw [viewOf_reachesAllLive]
@@ -679,7 +683,8 @@ status `classify` gives means exactly what the spec says (`StatusMeans`). -/
 theorem status_spec (c : ReadyStore) (facts : Array Fact) {d : Digest} {r : Rec}
     (h : c.raw.map[d]? = some r) :
     StatusMeans (c.raw.abs) (liveOf facts) (toSpec r)
-      (status (authorViewsRaw c.raw (liveFacts facts)) (authorViewsRaw c.raw (liveFacts facts)).toList d r) := by
+      (status (authorViewsRaw c.raw (liveFacts facts))
+        (authorViewsRaw c.raw (liveFacts facts)).toList d r) := by
   have hd : hashRecord r = d := c.hash_eq d r h
   have hdm : d ∈ c.raw.map := Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp [h])
   have hhr : hashSpec (toSpec r) = d := by rw [hashSpec_toSpec, hd]
@@ -778,7 +783,8 @@ theorem status_spec (c : ReadyStore) (facts : Array Fact) {d : Digest} {r : Rec}
 
 /-- **`classify` computes the spec's status of every stored record, and of nothing else**, in
 the words of `StatusMeans`. `ClassifyStatus.lean` turns this into the spec's `status`
-(`classify_eq_some_iff`, advertised as `CheckedStore.classify_spec` in `Api.lean`). -/
+(`classify_spec` below turns this into the spec's `status`; `Api.lean` advertises it for a
+relative store as `RelStore.classify_spec`). -/
 theorem classify_getElem?_iff (c : ReadyStore) (facts : Array Fact) (d : Digest)
     (st : Zrdt.Status) :
     (classifyRaw c.raw facts)[d]? = some st ↔

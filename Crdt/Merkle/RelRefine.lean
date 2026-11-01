@@ -4,9 +4,8 @@ Released under the MIT license as described in the file LICENSE.
 Authors: zrdt contributors
 -/
 import Mathlib
-import Crdt.Merkle.RelSpec
+import Crdt.Merkle.RelBridge
 import Crdt.Merkle.LoadApi
-import Zrdt.ChatStore
 
 set_option linter.unusedSectionVars false
 
@@ -40,21 +39,6 @@ here, with an empty boundary, says what the closed statement says (`inView_empty
 namespace Zrdt
 
 open Crdt.Merkle
-
-/-- The digests of a boundary, as a finite set (the spec's `B`). -/
-def boundarySet (B : Boundary) : Finset Digest := B.keys.toFinset
-
-open Examples in
-example : hashRecord a1 ∈ boundarySet bnd := by
-  simp [boundarySet, bnd]
-
-/-- A digest is in `boundarySet B` exactly when it is a digest of `B`. -/
-theorem mem_boundarySet {B : Boundary} {d : Digest} : d ∈ boundarySet B ↔ d ∈ B := by
-  simp [boundarySet]
-
-/-- The empty boundary gives the empty set. -/
-@[simp] theorem boundarySet_empty : boundarySet ∅ = ∅ := by
-  ext d; simp [mem_boundarySet]
 
 /-! ## Accept orders, in the spec model -/
 
@@ -119,7 +103,8 @@ theorem mem_digests_abs (h : BuiltRel c B) {d : Digest} :
     rw [hashSpec_toSpec, h.hash_eq k r hk]
     exact ⟨r, hk⟩
   · rintro ⟨r, hr⟩
-    exact ⟨toSpec r, RawStore.mem_abs.mpr ⟨d, r, hr, rfl⟩, by rw [hashSpec_toSpec, h.hash_eq d r hr]⟩
+    exact ⟨toSpec r, RawStore.mem_abs.mpr ⟨d, r, hr, rfl⟩,
+      by rw [hashSpec_toSpec, h.hash_eq d r hr]⟩
 
 /-- The digests the view knows are the stored digests and the boundary digests. -/
 theorem mem_inView (h : BuiltRel c B) {d : Digest} :
@@ -265,37 +250,6 @@ theorem agree_model (c d : RelStore) (h : c.heads = d.heads)
     exact .inr h1
 
 /-! ### Accept -/
-
-/-- **What the result of `accept c r` means**, for the new store `c'`, relative to `c`'s boundary
-`B` (with `B = ∅` these are the cases of `AcceptMeans`):
-
-* `accepted d`: the spec store of `c'` is the spec's `acceptRel B` of `toSpec r`, `d` is the
-  record's digest, every link of `r` is the digest of a stored record or a digest of `B`, the
-  record is in the new store, and the boundary is the same.
-* `missing ds`: nothing changed; `ds` is not empty, and it is exactly the links of `r` that are
-  neither the digest of a stored record nor a digest of `B`.
-* `collision d`: nothing changed; `d` is the digest of `r`, and the store holds a different
-  record with that digest.
-* `wrongChat`: nothing changed; `r` belongs to another chat.
-* `tooLarge`: nothing changed; `r` has too many links, or it is new and the store is full. -/
-def _root_.Zrdt.AcceptRelMeans (c : RelStore) (r : Rec) : AcceptResult × RelStore → Prop
-  | (.accepted d, c') =>
-    c'.raw.abs = acceptRel hashSpec (boundarySet c.boundary) c.raw.abs (toSpec r) ∧
-      d = hashRecord r ∧
-      (toSpec r).links ⊆ inView hashSpec c.raw.abs (boundarySet c.boundary) ∧
-      toSpec r ∈ c'.raw.abs ∧ c'.boundary = c.boundary
-  | (.missing ds, c') =>
-    c' = c ∧ ds ≠ #[] ∧
-      ∀ x, x ∈ ds ↔ x ∈ (toSpec r).links ∧ x ∉ inView hashSpec c.raw.abs (boundarySet c.boundary)
-  | (.collision d, c') =>
-    c' = c ∧ d = hashRecord r ∧ ∃ x ∈ c.raw.abs, hashSpec x = d ∧ x ≠ toSpec r
-  | (.wrongChat, c') => c' = c ∧ r.group ≠ c.group
-  | (.tooLarge, c') =>
-    c' = c ∧ (¬ r.WellSized ∨ (hashRecord r ∉ digests hashSpec c.raw.abs ∧ maxRecords ≤ c.size + 1))
-
--- A `missing` result with an empty list means nothing.
-example (c : RelStore) (r : Rec) : ¬ AcceptRelMeans c r (.missing #[], c) := by
-  simp [AcceptRelMeans]
 
 /-- In the `accepted` case, every link of the record is stored or a boundary digest. -/
 theorem rawAcceptRel_accepted_links {c c' : RawStore} {B : Boundary} (hc : BuiltRel c B)
@@ -774,6 +728,76 @@ theorem noCollision_of_findCollision {c : RelStore} {left : Array Rec}
     unfold lookup at hlx
     rw [hxy, hs] at hlx
     exact (Option.some.inj hlx).symm
+
+/-- `findCollision` finds nothing when no record left over shares its digest with a different
+record left over or stored. -/
+theorem findCollision_eq_none {c : RelStore} {left : Array Rec}
+    (hcol : ∀ x ∈ left, ∀ y, (y ∈ left ∨ c.raw.map[hashRecord y]? = some y) →
+      hashRecord x = hashRecord y → x = y) :
+    c.findCollision (CheckedStore.withDigests left) = none := by
+  simp only [findCollision, CheckedStore.withDigests, ← Array.foldl_toList, Array.toList_map,
+    List.foldl_map]
+  have h0 : ∀ d o, (∅ : RecMap)[d]? = some o → o ∈ left ∧ hashRecord o = d := by simp
+  have hl : ∀ x ∈ left.toList, x ∈ left := fun x hx => Array.mem_toList_iff.mp hx
+  generalize (∅ : RecMap) = seen at h0 ⊢
+  generalize left.toList = l at hl ⊢
+  suffices h : (List.foldl _ (seen, (∅ : DigestSet)) l).snd = ∅ by rw [h]; simp
+  induction l generalizing seen with
+  | nil => rfl
+  | cons r rs ih =>
+    simp only [List.foldl_cons]
+    have hr : r ∈ left := hl r List.mem_cons_self
+    have hrs : ∀ x ∈ rs, x ∈ left := fun x hx => hl x (List.mem_cons_of_mem _ hx)
+    cases hg : c.get (hashRecord r) with
+    | some other =>
+      have hg' : c.raw.map[hashRecord r]? = some other := hg
+      have : other = r := by
+        have hh := c.built.hash_eq _ _ hg'
+        have hs : c.raw.map[hashRecord other]? = some other := by rw [hh]; exact hg'
+        exact (hcol r hr other (.inr hs) hh.symm).symm
+      simp only [Option.orElse, this, ↓reduceIte]
+      exact ih seen h0 hrs
+    | none =>
+      cases hs : seen[hashRecord r]? with
+      | some other =>
+        obtain ⟨ho, hh⟩ := h0 _ _ hs
+        have : other = r := (hcol r hr other (Or.inl ho) hh.symm).symm
+        simp only [Option.orElse, this, ↓reduceIte]
+        exact ih seen h0 hrs
+      | none =>
+        simp only [Option.orElse]
+        refine ih _ ?_ hrs
+        intro d o hd
+        rw [Std.ExtTreeMap.getElem?_insert] at hd
+        split at hd
+        · rename_i hk
+          rw [Std.LawfulEqCmp.compare_eq_iff_eq] at hk
+          cases hd
+          exact ⟨hr, hk⟩
+        · exact h0 d o hd
+
+/-- **When salvage succeeds.** `salvage g B u` loads something whenever the boundary is under its
+limit, the records are within the size limits, all of chat `g`, and no two different records
+share a digest. -/
+theorem salvage_ok_of {g : GroupId} {B : Boundary} {u : Array Rec} (hB : B.size < maxRecords)
+    (hw : WellSized u) (hg : ∀ r ∈ u, r.group = g) (hcol : NoCollision u) :
+    ∃ s, salvage g B u = .ok s := by
+  have hchat : CheckedStore.allInChat g u = true := by
+    simp only [CheckedStore.allInChat, Array.all_eq_true_iff_forall_mem, beq_iff_eq]
+    exact hg
+  have hcheck : CheckedStore.checkInput g u = none := by
+    simp [CheckedStore.checkInput, hw, hchat]
+  obtain ⟨-, -, -, honly, -, hleftsub⟩ := acceptAll_sound (emptyWith g B hB) u
+  unfold salvage
+  simp only [hB, ↓reduceDIte, hcheck]
+  generalize (emptyWith g B hB).acceptAll u = res at honly hleftsub ⊢
+  obtain ⟨e, left⟩ := res
+  dsimp only at honly hleftsub ⊢
+  have honly' : ∀ k x, e.raw.map[k]? = some x → x ∈ u := fun k x hk =>
+    (honly k x hk).resolve_left (by simp [emptyWith])
+  rw [findCollision_eq_none (fun x hx y hy hxy =>
+    hcol x (hleftsub x hx) y (hy.elim (hleftsub y) (honly' _ y)) hxy)]
+  exact ⟨_, rfl⟩
 
 /-- The digests the fold in `leftoverReport` collects: those of the given entries. -/
 theorem mem_leftoverReport_fst {c : RelStore} {left : Array (Digest × Rec)} {d : Digest} :

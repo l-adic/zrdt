@@ -606,7 +606,8 @@ too. -/
 theorem serve_after_reaches {c : RelStore} {me : Me} {held : HeldMap} {q : Query} {r : Rec}
     (he : Entry.after r ∈ serve c.raw me held q) :
     toSpec r ∈ c.raw.abs ∧
-      ∃ t ∈ c.raw.abs, visSpec c held q t ∧ Reach hashSpec (c.raw.abs) {hashRecord r} (hashSpec t) := by
+      ∃ t ∈ c.raw.abs, visSpec c held q t ∧
+        Reach hashSpec (c.raw.abs) {hashRecord r} (hashSpec t) := by
   obtain ⟨d, hget, hup⟩ := serve_after he
   have h := (mem_servedF hashSpec).mp ((mem_upSet_of_get hget).mp hup)
   rw [hashSpec_toSpec] at h

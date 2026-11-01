@@ -562,18 +562,29 @@ an empty responder boundary they say what the unprimed ones say.
 - **`Breaker2.relative_responder_not_closed`** (round 1). Serving only stored records from a
   relative responder gives a view that is not closed; `relative_responder_closed'` shows the
   primed boundary closes it.
-- **Bridge `serve_abs`** (to prove, with `walk_spec`). The records and boundary in `serve`'s
+- **Bridge `serve_abs`** (proved: `Crdt/Merkle/ServeAbs.lean` for a closed responder,
+  `Crdt/Merkle/ServeAbsRel.lean` for a relative one). The records and boundary in `serve`'s
   catch-up reply are `ServedF` and `ServedB'` for `vis r := entitled q r ∧ ¬ reachable from since`
   and `BS` = the responder's boundary. Records whose audience the responder does not hold are
   covered: they are boundary digests when linked by a served record or heads.
 
 ### 7.3 Advertised theorems
 
-- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form) and
-  `Serve.serve_content`.
-- The 11 existing advertised theorems are restated for a store with a boundary. With an empty
-  boundary they say exactly what they say today. The Comparator challenge is updated to match,
-  and Comparator is run only as the final step.
+- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form),
+  `CheckedStore.serve_content` and `CheckedStore.serve_content_complete`.
+- The existing advertised theorems are restated for a store with a boundary (`Api.lean` Part 5,
+  the same names under `RelStore`: `fetched`, `no_collision`, `agree`, `abs_accept`, `abs_merge`,
+  `open_iff`, `salvage_spec`, `encode_open`, `confirmed`, `classify_spec`). `encode_injective` is
+  about one record, so no boundary enters, and it holds as stated. With an empty boundary each
+  says what it says today (examples in Part 5). Two hypotheses are new, each with a checked
+  counterexample: `agree` needs that neither store holds a record whose digest the other has only
+  as a boundary digest (`below_boundary_not_vouched`); `fetched`, `agree` and `classify_spec`
+  need no cycle (`Acyclic`), because a promoted record can close a cycle without a collision
+  (`promoted_cycle`, `promoted_cycle_not_tight`, `Crdt/Merkle/RelSpec.lean`; for SHA-256 this
+  needs a record whose digest was written into a record its own digest depends on).
+  `BuiltRel.acyclic_of_unpromoted` gives it when no record was promoted. `confirmed` holds up to
+  the sender's boundary. The Comparator challenge and `comparator.json` list them; Comparator is
+  run only as the final step.
 
 ### 7.4 Deniability
 

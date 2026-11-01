@@ -380,6 +380,21 @@ theorem promoted_cycle :
   exact h ⟨2, {1}, ()⟩ (by simp) 1 (by simp)
     (.link (r := ⟨1, {2}, ()⟩) (by simp) (.head (by decide)) (by decide))
 
+/-- **Why the statements that need it assume no cycle.** The two records of `promoted_cycle` are
+each linked by the other, so neither is a head and neither is reachable from the heads: the store
+is accept-built relative to its boundary, has no collision, and is not `Tight`. -/
+theorem promoted_cycle_not_tight :
+    let x : Toy.R := ⟨2, {1}, ()⟩
+    let y : Toy.R := ⟨1, {2}, ()⟩
+    AcceptBuiltRel Toy.hash {1} {x, y} ∧ ¬ CollisionIn Toy.hash {x, y} ∧
+      ¬ Tight Toy.hash {x, y} (headsRel Toy.hash {x, y} {1}) := by
+  refine ⟨⟨[⟨2, {1}, ()⟩, ⟨1, {2}, ()⟩], by decide, by decide⟩, by decide, fun h => ?_⟩
+  have hh : headsRel Toy.hash ({⟨2, {1}, ()⟩, ⟨1, {2}, ()⟩} : Store ℕ ℕ Unit) {1} = ∅ := by
+    decide
+  have := h ⟨2, {1}, ()⟩ (by simp)
+  rw [hh] at this
+  exact absurd (Reach.mem_of_bound Toy.hash (R := ∅) subset_rfl (by simp) this) (by simp)
+
 /-! ## Confirmation relative to a boundary -/
 
 /-- In a view closed relative to its boundary, reaching from digests of its records gives digests

@@ -11,6 +11,7 @@ import Crdt.Merkle.ClassifyStatus
 import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadApi
 import Crdt.Merkle.ServeAbs
+import Crdt.Merkle.ServeAbsRel
 
 set_option linter.unusedSectionVars false
 
@@ -54,6 +55,32 @@ Added for joining (docs/JOIN_PLAN.md §7.3):
 * `CheckedStore.serve_content_complete`: the converse; every held opening that `serveOpening`
   accepts for a record of the store goes out, when the request asks for that record.
 
+The statements for a store with a boundary (`RelStore`, a newcomer's store; JOIN_PLAN §7.3),
+one for each of the closed statements above, with the same name in the namespace `RelStore`
+(Part 5). Each is about `c.raw.abs`, the store's records in the spec model, and `boundarySet
+c.boundary`, the digests it holds no record for; with the empty boundary each says what the closed
+statement says (examples in Part 5):
+
+* `RelStore.fetched`: everything the heads reach is a stored digest or a boundary digest, and
+  every stored record is reached from the heads, when the records have no cycle.
+* `RelStore.no_collision`: no two different records in the store have the same digest.
+* `RelStore.agree`: two stores with the same heads hold the same records, when neither holds a
+  record whose digest the other has only as a boundary digest and neither has a cycle; or two
+  records collide.
+* `RelStore.abs_accept`: what each result of `accept` means (`AcceptRelMeans`).
+* `RelStore.abs_merge`: a merged store holds the records of both stores and knows the digests both
+  know.
+* `RelStore.open_iff`: when `load` (`OPEN` of a relative blob) gives a store, and which.
+* `RelStore.salvage_spec`: what `SALVAGE` of a relative blob keeps (`buildRetryRel`) and drops.
+* `RelStore.encode_open`: a relative store's blob opens as exactly that store.
+* `RelStore.confirmed`: what a live message's links reach in your store is reached in the
+  sender's store too, except below a digest the sender holds only as a boundary digest; or two
+  records collide.
+* `RelStore.classify_spec`: `CLASSIFY` on a relative store without a cycle gives each stored
+  record the spec's `status`, and nothing else a status.
+* `encode_injective` is about the encoding of one record: no store, so no boundary, enters, and
+  it holds for records of a relative store as stated.
+
 **Differences from the text of PLAN §3.2** (the same statements, made precise):
 
 * `u.map toSpec` (an array) is written `specOf u`, the set of the records of `u` (`Refine.lean`).
@@ -66,10 +93,21 @@ Added for joining (docs/JOIN_PLAN.md §7.3):
   must import that module for `serve`, so it cannot restate the name. The advertised form is
   `CheckedStore.serve_content`, stated with `toSpec r ∈ abs c` like the other statements here.
   The same holds for `serve_content_complete`, whose `since` is the spec's `Reach`.
-* `agree_rel` takes the store's boundary `BS` as an argument: a store `zrdtd` holds is closed
-  (`BS = ∅`, `Zrdt.Proto`), and a responder that is a former newcomer passes its own boundary
-  to `SERVE`. The 11 statements above are about the closed store; restating them for a store
-  with a boundary waits for the relative store in the code (JOIN_PLAN §7.1, `acceptRel`).
+* `agree_rel` takes the store's boundary `BS` as an argument: a closed store has `BS = ∅`, and a
+  responder that is a former newcomer passes its own boundary to `SERVE`.
+* **Part 5, what is new for a boundary** (each needed; the counterexample is checked):
+  two stores can have the same heads and differ below a boundary (`below_boundary_not_vouched`,
+  `Rel.lean`), so `RelStore.agree` assumes neither holds a record whose digest the other has only
+  as a boundary digest; a store with a boundary can have a cycle without a collision, through a
+  record whose digest was a boundary digest (`promoted_cycle`, `promoted_cycle_not_tight`,
+  `RelSpec.lean`), so `fetched`, `agree` and `classify_spec` assume `Acyclic`
+  (`BuiltRel.acyclic_of_unpromoted` gives it when no record was promoted; for SHA-256 a cycle
+  needs a record whose digest was written into a record its own digest depends on); and
+  `confirmed` holds only up to the sender's boundary (`reach_transfer`). `open_iff` and
+  `salvage_spec` are about the store-level `load` and `salvage` (the relative branch of
+  `ChatStore.openStore` and `ChatStore.salvageChat`); `encode_open` is about the `zrdtS3` blob
+  (`ChatStore.encodeChat`, `openChat`), under the hypothesis of `ChatStore.encode_reopens` that
+  each recorded audience reads back.
 * `open_iff` and `salvage_spec` are about `decodeBlob` as it is, so they do not depend on how it
   frames records (lane T5: a count of `2^24` or more is refused, records in any order, repeats
   allowed). `classify_spec` is stated with the spec's `status`, which names one holder, the
@@ -85,7 +123,13 @@ For `classify_spec` also: `liveOf` (`Classify.lean`), `Status.toSpec` and the or
 `foreignMarked`, `holders` (`Chat.lean`). For `agree_rel` also: `headsRel`, `inView`,
 `linksOf` (`Rel.lean`). For `serve_content` and `serve_content_complete` also: `serve`,
 `serveOpening`, `authorCopy`, `audienceOf`, `seats`, `keyTag`, `ephemeral` and what they call
-(`core/Zrdt/Serve.lean`), and `openingMatches` (`core/Zrdt/Commit.lean`).
+(`core/Zrdt/Serve.lean`), and `openingMatches` (`core/Zrdt/Commit.lean`). For Part 5 also:
+`boundarySet`, `AcceptRelMeans` (`RelBridge.lean`); `acceptRel`, `AcceptBuiltRel`, `buildRetryRel`
+(`RelSpec.lean`); `Acyclic` (`ClassifyFast.lean`); `inView`, `headsRel` (`Rel.lean`); `Tight`
+(`Defs.lean`); and the code they read: `RelStore` and its `accept`, `merge`, `load`, `salvage`,
+`boundaryDigests` (`core/Zrdt/RelStore.lean`), `classifyRaw` (`core/Zrdt/Provenance.lean`),
+`openChat`, `encodeChat`, `storedAudiences`, `parseAudience`, `writeAudience`
+(`core/Zrdt/ChatStore.lean`, `core/Zrdt/Serve.lean`).
 -/
 
 namespace Zrdt
@@ -582,5 +626,245 @@ example : Serve.Entry.addressed Serve.Examples.selfMsg.1 (some Serve.Examples.se
 -- `serve_content_complete` rejects a reply that leaves that message out.
 example : Serve.Entry.addressed Serve.Examples.selfMsg.1 (some Serve.Examples.selfMsg.2) true ∉
     ([] : List Serve.Entry) := List.not_mem_nil
+
+/-! ## Part 5: a store with a boundary (docs/JOIN_PLAN.md §7.3)
+
+The statements of Parts 1 to 3, for a newcomer's store (`RelStore`). See the module header for
+what each says and what is new. -/
+
+/-- **No collision in a store with a boundary.** Two different stored records never have the same
+digest. -/
+theorem RelStore.no_collision (c : RelStore) : ¬ CollisionIn hashSpec c.raw.abs :=
+  c.no_collision_model
+
+/-- **A store with a boundary is fetched from its heads.** Following links from the heads (the
+stored digests and the boundary digests no stored record links) reaches only stored digests and
+boundary digests; and, when the records have no cycle, it reaches every stored record. -/
+theorem RelStore.fetched (c : RelStore) (hac : Acyclic hashSpec c.raw.abs) :
+    (∀ d, Reach hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) d →
+      d ∈ inView hashSpec c.raw.abs (boundarySet c.boundary)) ∧
+    Tight hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) :=
+  ⟨c.fetched_model.1, c.fetched_model.2 hac⟩
+
+/-- **Same heads, same records, for stores with a boundary.** Two stores whose heads are equal,
+neither with a cycle, and neither holding a record whose digest the other has only as a boundary
+digest, hold the same records. Or two records, across the two stores, have the same digest. -/
+theorem RelStore.agree (c d : RelStore) (h : c.heads = d.heads)
+    (hc : Acyclic hashSpec c.raw.abs) (hd : Acyclic hashSpec d.raw.abs)
+    (hcd : ∀ r ∈ c.raw.abs, hashSpec r ∈ boundarySet d.boundary →
+      hashSpec r ∈ digests hashSpec d.raw.abs)
+    (hdc : ∀ r ∈ d.raw.abs, hashSpec r ∈ boundarySet c.boundary →
+      hashSpec r ∈ digests hashSpec c.raw.abs) :
+    c.raw.abs = d.raw.abs ∨ CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
+  RelStore.agree_model c d h hc hd hcd hdc
+
+/-- **`accept` on a store with a boundary, in the spec model.** Every result means what
+`AcceptRelMeans` says: an accepted record is the spec's `acceptRel` (a link may be a boundary
+digest), and any other result leaves the store as it was and gives the reason. -/
+theorem RelStore.abs_accept (c : RelStore) (r : Rec) : AcceptRelMeans c r (c.accept r) :=
+  RelStore.accept_means c r
+
+/-- **A merged store holds the records of both stores**, and knows exactly the digests (stored or
+boundary) that the two stores know. -/
+theorem RelStore.abs_merge {c d e : RelStore} (h : c.merge d = .ok e) :
+    e.raw.abs = c.raw.abs ∪ d.raw.abs ∧
+      inView hashSpec e.raw.abs (boundarySet e.boundary) =
+        inView hashSpec c.raw.abs (boundarySet c.boundary) ∪
+          inView hashSpec d.raw.abs (boundarySet d.boundary) :=
+  RelStore.merge_model h
+
+/-- **`OPEN` of a relative blob, in the spec model.** `load g B u` (what `OPEN` runs on the
+records `u` and boundary `B` of a relative blob) gives the store `c` exactly when the boundary is
+under its limit, `u` is within the size limits, accept-built relative to `B`, free of collisions
+and all of chat `g`; and then `c` is the store of chat `g` over the boundary `B` holding exactly
+the records of `u`. -/
+theorem RelStore.open_iff {g : GroupId} {B : Boundary} {u : Array Rec} {c : RelStore} :
+    RelStore.load g B u = .ok c ↔
+      B.size < maxRecords ∧ WellSized u ∧ AcceptBuiltRel hashSpec (boundarySet B) (specOf u) ∧
+        ¬ CollisionIn hashSpec (specOf u) ∧ (∀ r ∈ u, r.group = g) ∧ c.raw.abs = specOf u ∧
+        c.group = g ∧ c.boundary = B :=
+  RelStore.load_iff_model
+
+/-- **`SALVAGE` of a relative blob, in the spec model.** If `salvage g B u` loads `s`, then `u` has
+no collision, the store holds exactly what the model's salvage relative to `B` keeps
+(`buildRetryRel`), it is of chat `g` over the boundary `B`, and `dropped` is sorted and holds
+exactly the digests of the other records of `u`. -/
+theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
+    {s : RelStore.Salvaged} (h : RelStore.salvage g B u = .ok s) :
+    ¬ CollisionIn hashSpec (specOf u) ∧
+      s.store.raw.abs = buildRetryRel hashSpec (boundarySet B) (specOf u) ∧ s.store.group = g ∧
+      s.store.boundary = B ∧
+      (∀ d, d ∈ s.dropped ↔
+        d ∈ digests hashSpec (specOf u \ buildRetryRel hashSpec (boundarySet B) (specOf u))) ∧
+      StrictlySorted s.dropped :=
+  RelStore.salvage_model h
+
+/-- **A relative store's blob opens as exactly that store** (records, heads, boundary and
+vouchers), with the audiences of its stored records, when each audience reads back
+(`parseAudience` of `writeAudience`, the hypothesis of `ChatStore.encode_reopens`). -/
+theorem RelStore.encode_open (c : RelStore) (auds : AudTable)
+    (hp : ∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
+      Serve.parseAudience (Serve.writeAudience a) = some a) :
+    openChat c.group (encodeChat (.relative c) auds) =
+      .ok (.relative c, storedAudiences (.relative c) auds) :=
+  ChatStore.encode_reopens (.relative c) auds hp
+
+/-- **Confirmation, with boundaries.** A live message links the digests `hs`, and the sender's
+store `d` holds a record for each. Each digest the links reach in your store `c` is reached in
+the sender's store too; or your store reaches it from a digest `b` that the sender holds only as a
+boundary digest, which the links reach in the sender's store. Or two records, across the two
+stores, have the same digest. -/
+theorem RelStore.confirmed (c d : RelStore) (hs : Array Digest) (hd : ∀ h ∈ hs, d.has h = true) :
+    (∀ x, Reach hashSpec c.raw.abs hs.toList.toFinset x →
+      Reach hashSpec d.raw.abs hs.toList.toFinset x ∨
+        ∃ b ∈ d.boundaryDigests, Reach hashSpec d.raw.abs hs.toList.toFinset b ∧
+          Reach hashSpec c.raw.abs {b} x) ∨
+      CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
+  RelStore.confirmed_model c d hs hd
+
+/-- **`CLASSIFY` on a store with a boundary computes the spec's `status`.** For a relative store
+without a cycle, `classifyRaw` (what `ChatStore.classify` runs on it) gives digest `d` the status
+`st` exactly when `d` is the digest of a stored record `r` and the spec's `status` of `r` is
+`st`. -/
+theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
+    (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
+    (classifyRaw c.raw facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧
+        Crdt.Merkle.status hashSpec c.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
+  RelStore.classify_model c hac facts d st
+
+/-! ### Part 5 examples
+
+Each statement on a concrete store with every hypothesis discharged: Bob's relative store
+`Serve.Rel.Examples.bobRel` (`b1`, `c1`, `a2` accepted over the boundary digest of `a1`), which
+has no cycle (`bobRel_acyclic`); and, with the empty boundary, the closed statements of Parts 1
+to 3. The rejecting cases are `below_boundary_not_vouched` (`agree` needs `hcd` and `hdc`),
+`promoted_cycle_not_tight` (`fetched` needs no cycle), and the two below. -/
+
+open Serve.Rel.Examples in
+example : ¬ CollisionIn hashSpec bobRel.raw.abs := RelStore.no_collision _
+
+open Serve.Rel.Examples in
+example : (∀ d, Reach hashSpec bobRel.raw.abs
+      (headsRel hashSpec bobRel.raw.abs (boundarySet bobRel.boundary)) d →
+      d ∈ inView hashSpec bobRel.raw.abs (boundarySet bobRel.boundary)) ∧
+    Tight hashSpec bobRel.raw.abs
+      (headsRel hashSpec bobRel.raw.abs (boundarySet bobRel.boundary)) :=
+  RelStore.fetched _ bobRel_acyclic
+
+-- With the empty boundary, `RelStore.fetched` is `CheckedStore.fetched`.
+example (c : CheckedStore) : Fetched hashSpec (abs c) (Crdt.Merkle.heads hashSpec (abs c)) := by
+  obtain ⟨h1, h2⟩ := RelStore.fetched (RelStore.ofChecked c) (ReadyStore.ofChecked c).acyclic
+  have hb : boundarySet (RelStore.ofChecked c).boundary = ∅ := boundarySet_empty
+  have ha : (RelStore.ofChecked c).raw.abs = abs c := rfl
+  simp only [hb, ha, headsRel_empty, inView_empty] at h1 h2
+  exact ⟨fun d hd => (mem_digests hashSpec).mp (h1 d hd), h2⟩
+
+open Serve.Rel.Examples in
+example : bobRel.raw.abs = bobRel.raw.abs ∨
+    CollisionIn hashSpec (bobRel.raw.abs ∪ bobRel.raw.abs) :=
+  RelStore.agree _ _ rfl bobRel_acyclic bobRel_acyclic
+    (fun r hr _ => (mem_digests hashSpec).mpr ⟨r, hr, rfl⟩)
+    (fun r hr _ => (mem_digests hashSpec).mpr ⟨r, hr, rfl⟩)
+
+-- With the empty boundary, `RelStore.agree` is `CheckedStore.agree`: Alice's and Bob's stores,
+-- built in different orders.
+example : abs Examples.aliceStore = abs Examples.bobStore ∨
+    CollisionIn hashSpec (abs Examples.aliceStore ∪ abs Examples.bobStore) :=
+  RelStore.agree (RelStore.ofChecked Examples.aliceStore) (RelStore.ofChecked Examples.bobStore)
+    Examples.aliceStore_heads_eq_bobStore (ReadyStore.ofChecked _).acyclic
+    (ReadyStore.ofChecked _).acyclic (fun _ _ h => by simp [RelStore.ofChecked] at h)
+    (fun _ _ h => by simp [RelStore.ofChecked] at h)
+
+open Serve.Rel.Examples in
+example : AcceptRelMeans bobRel Examples.b1 (bobRel.accept Examples.b1) :=
+  RelStore.abs_accept _ _
+
+/-- Merging a store with no records and no boundary into any store succeeds. -/
+theorem Examples.relMerge_empty_ok (c : RelStore) :
+    ∃ e, c.merge (RelStore.empty c.group) = .ok e := by
+  unfold RelStore.merge
+  have hg : (RelStore.empty c.group).group = c.group := rfl
+  simp only [hg, ne_eq, not_true_eq_false, ↓reduceIte]
+  have hb : (RelStore.empty c.group).boundary.toList = [] := by
+    simp [RelStore.empty, RelStore.emptyWith]
+  rw [hb]
+  simp only [RelStore.addBoundaryAll]
+  have hr : (RelStore.empty c.group).records = #[] := by
+    simp [RelStore.records, RelStore.empty, RelStore.emptyWith]
+  rw [hr]
+  obtain ⟨-, -, -, -, -, hleft⟩ := RelStore.acceptAll_sound c #[]
+  generalize c.acceptAll #[] = res at hleft ⊢
+  obtain ⟨e, left⟩ := res
+  have hl : left = #[] := by
+    rw [Array.eq_empty_iff_forall_not_mem]
+    intro x hx
+    simpa using hleft x hx
+  subst hl
+  exact ⟨e, rfl⟩
+
+example (c : RelStore) : ∃ e, c.merge (RelStore.empty c.group) = .ok e ∧
+    e.raw.abs = c.raw.abs ∪ (RelStore.empty c.group).raw.abs := by
+  obtain ⟨e, he⟩ := Examples.relMerge_empty_ok c
+  exact ⟨e, he, (RelStore.abs_merge he).1⟩
+
+-- `open_iff`, forwards, on Bob's store: its records load over its boundary as itself.
+open Serve.Rel.Examples in
+example : bobRel.boundary.size < maxRecords ∧ WellSized bobRel.records ∧
+    AcceptBuiltRel hashSpec (boundarySet bobRel.boundary) (specOf bobRel.records) ∧
+    ¬ CollisionIn hashSpec (specOf bobRel.records) ∧
+    (∀ r ∈ bobRel.records, r.group = bobRel.group) ∧ bobRel.raw.abs = specOf bobRel.records ∧
+    bobRel.group = bobRel.group ∧ bobRel.boundary = bobRel.boundary :=
+  RelStore.open_iff.mp (RelStore.load_reopens bobRel)
+
+-- `open_iff` rejects a bad input: `b1` alone (its link, `a1`, neither a record nor a boundary
+-- digest) does not load over the empty boundary.
+example (c : RelStore) : RelStore.load Examples.group ∅ #[Examples.b1] ≠ .ok c := by
+  intro h
+  obtain ⟨-, -, hab, -⟩ := RelStore.open_iff.mp h
+  rw [boundarySet_empty, acceptBuiltRel_empty_iff] at hab
+  exact Examples.b1_alone_not_acceptBuilt hab
+
+-- `salvage_spec` on any relative store's own records and boundary: salvage succeeds and keeps
+-- exactly what the model keeps.
+example (c : RelStore) : ∃ s, RelStore.salvage c.group c.boundary c.records = .ok s ∧
+    s.store.raw.abs = buildRetryRel hashSpec (boundarySet c.boundary) (specOf c.records) := by
+  have hw : WellSized c.records := wellSized_values c.built
+  obtain ⟨s, hs⟩ := RelStore.salvage_ok_of c.built.boundary_lt hw
+    (fun r hr => by obtain ⟨k, hk⟩ := RelStore.mem_records.mp hr; exact c.built.group_eq k r hk)
+    (fun x hx y hy hxy => by
+      obtain ⟨kx, hkx⟩ := RelStore.mem_records.mp hx
+      obtain ⟨ky, hky⟩ := RelStore.mem_records.mp hy
+      rw [c.built.hash_eq kx x hkx, c.built.hash_eq ky y hky] at hxy
+      subst hxy
+      rw [hkx] at hky
+      exact Option.some.inj hky)
+  exact ⟨s, hs, (RelStore.salvage_spec hs).2.1⟩
+
+open Serve.Rel.Examples in
+example : openChat bobRel.group (encodeChat (.relative bobRel) ∅) =
+    .ok (.relative bobRel, storedAudiences (.relative bobRel) ∅) :=
+  RelStore.encode_open _ _ (by simp)
+
+-- `confirmed` on two closed stores (the empty boundary): a message linking `a1`.
+example : (∀ x, Reach hashSpec (abs Examples.s1) (#[hashRecord Examples.a1].toList.toFinset) x →
+      Reach hashSpec (abs Examples.s2) (#[hashRecord Examples.a1].toList.toFinset) x ∨
+        ∃ b ∈ (RelStore.ofChecked Examples.s2).boundaryDigests,
+          Reach hashSpec (abs Examples.s2) (#[hashRecord Examples.a1].toList.toFinset) b ∧
+          Reach hashSpec (abs Examples.s1) {b} x) ∨
+    CollisionIn hashSpec (abs Examples.s1 ∪ abs Examples.s2) :=
+  RelStore.confirmed (RelStore.ofChecked Examples.s1) (RelStore.ofChecked Examples.s2)
+    #[hashRecord Examples.a1] (fun h hh => by simp at hh; subst hh; exact Examples.s2_has_a1)
+
+open Serve.Rel.Examples in
+example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
+    (classifyRaw bobRel.raw facts)[d]? = some st ↔
+      ∃ r, bobRel.get d = some r ∧
+        Crdt.Merkle.status hashSpec bobRel.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
+  RelStore.classify_spec _ bobRel_acyclic _ _ _
+
+-- `CLASSIFY` on a relative store runs `classifyRaw`.
+example (c : RelStore) (facts : Array Fact) :
+    ChatStore.classify (.relative c) facts = classifyRaw c.raw facts := rfl
 
 end Zrdt

@@ -15,7 +15,17 @@
     "Zrdt.encode_injective",
     "Zrdt.CheckedStore.agree_rel",
     "Zrdt.CheckedStore.serve_content",
-    "Zrdt.CheckedStore.serve_content_complete"
+    "Zrdt.CheckedStore.serve_content_complete",
+    "Zrdt.RelStore.fetched",
+    "Zrdt.RelStore.no_collision",
+    "Zrdt.RelStore.agree",
+    "Zrdt.RelStore.abs_accept",
+    "Zrdt.RelStore.abs_merge",
+    "Zrdt.RelStore.open_iff",
+    "Zrdt.RelStore.salvage_spec",
+    "Zrdt.RelStore.encode_open",
+    "Zrdt.RelStore.confirmed",
+    "Zrdt.RelStore.classify_spec"
   ],
   "definition_names": [],
   "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"]
