@@ -10,6 +10,7 @@ import Crdt.Merkle.ClassifyFast
 import Crdt.Merkle.ClassifyStatus
 import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadApi
+import Crdt.Merkle.ServeAbs
 
 set_option linter.unusedSectionVars false
 
@@ -43,6 +44,16 @@ In the order of docs/PLAN.md §3.2:
 * `Zrdt.encode_injective`: different records have different encodings. It is declared in
   `EncodeProofs.lean` and not restated here; it is pinned by the gate with the others.
 
+Added for joining (docs/JOIN_PLAN.md §7.3):
+
+* `CheckedStore.agree_rel`: a view with a boundary (a newcomer's store) that has the same heads
+  as a store, seen with a boundary, holds only that store's records under every digest its heads
+  reach, or two records collide. Nothing is assumed about the view's own boundary.
+* `CheckedStore.serve_content`: every opening in `SERVE`'s reply opens a record of the store, and
+  its own committed audience seats the requester's account under the key `SERVE` checked.
+* `CheckedStore.serve_content_complete`: the converse; every held opening that `serveOpening`
+  accepts for a record of the store goes out, when the request asks for that record.
+
 **Differences from the text of PLAN §3.2** (the same statements, made precise):
 
 * `u.map toSpec` (an array) is written `specOf u`, the set of the records of `u` (`Refine.lean`).
@@ -50,6 +61,15 @@ In the order of docs/PLAN.md §3.2:
 * `salvage_spec` needs only that the blob decodes to `u`; it concludes that `u` has no collision,
   that the store is of the right chat, and that `dropped` is sorted.
 * `confirmed` asks `c.has h = true` for each `h ∈ hs` (PLAN: `hs ⊆ c.keys`).
+* JOIN_PLAN §7.3 names the content theorem `Serve.serve_content`. That name is the running-code
+  theorem in `core/Zrdt/Serve.lean`, stated with `c.get d = some r`; the Comparator challenge
+  must import that module for `serve`, so it cannot restate the name. The advertised form is
+  `CheckedStore.serve_content`, stated with `toSpec r ∈ abs c` like the other statements here.
+  The same holds for `serve_content_complete`, whose `since` is the spec's `Reach`.
+* `agree_rel` takes the store's boundary `BS` as an argument: a store `zrdtd` holds is closed
+  (`BS = ∅`, `Zrdt.Proto`), and a responder that is a former newcomer passes its own boundary
+  to `SERVE`. The 11 statements above are about the closed store; restating them for a store
+  with a boundary waits for the relative store in the code (JOIN_PLAN §7.1, `acceptRel`).
 * `open_iff` and `salvage_spec` are about `decodeBlob` as it is, so they do not depend on how it
   frames records (lane T5: a count of `2^24` or more is refused, records in any order, repeats
   allowed). `classify_spec` is stated with the spec's `status`, which names one holder, the
@@ -62,7 +82,10 @@ In the order of docs/PLAN.md §3.2:
 `buildRetry` (`Chat.lean`); `WellSized`, `decodeBlob`, `encode` (`core/Zrdt/Encode.lean`).
 For `classify_spec` also: `liveOf` (`Classify.lean`), `Status.toSpec` and the order on `Aci`
 (`ClassifyStatus.lean`), and the spec's `status`, `liveRecords`, `authorConfirmed`,
-`foreignMarked`, `holders` (`Chat.lean`).
+`foreignMarked`, `holders` (`Chat.lean`). For `agree_rel` also: `headsRel`, `inView`,
+`linksOf` (`Rel.lean`). For `serve_content` and `serve_content_complete` also: `serve`,
+`serveOpening`, `authorCopy`, `audienceOf`, `seats`, `keyTag`, `ephemeral` and what they call
+(`core/Zrdt/Serve.lean`), and `openingMatches` (`core/Zrdt/Commit.lean`).
 -/
 
 namespace Zrdt
@@ -393,5 +416,170 @@ different encodings, for every record, with no size bound. -/
 -- Alice's `a1` and Bob's `b1` are different records, so their encodings differ.
 example : encode Examples.a1 ≠ encode Examples.b1 :=
   fun h => by have := encode_injective h; revert this; decide +kernel
+
+/-! ## Part 4: joining (docs/JOIN_PLAN.md §7.3) -/
+
+/-- **Same heads, same history, for a view with a boundary** (JOIN_PLAN §6.7, §7.2). A view is a
+set of records `F` and a set of boundary digests `B`: a newcomer's store, which holds only the
+digests of older records. Take a checked store `c`, seen with boundary digests `BS` (`∅` for a
+store `zrdtd` holds). Suppose the view has the same heads as `c` with `BS`, and holds no record
+whose digest is in `BS` but not stored in `c`. Then each digest reachable from the view's heads
+is either the digest of a record of `c`, and every record of the view with that digest is in
+`c`; or a digest of `BS` only, for which the view holds no record. Or two records, across `c`
+and the view, have the same digest. Nothing is assumed about `B`. -/
+theorem CheckedStore.agree_rel (c : CheckedStore) (BS : Finset Digest) {F : SpecStore}
+    {B : Finset Digest} (hh : headsRel hashSpec F B = headsRel hashSpec (abs c) BS)
+    (hFB : ∀ r ∈ F, hashSpec r ∈ BS → hashSpec r ∈ digests hashSpec (abs c)) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r = d → r ∈ abs c) ∨
+        (d ∈ BS ∧ d ∉ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (abs c ∪ F) :=
+  agree_rel' hashSpec (c.closedRel BS) hh hFB
+
+/-- **Content goes only where its author sent it** (JOIN_PLAN §7.1). Every opening in `SERVE`'s
+reply to `q` from the store `c` opens a record of `c`, and that opening's own committed audience
+(`DataMessage` field 201) seats `q`'s account under the tag of `q`'s identity key: the key the
+host seals the reply to. No audience cache, no `since`, no strict or export flag, and no
+provenance enters, so none of them can widen it. -/
+theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Serve.HeldMap}
+    {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c me held q) :
+    toSpec r ∈ abs c ∧ openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true := by
+  obtain ⟨d, hget, h⟩ := Serve.serve_content he
+  exact ⟨((c.get_eq_some_iff).mp hget).1, h op rfl⟩
+
+/-- **Content that may go, goes** (JOIN_PLAN §7.1, the converse of `serve_content`). Take a record
+`r` of the store `c` and an opening the responder holds for it that `serveOpening` accepts (it
+opens `r`, its own audience seats `q`, it is not ephemeral in an export, and in strict mode `r`
+is the responder's own copy). If the request is a catch-up whose `since` does not reach `r`, or
+a per-digest request that asks for `r`, then the reply carries `r` with that opening, marked
+author copy exactly when it is one. -/
+theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
+    {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
+    (hr : toSpec r ∈ abs c) (hop : (held.getD (hashRecord r) {}).opening = some op)
+    (hs : Serve.serveOpening me q (hashRecord r) r op = true)
+    (hmode : (q.wanted = none ∧
+        ¬ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
+      ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
+    Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
+      Serve.serve c me held q := by
+  have hget : c.get (hashRecord r) = some r := (c.get_eq_some_iff).mpr ⟨hr, rfl⟩
+  rcases hmode with ⟨hq, hn⟩ | ⟨ws, hq, hw⟩
+  · refine Serve.serve_content_complete hget hop hs (by simp [hq]) (.inr ?_)
+    rw [Bool.eq_false_iff, ne_eq, Std.ExtTreeSet.contains_iff_mem, Serve.mem_sinceReach]
+    exact fun h => hn h.2
+  · exact Serve.serve_content_complete hget hop hs (by simp [hq, hw]) (.inl (by simp [hq]))
+
+/-! ### Part 4 examples
+
+Each statement on a concrete input, with every hypothesis discharged, and a bad output each one
+rules out. The inputs are those of `core/Zrdt/Serve.lean`: Carol's `pre` (before Bob joined),
+Alice's `welcome` (Bob seated), Carol's `stale` (Bob not seated), Alice's `later` (Bob seated);
+and `selfMsg`, Alice's message to herself, small enough for the kernel to hash. -/
+
+/-- Bob's catch-up from Alice: the reply of `SERVE` for Bob, under his key, from Alice's store
+with the four records. -/
+def Examples.bobReply : List Serve.Entry :=
+  Serve.serve Serve.Examples.store Serve.Examples.meAlice Serve.Examples.held
+    (Serve.Examples.rq Examples.bob Serve.Examples.keyBob)
+
+example : Examples.bobReply = Serve.serve Serve.Examples.store Serve.Examples.meAlice
+    Serve.Examples.held (Serve.Examples.rq Examples.bob Serve.Examples.keyBob) := rfl
+
+-- `agree_rel` on Bob's view after that catch-up, against Alice's store: `serve_heads` and
+-- `replyRecords_subset` discharge the hypotheses.
+example : ∀ d, Reach hashSpec (Serve.replyRecords Examples.bobReply)
+      (headsRel hashSpec (Serve.replyRecords Examples.bobReply)
+        (Serve.replyBoundary Examples.bobReply)) d →
+    (d ∈ digests hashSpec (abs Serve.Examples.store) ∧
+        ∀ r ∈ Serve.replyRecords Examples.bobReply, hashSpec r = d →
+          r ∈ abs Serve.Examples.store) ∨
+      (d ∈ Serve.boundarySpec Serve.Examples.meAlice ∧
+        d ∉ digests hashSpec (abs Serve.Examples.store) ∧
+        ∀ r ∈ Serve.replyRecords Examples.bobReply, hashSpec r ≠ d) ∨
+      CollisionIn hashSpec (abs Serve.Examples.store ∪ Serve.replyRecords Examples.bobReply) :=
+  Serve.Examples.store.agree_rel _ (Serve.serve_heads _ _ _ _ rfl) fun r hr _ =>
+    (mem_digests hashSpec).mpr ⟨r, Serve.replyRecords_subset _ _ _ _ hr, rfl⟩
+
+-- `agree_rel` with no boundary on either side: Bob's store and Alice's store, built in
+-- different orders, have the same heads.
+example : ∀ d, Reach hashSpec (abs Examples.bobStore)
+      (headsRel hashSpec (abs Examples.bobStore) ∅) d →
+    (d ∈ digests hashSpec (abs Examples.aliceStore) ∧
+        ∀ r ∈ abs Examples.bobStore, hashSpec r = d → r ∈ abs Examples.aliceStore) ∨
+      (d ∈ (∅ : Finset Digest) ∧ d ∉ digests hashSpec (abs Examples.aliceStore) ∧
+        ∀ r ∈ abs Examples.bobStore, hashSpec r ≠ d) ∨
+      CollisionIn hashSpec (abs Examples.aliceStore ∪ abs Examples.bobStore) := by
+  refine Examples.aliceStore.agree_rel ∅ ?_ (by simp)
+  rw [headsRel_empty, headsRel_empty, ← CheckedStore.heads_toFinset,
+    ← CheckedStore.heads_toFinset, Examples.aliceStore_heads_eq_bobStore]
+
+-- `agree_rel` rejects a view that holds a record the store does not: the record `first`, as a
+-- view of its own, against the empty store, meets none of the three cases.
+example : ¬ ∀ d, Reach hashSpec {toSpec Examples.first}
+      (headsRel hashSpec {toSpec Examples.first} ∅) d →
+    (d ∈ digests hashSpec (abs (CheckedStore.empty Examples.group)) ∧
+        ∀ r ∈ ({toSpec Examples.first} : SpecStore), hashSpec r = d →
+          r ∈ abs (CheckedStore.empty Examples.group)) ∨
+      (d ∈ (∅ : Finset Digest) ∧ d ∉ digests hashSpec (abs (CheckedStore.empty Examples.group)) ∧
+        ∀ r ∈ ({toSpec Examples.first} : SpecStore), hashSpec r ≠ d) ∨
+      CollisionIn hashSpec (abs (CheckedStore.empty Examples.group) ∪ {toSpec Examples.first}) := by
+  intro h
+  have habs : abs (CheckedStore.empty Examples.group) = ∅ := by
+    simp [abs, RawStore.abs, CheckedStore.empty]
+  have hhead : hashSpec (toSpec Examples.first) ∈
+      headsRel hashSpec {toSpec Examples.first} ∅ := by
+    rw [mem_headsRel, mem_inView, mem_linksOf]
+    refine ⟨.inl ⟨_, Finset.mem_singleton_self _, rfl⟩, ?_⟩
+    rintro ⟨x, hx, hl⟩
+    rw [Finset.mem_singleton] at hx
+    subst hx
+    simp [toSpec, Examples.first, Rec.make] at hl
+  rw [habs] at h
+  rcases h _ (.head hhead) with ⟨hd, -⟩ | ⟨hb, -⟩ | ⟨x, hx, y, hy, hne, -⟩
+  · simp [digests] at hd
+  · simp at hb
+  · simp only [Finset.empty_union, Finset.mem_singleton] at hx hy
+    exact hne (hx.trans hy.symm)
+
+-- `serve_content` on Alice's catch-up of her message to herself (`Serve.Examples.self_served`).
+example : toSpec Serve.Examples.selfMsg.1 ∈ abs Serve.Examples.selfStore ∧
+    openingMatches Serve.Examples.selfMsg.1.group Serve.Examples.selfMsg.1.author
+      Serve.Examples.selfMsg.1.commit Serve.Examples.selfMsg.2 = true ∧
+    ∃ aud, Serve.audienceOf Serve.Examples.selfMsg.2 = some aud ∧
+      Serve.seats aud (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice).aci
+        (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice).key = true :=
+  CheckedStore.serve_content Serve.Examples.selfStore (Serve.Examples.self_served false false)
+
+-- `serve_content` rejects a reply that gives Bob the opening of `pre`, Carol's message from
+-- before he joined: its committed audience seats only Alice and Carol.
+example : ¬ ∃ aud, Serve.audienceOf Serve.Examples.pre.2 = some aud ∧
+    Serve.seats aud Examples.bob Serve.Examples.keyBob = true := by
+  rintro ⟨aud, ha, hs⟩
+  have hno : (Serve.audienceOf Serve.Examples.pre.2).any
+      (Serve.seats · Examples.bob Serve.Examples.keyBob) = false := by decide +kernel
+  simp [ha, hs] at hno
+
+/-- Reaching from no digest reaches nothing. -/
+theorem Examples.not_reach_empty (s : SpecStore) (d : Digest) : ¬ Reach hashSpec s ∅ d :=
+  fun h => by simpa using Reach.mem_of_bound hashSpec (R := ∅) subset_rfl (by simp) h
+
+-- `serve_content_complete` on Alice's catch-up of her message to herself: every hypothesis is
+-- discharged, and the reply carries it with its opening, as an author copy.
+example : Serve.Entry.addressed Serve.Examples.selfMsg.1 (some Serve.Examples.selfMsg.2)
+      (Serve.authorCopy Serve.Examples.selfMe (hashRecord Serve.Examples.selfMsg.1)
+        Serve.Examples.selfMsg.1) ∈
+    Serve.serve Serve.Examples.selfStore Serve.Examples.selfMe Serve.Examples.selfHeld
+      (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice) :=
+  Serve.Examples.selfStore.serve_content_complete
+    ((Serve.Examples.selfStore.get_eq_some_iff).mp Serve.Examples.selfStore_get).1
+    (by simp [Serve.Examples.selfHeld, Serve.Examples.selfDigest])
+    (Serve.Examples.selfMsg_serveOpening false false)
+    (.inl ⟨rfl, by simpa [Serve.Examples.rq] using Examples.not_reach_empty _ _⟩)
+
+-- `serve_content_complete` rejects a reply that leaves that message out.
+example : Serve.Entry.addressed Serve.Examples.selfMsg.1 (some Serve.Examples.selfMsg.2) true ∉
+    ([] : List Serve.Entry) := List.not_mem_nil
 
 end Zrdt

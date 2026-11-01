@@ -6,6 +6,8 @@ Authors: zrdt contributors
 import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.ClassifyStatus
+import Crdt.Merkle.Rel
+import Zrdt.Serve
 
 /-!
 # The challenge for `lake comparator` (docs/PLAN.md §3.2)
@@ -18,8 +20,9 @@ no axiom other than `propext`, `Classical.choice` and `Quot.sound`, and that the
 it.
 
 This file imports only the modules that define what the statements mention (`Bridge.lean`,
-`Refine.lean`, `ClassifyStatus.lean`, and through them the spec and the shipped code). It must
-not import `Api.lean`, `EncodeProofs.lean` or `LoadApi.lean`: those declare the names below.
+`Refine.lean`, `ClassifyStatus.lean`, `Rel.lean`, `core/Zrdt/Serve.lean`, and through them the
+spec and the shipped code). It must not import `Api.lean`, `EncodeProofs.lean`, `LoadApi.lean`
+or `ServeAbs.lean`: those declare the names below or import a module that does.
 
 Keep this file in step with `Api.lean` and with the list in `comparator.json` and
 `Test/Axioms.lean`. It is not a default target, so `lake build` never sees its `sorry`s.
@@ -79,6 +82,33 @@ theorem CheckedStore.classify_spec (c : CheckedStore) (facts : Array Fact) (d : 
   sorry
 
 theorem encode_injective : Function.Injective encode :=
+  sorry
+
+theorem CheckedStore.agree_rel (c : CheckedStore) (BS : Finset Digest) {F : SpecStore}
+    {B : Finset Digest} (hh : headsRel hashSpec F B = headsRel hashSpec (abs c) BS)
+    (hFB : ∀ r ∈ F, hashSpec r ∈ BS → hashSpec r ∈ digests hashSpec (abs c)) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r = d → r ∈ abs c) ∨
+        (d ∈ BS ∧ d ∉ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (abs c ∪ F) :=
+  sorry
+
+theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Serve.HeldMap}
+    {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c me held q) :
+    toSpec r ∈ abs c ∧ openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
+  sorry
+
+theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
+    {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
+    (hr : toSpec r ∈ abs c) (hop : (held.getD (hashRecord r) {}).opening = some op)
+    (hs : Serve.serveOpening me q (hashRecord r) r op = true)
+    (hmode : (q.wanted = none ∧
+        ¬ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
+      ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
+    Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
+      Serve.serve c me held q :=
   sorry
 
 end Zrdt

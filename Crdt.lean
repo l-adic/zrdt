@@ -18,3 +18,4 @@ import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadSpec
 import Crdt.Merkle.LoadApi
 import Crdt.Merkle.Rel
+import Crdt.Merkle.ServeAbs

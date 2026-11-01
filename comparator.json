@@ -12,7 +12,10 @@
     "Zrdt.CheckedStore.encode_open",
     "Zrdt.CheckedStore.confirmed",
     "Zrdt.CheckedStore.classify_spec",
-    "Zrdt.encode_injective"
+    "Zrdt.encode_injective",
+    "Zrdt.CheckedStore.agree_rel",
+    "Zrdt.CheckedStore.serve_content",
+    "Zrdt.CheckedStore.serve_content_complete"
   ],
   "definition_names": [],
   "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"]
