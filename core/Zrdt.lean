@@ -1,5 +1,7 @@
 import Zrdt.Digest
 import Zrdt.Sha256
+import Zrdt.Record
+import Zrdt.Encode
 
 /-!
 # Zrdt: the shipped code (no Mathlib)
