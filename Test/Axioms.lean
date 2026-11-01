@@ -385,6 +385,15 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.Proto.accept_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.accept_refused
 
+/-- info: 'Zrdt.Serve.parseAudience_writeAudience' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.parseAudience_writeAudience
+
+/-- info: 'Zrdt.Serve.valid_of_parseAudience' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.valid_of_parseAudience
+
+/-- info: 'Zrdt.Serve.audienceOf_valid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.audienceOf_valid
+
 /-- info: 'Zrdt.Proto.run_serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.run_serve_content
 
@@ -427,6 +436,15 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.ChatStore.encode_reopens' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.ChatStore.encode_reopens
+
+/-- info: 'Zrdt.decodeChat_encodeChat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.decodeChat_encodeChat
+
+/-- info: 'Zrdt.mergeAudiences_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.mergeAudiences_spec
+
+/-- info: 'Zrdt.Proto.run_merge_audiences' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.run_merge_audiences
 
 /-- info: 'Zrdt.Proto.acceptView_built' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.acceptView_built

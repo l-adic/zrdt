@@ -267,8 +267,11 @@ Replies (every op can also reply `BAD_REQUEST`):
   store, for stored records only (`ChatStore.encode_reopens`: the blob of a store reopens as exactly
   that store and its audiences). `MERGE` into a closed store reads the blob's records part as
   before (a relative blob's records that link its boundary are `UNVERIFIABLE`); into a relative
-  store, it adds the blob's records and boundary. `MERGE` does not read the blob's audiences.
-- `VERSION`: the protocol is 3. The build text names the package version and the first 16 hex
+  store, it adds the blob's records and boundary. `MERGE` records the blob's audience of each
+  record stored in the merged store that has none recorded; a recorded audience stays
+  (`run_merge_audiences`). `ENCODE` writes only well-formed audiences, which is every one `zrdtd`
+  records (`Serve.audienceOf_valid`).
+- `VERSION`: the protocol is 4. The build text names the package version and the first 16 hex
   digits of SHA-256 over the Lean sources of the modules `zrdtd` runs, `Zrdtd/Main.lean`
   included (`buildIdOf`).
 
@@ -277,8 +280,8 @@ Replies (every op can also reply `BAD_REQUEST`):
 `NEW`, `NEW_RELATIVE`, `OPEN` and `SALVAGE` put a store under a chat key that is not in use
 (otherwise `CHAT_OPEN`), with the audiences of the blob (none for `NEW`, `NEW_RELATIVE` and a
 record list). After that, only `ACCEPT`, `ACCEPT_RECORD`, `ACCEPT_VIEW` and `MERGE` change the
-store, and only `ACCEPT`, and `ACCEPT_RECORD` and `ACCEPT_VIEW` with an opening, record audiences;
-`CLOSE` removes both. So under one chat key a store and its audiences only grow, until `CLOSE`,
+store, and only `ACCEPT`, `ACCEPT_RECORD` and `ACCEPT_VIEW` with an opening, and `MERGE` (the
+blob's), record audiences; `CLOSE` removes both. So under one chat key a store and its audiences only grow, until `CLOSE`,
 and a store stays closed or relative. A failed `OPEN`, `SALVAGE`, `MERGE`, `ACCEPT` or
 `ACCEPT_RECORD` changes nothing. `CLOSE` on a chat key that is not in use replies `OK`. The
 audiences are in the store blob (`zrdtS3`); the host may still re-send with `ACCEPT_RECORD` the
@@ -1071,8 +1074,10 @@ then holds no reference to the store, so the next change to it can happen in pla
 def takeOut (t : Table) (chat : String) : Option Chat × Table :=
   (t[chat]?, t.erase chat)
 
-/-- `MERGE`: add the records of the `zrdtS3` blob `b` to the store `s` (`mergeChat`). -/
-def mergeInput (s : ChatStore) (b : ByteArray) : Except OpenError ChatStore := mergeChat s b
+/-- `MERGE`: add the records of the `zrdtS3` blob `b` to the store `s` (`mergeChat`): the merged
+store and the blob's audiences. -/
+def mergeInput (s : ChatStore) (b : ByteArray) : Except OpenError (ChatStore × AudTable) :=
+  mergeChat s b
 
 /-- The audiences after `accept` gave `res` for a record whose checked opening has audience
 `aud`: recorded under the digest if the record is stored. -/
@@ -1285,7 +1290,9 @@ def run (build : String) (t : Table) : Request → Reply × Table
     match takeOut t chat with
     | (some c, t) =>
       match mergeInput c.store b with
-      | .ok e => (.opened (.ok ()), t.insert chat { c with store := e })
+      | .ok (e, blobAuds) =>
+        (.opened (.ok ()), t.insert chat
+          { store := e, audiences := mergeAudiences e c.audiences blobAuds })
       | .error err => (.opened (.error err), t.insert chat c)
     | (none, t) => (.code .noChat, t)
   | .classify chat facts => reading t chat fun c =>
@@ -1491,6 +1498,33 @@ theorem run_addressed {build : String} {t t' : Table} {chat : String} {a : Aci}
       exact ⟨aud, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.1 hmem, hs⟩
     · simp at hf
   · simp at h
+
+/-- **`MERGE` records the blob's audiences, and keeps every recorded one.** If `MERGE` replies
+`OK`, the chat's store is the one `mergeChat` gives, every audience recorded before is still
+recorded, and a new one is the blob's audience (`mergeChat`'s table) of a record stored in the
+merged store that had none. -/
+theorem run_merge_audiences {build : String} {t t' : Table} {chat : String} {b : ByteArray}
+    (h : run build t (.merge chat b) = (.opened (.ok ()), t')) :
+    ∃ ch ch' blobAuds, t[chat]? = some ch ∧ t'[chat]? = some ch' ∧
+      mergeChat ch.store b = .ok (ch'.store, blobAuds) ∧
+      (∀ (d : Digest) (a : Array Serve.Seat), ch.audiences[d]? = some a →
+        ch'.audiences[d]? = some a) ∧
+      (∀ (d : Digest) (a : Array Serve.Seat), ch'.audiences[d]? = some a →
+        ch.audiences[d]? = some a ∨
+          (ch.audiences[d]? = none ∧ ch'.store.has d = true ∧ blobAuds[d]? = some a)) := by
+  simp only [run, takeOut] at h
+  cases hch : t[chat]? with
+  | none => simp [hch] at h
+  | some ch =>
+    simp only [hch] at h
+    cases hm : mergeInput ch.store b with
+    | error e => simp [hm] at h
+    | ok p =>
+      obtain ⟨e, blobAuds⟩ := p
+      simp only [hm, Prod.mk.injEq] at h
+      obtain ⟨-, rfl⟩ := h
+      obtain ⟨keep, only⟩ := mergeAudiences_spec e ch.audiences blobAuds
+      exact ⟨ch, _, blobAuds, rfl, Std.HashMap.getElem?_insert_self, hm, keep, only⟩
 
 /-- **`COMMIT`'s opening matches its commitment.** If `COMMIT` replies with commitment `d` and
 opening `o`, then `o` passes `openingMatches` for the same group and author: the opening check of
