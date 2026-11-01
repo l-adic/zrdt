@@ -13,8 +13,8 @@ A record (`Rec`) is one message's entry in a chat's history. It holds:
 
 The links are kept in one canonical form: sorted increasing, with no digest twice
 (`StrictlySorted`). A `Rec` carries a proof of this, so a record with links out of order or
-repeated cannot exist. Then two records that differ only in link order cannot be told apart by
-`==` but hash differently: that case is ruled out by the type.
+repeated cannot exist. Without it, one message could be written with its links in two orders,
+as two different records with two different digests.
 
 Records are built by `Rec.make`, which sorts and removes duplicates, or by the strict decoder in
 `Zrdt.Encode`, which rejects links that are not already canonical.
