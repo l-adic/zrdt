@@ -52,11 +52,13 @@ theorem drop_data_eq_nil (a : ByteArray) {i : Nat} (h : a.size ≤ i) :
     a.data.toList.drop i = [] :=
   List.drop_eq_nil_of_le (by rw [Array.length_toList]; exact h)
 
+/-- The loop from position `i` compares what is left of the two byte lists. -/
 theorem compareBytes.go_eq (a b : ByteArray) (i : Nat) :
     compareBytes.go a b i = compare (a.data.toList.drop i) (b.data.toList.drop i) := by
   induction i using compareBytes.go.induct a b with
   | case1 i h₁ h₂ =>
-    rw [compareBytes.go, dite_eq_left h₁, ite_eq_left h₂, drop_data_eq_nil a h₁, drop_data_eq_nil b h₂]
+    rw [compareBytes.go, dite_eq_left h₁, ite_eq_left h₂, drop_data_eq_nil a h₁,
+      drop_data_eq_nil b h₂]
     rfl
   | case2 i h₁ h₂ =>
     rw [compareBytes.go, dite_eq_left h₁, ite_eq_right h₂, drop_data_eq_nil a h₁,
@@ -162,6 +164,15 @@ instance : Inhabited Digest := ⟨zero⟩
 def ofBytes? (b : ByteArray) : Option Digest :=
   if h : b.size = 32 then some ⟨b, h⟩ else none
 
+/-- `ofBytes?` gives back a value from its own bytes. -/
+@[simp] theorem ofBytes?_bytes (d : Digest) : ofBytes? d.bytes = some d := by
+  simp [ofBytes?, d.size_eq]
+
+/-- What `ofBytes?` returns has exactly the bytes it was given. -/
+theorem bytes_of_ofBytes? {b : ByteArray} {d : Digest} (h : ofBytes? b = some d) :
+    d.bytes = b := by
+  unfold ofBytes? at h; split at h <;> cases h; rfl
+
 /-- A digest from 64 hex characters. -/
 def ofHex? (s : String) : Option Digest :=
   bytesOfHex? s >>= ofBytes?
@@ -222,6 +233,15 @@ instance : Inhabited GroupId := ⟨zero⟩
 def ofBytes? (b : ByteArray) : Option GroupId :=
   if h : b.size = 32 then some ⟨b, h⟩ else none
 
+/-- `ofBytes?` gives back a value from its own bytes. -/
+@[simp] theorem ofBytes?_bytes (g : GroupId) : ofBytes? g.bytes = some g := by
+  simp [ofBytes?, g.size_eq]
+
+/-- What `ofBytes?` returns has exactly the bytes it was given. -/
+theorem bytes_of_ofBytes? {b : ByteArray} {g : GroupId} (h : ofBytes? b = some g) :
+    g.bytes = b := by
+  unfold ofBytes? at h; split at h <;> cases h; rfl
+
 /-- A group id from 64 hex characters. -/
 def ofHex? (s : String) : Option GroupId :=
   bytesOfHex? s >>= ofBytes?
@@ -272,6 +292,15 @@ instance : Inhabited Aci := ⟨zero⟩
 /-- An account id from a byte array, if it has exactly 16 bytes. -/
 def ofBytes? (b : ByteArray) : Option Aci :=
   if h : b.size = 16 then some ⟨b, h⟩ else none
+
+/-- `ofBytes?` gives back a value from its own bytes. -/
+@[simp] theorem ofBytes?_bytes (a : Aci) : ofBytes? a.bytes = some a := by
+  simp [ofBytes?, a.size_eq]
+
+/-- What `ofBytes?` returns has exactly the bytes it was given. -/
+theorem bytes_of_ofBytes? {b : ByteArray} {a : Aci} (h : ofBytes? b = some a) :
+    a.bytes = b := by
+  unfold ofBytes? at h; split at h <;> cases h; rfl
 
 /-- An account id from 32 hex characters. -/
 def ofHex? (s : String) : Option Aci :=
