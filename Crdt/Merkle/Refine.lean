@@ -117,6 +117,151 @@ theorem RawStore.abs_insert {c c' : RawStore} {r : Rec} {d : Digest}
         have hne : compare d k ≠ .eq := by rw [Ne, Digest.compare_eq_iff]; exact Ne.symm hkd
         simp only [Std.ExtTreeMap.getElem?_insert, hne, ↓reduceIte, hk]
 
+/-! ## The link walk -/
+
+/-- `WalkReach m next S d`: starting from the digests `S` and following, from each key `k` of `m`
+that is reached, the digests `next m[k]`, you get to `d`. This is what `walk` computes
+(`mem_walk_iff`); a start digest or a link that is not a key is reached but leads nowhere. -/
+inductive WalkReach {β : Type} (m : Std.ExtTreeMap Digest β compare) (next : β → List Digest)
+    (S : List Digest) : Digest → Prop
+  /-- Every start digest is reached. -/
+  | start {d : Digest} : d ∈ S → WalkReach m next S d
+  /-- From a reached key, each digest `next` gives for its value is reached. -/
+  | step {k d : Digest} {v : β} : WalkReach m next S k → m[k]? = some v → d ∈ next v →
+      WalkReach m next S d
+
+example : WalkReach (∅ : Std.ExtTreeMap Digest Nat compare) (fun _ => []) [Examples.dig 1]
+    (Examples.dig 1) := .start (List.mem_singleton_self _)
+
+/-- What stays true while `walk` runs over `m` from the start digests `S`: `left` is `m` without
+the visited keys; every visited key is a key of `m` and reached; every digest still to do is
+reached; and every link of a visited key, and every start digest, is visited, still to do, or not
+a key of `m`. -/
+structure WalkInv {β : Type} (m : Std.ExtTreeMap Digest β compare) (next : β → List Digest)
+    (S : List Digest) (left : Std.ExtTreeMap Digest β compare) (seen : DigestSet)
+    (todo : List Digest) : Prop where
+  left_seen : ∀ k, k ∈ seen → left[k]? = none
+  left_other : ∀ k, k ∉ seen → left[k]? = m[k]?
+  seen_ok : ∀ k ∈ seen, k ∈ m ∧ WalkReach m next S k
+  todo_ok : ∀ d ∈ todo, WalkReach m next S d
+  seen_closed : ∀ k ∈ seen, ∀ v, m[k]? = some v → ∀ d ∈ next v, d ∈ seen ∨ d ∈ todo ∨ d ∉ m
+  start_ok : ∀ d ∈ S, d ∈ seen ∨ d ∈ todo ∨ d ∉ m
+
+/-- `walk` from a state that satisfies the invariant returns exactly the reached keys of `m`. -/
+theorem walk_spec {β : Type} (m : Std.ExtTreeMap Digest β compare) (next : β → List Digest)
+    (S : List Digest) (left : Std.ExtTreeMap Digest β compare) (seen : DigestSet)
+    (todo : List Digest) (hI : WalkInv m next S left seen todo) :
+    ∀ d, d ∈ walk next left seen todo ↔ d ∈ m ∧ WalkReach m next S d := by
+  induction left, seen, todo using walk.induct next with
+  | case1 left seen =>
+    intro d
+    rw [walk]
+    have key : ∀ d, WalkReach m next S d → d ∈ m → d ∈ seen := by
+      intro d hR
+      induction hR with
+      | start hd =>
+        intro hdm
+        rcases hI.start_ok _ hd with h | h | h
+        · exact h
+        · simp at h
+        · exact absurd hdm h
+      | @step k d v _ hkv hd ih =>
+        intro hdm
+        have hkm : k ∈ m := Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp [hkv])
+        rcases hI.seen_closed k (ih hkm) v hkv d hd with h | h | h
+        · exact h
+        · simp at h
+        · exact absurd hdm h
+    exact ⟨hI.seen_ok d, fun ⟨hdm, hR⟩ => key d hR hdm⟩
+  | case2 left seen d todo h ih =>
+    intro x
+    rw [walk, dite_eq_left_of_eq_true (eq_true h)]
+    apply ih
+    have hdseen : d ∉ seen := fun hs => by
+      have := hI.left_seen d hs
+      rw [Std.ExtTreeMap.mem_iff_isSome_getElem?, this] at h
+      simp at h
+    have hv : m[d]? = some (left.get d h) := by
+      rw [← hI.left_other d hdseen, Std.ExtTreeMap.get_eq_getElem]
+      exact Std.ExtTreeMap.getElem?_eq_some_getElem h
+    have hdm : d ∈ m := Std.ExtTreeMap.mem_iff_isSome_getElem?.mpr (by simp [hv])
+    have hRd : WalkReach m next S d := hI.todo_ok d List.mem_cons_self
+    have mem_ins : ∀ k, k ∈ seen.insert d ↔ k = d ∨ k ∈ seen := fun k => by
+      rw [Std.ExtTreeSet.mem_insert, Digest.compare_eq_iff, eq_comm]
+    refine ⟨fun k hk => ?_, fun k hk => ?_, fun k hk => ?_, fun k hk => ?_,
+      fun k hk v hv' y hy => ?_, fun y hy => ?_⟩
+    · rw [Std.ExtTreeMap.getElem?_erase]
+      rcases (mem_ins k).mp hk with rfl | hk
+      · simp
+      · split
+        · rfl
+        · exact hI.left_seen k hk
+    · rw [mem_ins, not_or] at hk
+      have hne : compare d k ≠ .eq := by rw [Ne, Digest.compare_eq_iff]; exact Ne.symm hk.1
+      simp only [Std.ExtTreeMap.getElem?_erase, hne, ↓reduceIte]
+      exact hI.left_other k hk.2
+    · rcases (mem_ins k).mp hk with rfl | hk
+      · exact ⟨hdm, hRd⟩
+      · exact hI.seen_ok k hk
+    · rcases List.mem_append.mp hk with hk | hk
+      · exact .step hRd hv hk
+      · exact hI.todo_ok k (List.mem_cons_of_mem _ hk)
+    · rcases (mem_ins k).mp hk with rfl | hk
+      · rw [hv] at hv'
+        cases hv'
+        exact Or.inr (Or.inl (List.mem_append_left _ hy))
+      · rcases hI.seen_closed k hk v hv' y hy with h' | h' | h'
+        · exact Or.inl ((mem_ins y).mpr (Or.inr h'))
+        · rcases List.mem_cons.mp h' with rfl | h'
+          · exact Or.inl ((mem_ins y).mpr (Or.inl rfl))
+          · exact Or.inr (Or.inl (List.mem_append_right _ h'))
+        · exact Or.inr (Or.inr h')
+    · rcases hI.start_ok y hy with h' | h' | h'
+      · exact Or.inl ((mem_ins y).mpr (Or.inr h'))
+      · rcases List.mem_cons.mp h' with rfl | h'
+        · exact Or.inl ((mem_ins y).mpr (Or.inl rfl))
+        · exact Or.inr (Or.inl (List.mem_append_right _ h'))
+      · exact Or.inr (Or.inr h')
+  | case3 left seen d todo h ih =>
+    intro x
+    rw [walk, dite_eq_right_of_eq_false (eq_false h)]
+    apply ih
+    have hd : d ∈ seen ∨ d ∉ m := by
+      by_cases hs : d ∈ seen
+      · exact Or.inl hs
+      · refine Or.inr fun hm => h ?_
+        rw [Std.ExtTreeMap.mem_iff_isSome_getElem?, hI.left_other d hs]
+        exact Std.ExtTreeMap.mem_iff_isSome_getElem?.mp hm
+    refine ⟨hI.left_seen, hI.left_other, hI.seen_ok,
+      fun k hk => hI.todo_ok k (List.mem_cons_of_mem _ hk), fun k hk v hv y hy => ?_,
+      fun y hy => ?_⟩
+    · rcases hI.seen_closed k hk v hv y hy with h' | h' | h'
+      · exact Or.inl h'
+      · rcases List.mem_cons.mp h' with rfl | h'
+        · rcases hd with hd | hd
+          · exact Or.inl hd
+          · exact Or.inr (Or.inr hd)
+        · exact Or.inr (Or.inl h')
+      · exact Or.inr (Or.inr h')
+    · rcases hI.start_ok y hy with h' | h' | h'
+      · exact Or.inl h'
+      · rcases List.mem_cons.mp h' with rfl | h'
+        · rcases hd with hd | hd
+          · exact Or.inl hd
+          · exact Or.inr (Or.inr hd)
+        · exact Or.inr (Or.inl h')
+      · exact Or.inr (Or.inr h')
+
+/-- **The walk is right.** Walking `m` from the start digests `S` returns exactly the keys of `m`
+that are reached from `S`. -/
+theorem mem_walk_iff {β : Type} (m : Std.ExtTreeMap Digest β compare) (next : β → List Digest)
+    (S : List Digest) {d : Digest} :
+    d ∈ walk next m ∅ S ↔ d ∈ m ∧ WalkReach m next S d :=
+  walk_spec m next S m ∅ S
+    ⟨fun _ hk => absurd hk Std.ExtTreeSet.not_mem_empty, fun _ _ => rfl,
+      fun _ hk => absurd hk Std.ExtTreeSet.not_mem_empty, fun _ hd => .start hd,
+      fun _ hk => absurd hk Std.ExtTreeSet.not_mem_empty, fun _ hd => Or.inr (Or.inl hd)⟩ d
+
 /-! ## Equal records, equal stores -/
 
 namespace CheckedStore
@@ -193,6 +338,103 @@ theorem get_eq_none_iff (c : CheckedStore) {d : Digest} :
     c.get d = none ↔ d ∉ digests hashSpec (abs c) := by
   rw [c.mem_digests_abs, Std.ExtTreeMap.mem_iff_isSome_getElem?, get]
   cases c.raw.map[d]? <;> simp
+
+/-! ## Reachability -/
+
+/-- On a checked store, the walk's reachability is the spec's `Reach`, started from the same
+digests. -/
+theorem walkReach_iff (c : CheckedStore) (hs : Array Digest) {d : Digest} :
+    WalkReach c.raw.map (fun r => r.links.toList) hs.toList d ↔
+      Reach hashSpec (abs c) hs.toList.toFinset d := by
+  constructor
+  · intro h
+    induction h with
+    | start hd => exact .head (List.mem_toFinset.mpr hd)
+    | @step k d v _ hkv hd ih =>
+      refine .link (r := toSpec v) (RawStore.mem_abs.mpr ⟨k, v, hkv, rfl⟩) ?_
+        (mem_toSpec_links.mpr (Array.mem_toList_iff.mp hd))
+      rwa [hashSpec_toSpec, c.built.hash_eq k v hkv]
+  · intro h
+    induction h with
+    | head hd => exact .start (List.mem_toFinset.mp hd)
+    | @link x d hx _ hl ih =>
+      obtain ⟨v, rfl, hv⟩ := c.built.exists_of_mem_abs hx
+      rw [hashSpec_toSpec] at ih
+      exact .step ih hv (Array.mem_toList_iff.mpr (mem_toSpec_links.mp hl))
+
+/-- **`reachSet` is the spec's `reachSet`.** A digest is in `c.reachSet hs` exactly when it is
+the digest of a record in the spec's `reachSet` of `abs c` from `hs`: a stored record reached by
+following links from `hs`. -/
+theorem reachSet_iff (c : CheckedStore) (hs : Array Digest) {d : Digest} :
+    d ∈ c.reachSet hs ↔ d ∈ digests hashSpec (Crdt.Merkle.reachSet hashSpec (abs c) hs.toList.toFinset) := by
+  rw [reachSet, mem_walk_iff, walkReach_iff, mem_digests]
+  constructor
+  · rintro ⟨hdm, hR⟩
+    obtain ⟨x, hx, rfl⟩ := (mem_digests hashSpec).mp (c.mem_digests_abs.mpr hdm)
+    exact ⟨x, (mem_reachSet hashSpec).mpr ⟨hx, hR⟩, rfl⟩
+  · rintro ⟨x, hx, rfl⟩
+    obtain ⟨hx, hR⟩ := (mem_reachSet hashSpec).mp hx
+    exact ⟨c.mem_digests_abs.mp ((mem_digests hashSpec).mpr ⟨x, hx, rfl⟩), hR⟩
+
+/-- `reachSet` as a finite set of digests. -/
+theorem reachSet_toFinset (c : CheckedStore) (hs : Array Digest) :
+    (c.reachSet hs).toList.toFinset =
+      digests hashSpec (Crdt.Merkle.reachSet hashSpec (abs c) hs.toList.toFinset) := by
+  ext d
+  rw [List.mem_toFinset, Std.ExtTreeSet.mem_toList, reachSet_iff]
+
+/-- **Confirmation is exact** (docs/PLAN.md §3.2, "held by the sender"). A live message links
+`hs`, and both your store `c` and the sender's store `d` hold every digest of `hs`. Then the
+records the links reach are the same in both stores, digest for digest and record for record.
+Or two different records, across the two stores, have the same digest. -/
+theorem confirmed (c d : CheckedStore) (hs : Array Digest) (hc : ∀ h ∈ hs, c.has h = true)
+    (hd : ∀ h ∈ hs, d.has h = true) :
+    (c.reachSet hs = d.reachSet hs ∧ ∀ k ∈ c.reachSet hs, c.get k = d.get k) ∨
+      CollisionIn hashSpec (abs c ∪ abs d) := by
+  have hsub : ∀ (e : CheckedStore), (∀ h ∈ hs, e.has h = true) →
+      hs.toList.toFinset ⊆ digests hashSpec (abs e) := fun e he x hx =>
+    (e.has_iff).mp (he x (Array.mem_toList_iff.mp (List.mem_toFinset.mp hx)))
+  rcases confirmed_exact hashSpec c.closed d.closed (hsub c hc) (hsub d hd) with h | h
+  · left
+    refine ⟨Std.ExtTreeSet.ext_mem fun k => by rw [reachSet_iff, reachSet_iff, h], ?_⟩
+    intro k hk
+    rw [reachSet_iff, mem_digests] at hk
+    obtain ⟨x, hx, rfl⟩ := hk
+    have hx' := hx
+    rw [h] at hx'
+    obtain ⟨hxc, _⟩ := (mem_reachSet hashSpec).mp hx
+    obtain ⟨hxd, _⟩ := (mem_reachSet hashSpec).mp hx'
+    obtain ⟨r, rfl, hr⟩ := c.built.exists_of_mem_abs hxc
+    rw [hashSpec_toSpec]
+    rw [get, get, hr, d.built.toSpec_mem_abs.mp hxd]
+  · right
+    exact CollisionIn.mono hashSpec (Finset.union_subset_union (Finset.filter_subset _ _)
+      (Finset.filter_subset _ _)) h
+
+/-- The weaker form in docs/PLAN.md §3.2: the two reach sets are equal as sets of digests. -/
+theorem confirmed_digests (c d : CheckedStore) (hs : Array Digest)
+    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
+    c.reachSet hs = d.reachSet hs ∨ CollisionIn hashSpec (abs c ∪ abs d) :=
+  (confirmed c d hs hc hd).imp_left And.left
+
+/-- `s1` (Alice's `a1`) holds `a1` (computed by the kernel). -/
+theorem Examples.s1_has_a1 : Examples.s1.has (hashRecord Examples.a1) = true := by decide +kernel
+
+/-- `s2` (`a1`, then Bob's reply `b1`) holds `a1` (computed by the kernel). -/
+theorem Examples.s2_has_a1 : Examples.s2.has (hashRecord Examples.a1) = true := by decide +kernel
+
+-- A message that links `a1` reaches the same records in `s1` and in `s2`; `b1` is not reached.
+example : (Examples.s1.reachSet #[hashRecord Examples.a1] =
+      Examples.s2.reachSet #[hashRecord Examples.a1] ∧
+      ∀ k ∈ Examples.s1.reachSet #[hashRecord Examples.a1], Examples.s1.get k = Examples.s2.get k) ∨
+    CollisionIn hashSpec (abs Examples.s1 ∪ abs Examples.s2) :=
+  confirmed _ _ _ (fun h hh => by simp at hh; subst hh; exact Examples.s1_has_a1)
+    (fun h hh => by simp at hh; subst hh; exact Examples.s2_has_a1)
+
+example : hashRecord Examples.a1 ∈ Examples.s2.reachSet #[hashRecord Examples.a1] ↔
+    hashRecord Examples.a1 ∈ digests hashSpec
+      (Crdt.Merkle.reachSet hashSpec (abs Examples.s2) {hashRecord Examples.a1}) := by
+  simpa using reachSet_iff Examples.s2 #[hashRecord Examples.a1]
 
 /-! ## Accept, case by case -/
 
