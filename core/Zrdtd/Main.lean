@@ -55,7 +55,8 @@ def describeRefusal (payload reply : ByteArray) : Option String := do
   let status ← reply[0]?
   guard (0x80 ≤ status)
   let code := ((Proto.Code.ofByte? status).map (·.name)).getD "?"
-  let op := (payload[0]?.map fun b => s!"op 0x{hexOfBytes ⟨#[b]⟩}").getD "empty payload"
+  let op := (payload[0]?.map fun b => (Proto.opName? b).getD s!"op 0x{hexOfBytes ⟨#[b]⟩}").getD
+    "empty payload"
   pure s!"zrdtd: {op}, {payload.size} bytes: {code}"
 
 /-- Answer frames until the input ends. Returns the exit code. -/

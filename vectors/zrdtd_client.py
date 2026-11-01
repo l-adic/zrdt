@@ -70,13 +70,13 @@ class Zrdtd:
         return self.read_exact(n)
 
     def read_exact(self, n):
-        out = b""
+        out = bytearray()
         while len(out) < n:
             chunk = self.p.stdout.read(n - len(out))
             if not chunk:
                 raise EOFError("zrdtd closed its output after %d of %d bytes" % (len(out), n))
             out += chunk
-        return out
+        return bytes(out)
 
     def call(self, op, body=b""):
         self.send(bytes([OP[op]]) + body)

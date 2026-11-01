@@ -157,6 +157,17 @@ def Code.ofByte? (b : UInt8) : Option Code := Code.all.find? (·.byte == b)
 -- Every status has its own byte.
 #guard (Code.all.map Code.byte).eraseDups.length == Code.all.length
 
+/-- The op names, in op-byte order: `0x01` is `VERSION`, `0x0F` is `CLOSE`. -/
+def opNames : Array String :=
+  #["VERSION", "NEW", "OPEN", "SALVAGE", "COMMIT", "HASH", "ACCEPT", "HEADS", "HAS", "GET",
+    "REACH_SET", "MERGE", "CLASSIFY", "ENCODE", "CLOSE"]
+
+/-- The name of the op with this byte, if any. -/
+def opName? (b : UInt8) : Option String := if b = 0 then none else opNames[b.toNat - 1]?
+
+#guard opName? 0x0B == some "REACH_SET"
+#guard opName? 0x00 == none && opName? 0x10 == none
+
 /-- The protocol version. It changes when a request or reply layout changes. -/
 def protocolVersion : Nat := 1
 
@@ -389,6 +400,8 @@ def Request.write (q : Request) : ByteArray :=
     | .classify c fs => fs.foldl (fun acc f => acc ++ Write.fact f) (Write.str c ++ u32be fs.size)
 
 #guard (Request.close "x").write == ⟨#[0x0F, 0, 0, 0, 1, 0x78]⟩
+-- `Request.op` and `opNames` agree.
+#guard [Request.version, .heads "c", .close "c"].all fun q => opName? q.op.1 == some q.op.2
 
 namespace Parser
 

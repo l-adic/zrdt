@@ -445,11 +445,9 @@ def sessionsJson : Json :=
 where
   /-- The name of a request's op, or `none` for an op byte that has no name. -/
   opName (b : ByteArray) : String :=
-    match Request.parse b with
-    | .ok q => q.op.2
-    | .error _ => match b[0]? with
-      | some x => s!"0x{hexOfBytes ⟨#[x]⟩}"
-      | none => "(empty)"
+    match b[0]? with
+    | some x => (Proto.opName? x).getD s!"0x{hexOfBytes ⟨#[x]⟩}"
+    | none => "(empty)"
 
 /-! ## Replies no request can produce -/
 
