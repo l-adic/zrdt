@@ -20,8 +20,9 @@ import time
 
 OP = {name: i + 1 for i, name in enumerate(
     "VERSION NEW OPEN SALVAGE COMMIT HASH ACCEPT HEADS HAS GET REACH_SET MERGE CLASSIFY "
-    "ENCODE CLOSE".split())}
-OK, MISSING, COLLISION, WRONG_CHAT, TOO_LARGE, MALFORMED, UNVERIFIABLE, NOT_FOUND = range(8)
+    "ENCODE CLOSE ACCEPT_RECORD".split())}
+(OK, MISSING, COLLISION, WRONG_CHAT, TOO_LARGE, MALFORMED, UNVERIFIABLE, NOT_FOUND,
+ BAD_OPENING) = range(9)
 
 
 def u32(n):
@@ -92,12 +93,20 @@ def run_vectors(path, vectors_path):
         vectors = json.load(f)
     failures = 0
     total = 0
+    build_note = ""
     for session in vectors["sessions"]:
         z = Zrdtd(path, stderr=subprocess.DEVNULL)
         for step in session["steps"]:
             total += 1
             z.send(bytes.fromhex(step["request"]))
             got = z.recv().hex()
+            if got != step["reply"] and step.get("buildDependent"):
+                # VERSION: the status and protocol must match; the build text may differ when
+                # zrdtd was built from other sources than vectors.json.
+                if got[:10] == step["reply"][:10]:
+                    build_note = "; zrdtd reports another build: %s" % (
+                        bytes.fromhex(got[18:]).decode(errors="replace"))
+                    continue
             if got != step["reply"]:
                 failures += 1
                 print("MISMATCH %s / %s:\n  want %s\n  got  %s" % (
@@ -106,8 +115,8 @@ def run_vectors(path, vectors_path):
         if code != 0:
             failures += 1
             print("session %s: zrdtd exited with %d" % (session["name"], code))
-    print("vectors: %d steps in %d sessions, %d mismatches (build %s)" % (
-        total, len(vectors["sessions"]), failures, vectors["build"]))
+    print("vectors: %d steps in %d sessions, %d mismatches (build %s%s)" % (
+        total, len(vectors["sessions"]), failures, vectors["build"], build_note))
     return failures == 0
 
 
@@ -139,11 +148,12 @@ def smoke(path, n):
         if reply[0] != OK:
             print("ACCEPT %d: status %d" % (i, reply[0]))
             return False
-        # Check the digest against an independent encoding and Python's hashlib.
-        if reply[1:] != hashlib.sha256(record_encoding(group, commit, links, author)).digest():
-            print("ACCEPT %d: digest differs from hashlib" % i)
+        # Check the digest and the record bytes against an independent encoding and hashlib.
+        enc = record_encoding(group, commit, links, author)
+        if reply[1:33] != hashlib.sha256(enc).digest() or reply[33:] != bstr(enc):
+            print("ACCEPT %d: digest or record bytes differ from hashlib" % i)
             ok = False
-        prev = reply[1:]
+        prev = reply[1:33]
     accept_us = spent / n * 1e6
     tenth = max(n // 10, 1)
     first_us = first_tenth / tenth * 1e6
