@@ -15,8 +15,9 @@ fails elaboration on ANY drift — a new axiom, `sorry` (`sorryAx`), or
 
 This module is a `defaultTarget`, so a plain `lake build` elaborates it and the
 gate cannot silently fail to run. Scope: the CvRDT merge algebra core and the
-G-Counter convergence headlines, and the phase 1 hash-linked record layer
-(`Crdt.Merkle`). Extending the gate to the OR-Set / Sequence modules is a follow-up.
+G-Counter convergence headlines, and the hash-linked record layer
+(`Crdt.Merkle`, including the phase A obligations in `Chat.lean`). Extending the
+gate to the OR-Set / Sequence modules is a follow-up.
 -/
 
 -- Merge algebra core (`Crdt.Defs`).
@@ -201,7 +202,7 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Crdt.AuthorityFrontier.handoff_needs_connection' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.AuthorityFrontier.handoff_needs_connection
 
--- Hash-linked records, phase 1 (`Crdt.Merkle`).
+-- Hash-linked records (`Crdt.Merkle`).
 
 /-- info: 'Crdt.Merkle.accept_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.accept_unique
@@ -209,23 +210,26 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Crdt.Merkle.fetched_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.fetched_agree
 
-/-- info: 'Crdt.Merkle.merge_fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.merge_fetched
-
 /-- info: 'Crdt.Merkle.fetched_build' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.fetched_build
 
 /-- info: 'Crdt.Merkle.heads_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.heads_insert
 
-/-- info: 'Crdt.Merkle.TaskList.add_wins' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.add_wins
+-- Phase A spec obligations (`Crdt.Merkle`, `Chat.lean`). At the end of phase B the gate pins the
+-- `Api.lean` statements instead (docs/PLAN.md §3.2).
 
-/-- info: 'Crdt.Merkle.TaskList.fetched_live_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.fetched_live_agree
+/-- info: 'Crdt.Merkle.fetched_union' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.fetched_union
 
-/-- info: 'Crdt.Merkle.TaskList.remove_requires_closure' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.remove_requires_closure
+/-- info: 'Crdt.Merkle.confirmed_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.confirmed_exact
+
+/-- info: 'Crdt.Merkle.salvage_maximal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.salvage_maximal
+
+/-- info: 'Crdt.Merkle.authorConfirmed_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.authorConfirmed_sound
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
