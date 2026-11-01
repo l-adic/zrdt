@@ -176,10 +176,24 @@ Not proved, and needed for the claims to hold of the running app:
 - Membership changes after the chat starts, edits, deletes, reactions, polls, 1:1 chats, time,
   and compaction (a store only grows).
 
+## Quick start
+
+```
+make install && make run
+```
+
+Prerequisites: [elan](https://github.com/leanprover/elan) (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`;
+it installs the Lean toolchain named in `lean-toolchain`), python3, git and curl. `make install`
+fetches the Mathlib build cache, runs `lake build` (proofs and axiom gate) and builds `zrdtd`;
+about 5 minutes with the cache. `make run` runs the axiom gate, replays the 133 test vectors
+against `zrdtd` and round-trips a 1000-record chat through it. The GUI demo (Signal Desktop with
+zrdt) is in `l-adic/signal-desktop-zrdt`: `make install && make run` there.
+
 ## Build and check
 
 ```
-make install            # fetch the Mathlib cache, then lake build (runs the axiom gate)
+make install            # fetch the Mathlib cache, lake build (runs the axiom gate), build zrdtd
+make run                # axiom gate, the 133 test vectors and a 1000-record smoke against zrdtd
 lake build              # build the spec and proofs; the axiom gate runs as part of it
 lake exe axiom_check    # prints "axiom gate passed: ..."
 cd core && lake build   # the shipped code and zrdtd only: Init and Std, no Mathlib
@@ -188,6 +202,15 @@ python3 vectors/zrdtd_client.py vectors core/.lake/build/bin/zrdtd   # zrdtd giv
 make closure            # zrdtd links no Mathlib; silent if OK
 make comparator         # NOT RUN YET: run once, at the end, with approval (see above)
 ```
+
+**Running Comparator.** `make comparator` builds `Comparator.Challenge` and runs the official
+comparator on `comparator.json`: by default the one built into Lake from Lean v4.35.0
+(`lake comparator --config comparator.json`, which needs a `bwrap` that can create user
+namespaces), or, after `make comparator-tools` (clones and builds leanprover/comparator,
+lean4export and landrun into `.tools/`; needs go), the standalone `lake env <comparator>
+comparator.json`. It re-checks all of Mathlib and has needed over 60 GB, so it runs under
+`systemd-run --user --scope -p MemoryMax=48G -p MemorySwapMax=0` where available
+(`MEMORY_MAX=...` to change). `make install` and `make run` never run it. Status: not run yet.
 
 `make help` lists the targets. `make zrdtd` builds the daemon at `core/.lake/build/bin/zrdtd`.
 
