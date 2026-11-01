@@ -72,7 +72,8 @@ structure Built (c : RawStore) : Prop where
   /-- Every record belongs to the store's chat. -/
   group_eq : ∀ (k : Digest) (r : Rec), c.map[k]? = some r → r.group = c.group
   /-- The heads are exactly the stored digests that no stored record links. -/
-  heads_iff : ∀ d, d ∈ c.heads ↔ d ∈ c.map ∧ ∀ (k : Digest) (r : Rec), c.map[k]? = some r → d ∉ r.links
+  heads_iff : ∀ d, d ∈ c.heads ↔
+    d ∈ c.map ∧ ∀ (k : Digest) (r : Rec), c.map[k]? = some r → d ∉ r.links
   /-- The records can be listed in an accept order (newest first), and that list holds exactly
   the stored records. -/
   order : ∃ l, AcceptOrder l ∧ ∀ r, r ∈ l ↔ ∃ k : Digest, c.map[k]? = some r
@@ -262,6 +263,177 @@ theorem rawAccept_built {c : RawStore} (h : Built c) (r : Rec) : Built (rawAccep
         · exact h.wellSized k x hk
     · exact h
 
+/-! ### What `rawAccept` does, case by case -/
+
+/-- Accepted: `d` is the record's digest, and the record is now stored under it (it may have been
+stored already; the map is the same then). -/
+theorem rawAccept_accepted {c c' : RawStore} {r : Rec} {d : Digest}
+    (h : rawAccept c r = (.accepted d, c')) :
+    d = hashRecord r ∧ c'.group = c.group ∧ c'.map = c.map.insert d r ∧
+      ∀ old, c.map[d]? = some old → old = r := by
+  unfold rawAccept at h
+  dsimp only at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  split at h
+  · rename_i old hold
+    split at h
+    · rename_i heq
+      simp only [Prod.mk.injEq, AcceptResult.accepted.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      refine ⟨rfl, rfl, ?_, fun o ho => by rw [hold] at ho; cases ho; exact heq⟩
+      subst heq
+      apply Std.ExtTreeMap.ext_getElem?
+      intro k
+      rw [Std.ExtTreeMap.getElem?_insert]
+      split
+      · rename_i hk
+        rw [Std.LawfulEqCmp.compare_eq_iff_eq] at hk
+        rw [← hk, hold]
+      · rfl
+    · simp at h
+  · rename_i hnone
+    split at h
+    · simp at h
+    split at h
+    · obtain ⟨⟨⟩, rfl⟩ := Prod.mk.inj h
+      exact ⟨rfl, rfl, rfl, by simp [hnone]⟩
+    · simp at h
+
+/-- Every result other than `accepted` leaves the store as it was. -/
+theorem rawAccept_unchanged {c : RawStore} {r : Rec} (h : ∀ d, (rawAccept c r).1 ≠ .accepted d) :
+    (rawAccept c r).2 = c := by
+  unfold rawAccept at h ⊢
+  dsimp only at h ⊢
+  split
+  · rfl
+  split
+  · rfl
+  split
+  · split
+    · rename_i old hold heq
+      simp [*] at h
+    · rfl
+  · split
+    · rfl
+    split
+    · simp [*] at h
+    · rfl
+
+/-- Missing: the list is exactly the links that are not stored, it is not empty, and it is
+sorted. -/
+theorem rawAccept_missing {c c' : RawStore} {r : Rec} {ds : Array Digest}
+    (h : rawAccept c r = (.missing ds, c')) :
+    c' = c ∧ ds ≠ #[] ∧ (∀ x, x ∈ ds ↔ x ∈ r.links ∧ x ∉ c.map) ∧ ds = missingLinks c.map r := by
+  have hc : c' = c := by
+    have := rawAccept_unchanged (c := c) (r := r) (by simp [h])
+    rwa [h] at this
+  unfold rawAccept at h
+  dsimp only at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  split at h
+  · split at h <;> simp at h
+  · split at h
+    · simp at h
+    split at h
+    · simp at h
+    · rename_i hne
+      obtain ⟨⟨⟩, rfl⟩ := Prod.mk.inj h
+      refine ⟨rfl, ?_, fun x => mem_missingLinks, rfl⟩
+      intro he
+      simp [he] at hne
+
+/-- Collision: `d` is the record's digest, and a different record is stored under it. -/
+theorem rawAccept_collision {c c' : RawStore} {r : Rec} {d : Digest}
+    (h : rawAccept c r = (.collision d, c')) :
+    c' = c ∧ d = hashRecord r ∧ ∃ old, c.map[d]? = some old ∧ old ≠ r := by
+  have hc : c' = c := by
+    have := rawAccept_unchanged (c := c) (r := r) (by simp [h])
+    rwa [h] at this
+  unfold rawAccept at h
+  dsimp only at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  split at h
+  · rename_i old hold
+    split at h
+    · simp at h
+    · rename_i hne
+      obtain ⟨⟨⟩, rfl⟩ := Prod.mk.inj h
+      exact ⟨rfl, rfl, old, hold, hne⟩
+  · split at h
+    · simp at h
+    split at h <;> simp at h
+
+/-- Wrong chat: the record's chat is not the store's. -/
+theorem rawAccept_wrongChat {c c' : RawStore} {r : Rec} (h : rawAccept c r = (.wrongChat, c')) :
+    c' = c ∧ r.group ≠ c.group := by
+  have hc : c' = c := by
+    have := rawAccept_unchanged (c := c) (r := r) (by simp [h])
+    rwa [h] at this
+  unfold rawAccept at h
+  dsimp only at h
+  split at h
+  · rename_i hg
+    exact ⟨hc, hg⟩
+  split at h
+  · simp at h
+  split at h
+  · split at h <;> simp at h
+  · split at h
+    · simp at h
+    split at h <;> simp at h
+
+/-- Too large: the record has too many links, or it is new and the store is full. -/
+theorem rawAccept_tooLarge {c c' : RawStore} {r : Rec} (h : rawAccept c r = (.tooLarge, c')) :
+    c' = c ∧ (¬ r.WellSized ∨ (hashRecord r ∉ c.map ∧ maxRecords ≤ c.map.size + 1)) := by
+  have hc : c' = c := by
+    have := rawAccept_unchanged (c := c) (r := r) (by simp [h])
+    rwa [h] at this
+  unfold rawAccept at h
+  dsimp only at h
+  split at h
+  · simp at h
+  split at h
+  · rename_i hw
+    exact ⟨hc, Or.inl hw⟩
+  split at h
+  · split at h <;> simp at h
+  · rename_i hnone
+    split at h
+    · rename_i hfull
+      refine ⟨hc, Or.inr ⟨?_, hfull⟩⟩
+      simp [Std.ExtTreeMap.mem_iff_isSome_getElem?, hnone]
+    split at h <;> simp at h
+
+/-- A record of the right chat, with few enough links, whose links are all stored, and whose
+digest holds no other record, is accepted, unless it is new and the store is full. -/
+theorem rawAccept_of_ok {c : RawStore} {r : Rec} (hg : r.group = c.group) (hw : r.WellSized)
+    (hl : ∀ x ∈ r.links, x ∈ c.map) (hc : ∀ old, c.map[hashRecord r]? = some old → old = r)
+    (hroom : hashRecord r ∉ c.map → c.map.size + 1 < maxRecords) :
+    (rawAccept c r).1 = .accepted (hashRecord r) := by
+  unfold rawAccept
+  dsimp only
+  simp only [hg, ne_eq, not_true_eq_false, ↓reduceIte, hw]
+  split
+  · rename_i old hold
+    simp [hc old hold]
+  · rename_i hnone
+    have hroom' := hroom (by simp [Std.ExtTreeMap.mem_iff_isSome_getElem?, hnone])
+    have hfull : ¬ maxRecords ≤ c.map.size + 1 := by omega
+    have hmiss : (missingLinks c.map r).isEmpty = true := by
+      rw [Array.isEmpty_iff, Array.eq_empty_iff_forall_not_mem]
+      intro x hx
+      exact (mem_missingLinks.mp hx).2 (hl x (mem_missingLinks.mp hx).1)
+    simp [hfull, hmiss]
+
 /-! ## Walking links -/
 
 /-- Erasing a key that is present makes a map smaller (used to show that `walk` ends). -/
@@ -319,10 +491,27 @@ def empty (g : GroupId) : CheckedStore where
     size_lt := by simp [maxRecords]
     wellSized := by simp }
 
+/-- Two checked stores with the same data are equal (the proof carries no data). -/
+theorem ext {c d : CheckedStore} (h : c.raw = d.raw) : c = d := by
+  cases c; cases d; cases h; rfl
+
 /-- Accept one record (see `rawAccept`). Returns what happened and the new store. -/
 def accept (c : CheckedStore) (r : Rec) : AcceptResult × CheckedStore :=
   let p := rawAccept c.raw r
   (p.1, ⟨p.2, rawAccept_built c.built r⟩)
+
+/-- `accept` reports what `rawAccept` reports. -/
+@[simp] theorem accept_fst (c : CheckedStore) (r : Rec) :
+    (c.accept r).1 = (rawAccept c.raw r).1 := rfl
+
+/-- `accept`'s new store holds what `rawAccept`'s does. -/
+@[simp] theorem accept_raw (c : CheckedStore) (r : Rec) :
+    (c.accept r).2.raw = (rawAccept c.raw r).2 := rfl
+
+/-- Every result other than `accepted` leaves the store as it was. -/
+theorem accept_unchanged {c : CheckedStore} {r : Rec}
+    (h : ∀ d, (c.accept r).1 ≠ .accepted d) : (c.accept r).2 = c :=
+  ext (rawAccept_unchanged h)
 
 /-! ## Observers -/
 
@@ -541,5 +730,173 @@ def mergeBlob (c : CheckedStore) (b : ByteArray) : Except OpenError CheckedStore
   | .ok d => c.merge d
 
 end CheckedStore
+
+/-! ## Example: a small chat
+
+Alice writes `a1`. Bob and Carol both reply to it at the same time (`b1`, `c1`). Alice then
+writes `a2`, which links both replies. The outputs below are checked by `#guard_msgs` when this
+file is built. -/
+
+namespace Examples
+
+/-- Bob's account id. -/
+def bob : Aci := ⟨⟨Array.replicate 16 0xb0⟩, rfl⟩
+
+/-- Carol's account id. -/
+def carol : Aci := ⟨⟨Array.replicate 16 0xca⟩, rfl⟩
+
+/-- Alice's first message. -/
+def a1 : Rec := Rec.make group (dig 0xa1) #[] alice
+
+/-- Bob's reply to `a1`. -/
+def b1 : Rec := Rec.make group (dig 0xb1) #[hashRecord a1] bob
+
+/-- Carol's reply to `a1`, written at the same time as `b1`. -/
+def c1 : Rec := Rec.make group (dig 0xc1) #[hashRecord a1] carol
+
+/-- Alice's second message, after both replies. -/
+def a2 : Rec := Rec.make group (dig 0xa2) #[hashRecord b1, hashRecord c1] alice
+
+/-- The example records with their names. -/
+def named : List (Rec × String) := [(a1, "a1"), (b1, "b1"), (c1, "c1"), (a2, "a2")]
+
+/-- The name of an example record's digest, or the first 8 hex digits of any other digest. -/
+def nameOf (d : Digest) : String :=
+  match named.find? (fun (r, _) => hashRecord r == d) with
+  | some (_, n) => n
+  | none => String.ofList (d.toHex.toList.take 8)
+
+/-- `nameOf` on each digest. -/
+def names (ds : Array Digest) : Array String := ds.map nameOf
+
+/-- An `accept` result, with names for digests. -/
+def showResult : AcceptResult → String
+  | .accepted d => s!"accepted {nameOf d}"
+  | .missing ds => s!"missing {names ds}"
+  | .collision d => s!"collision {nameOf d}"
+  | .wrongChat => "wrongChat"
+  | .tooLarge => "tooLarge"
+
+/-- An `open` or `merge` result, with names for digests. -/
+def showOpen : Except OpenError CheckedStore → String
+  | .ok c => s!"ok, heads {names c.headsArray}, {c.size} records"
+  | .error (.collision d) => s!"collision {nameOf d}"
+  | .error (.unverifiable u m) => s!"unverifiable {names u}, missing {names m}"
+  | .error e => (reprStr e).replace "Zrdt.OpenError." ""
+
+/-- The store after accepting `a1`. -/
+def s1 : CheckedStore := ((CheckedStore.empty group).accept a1).2
+
+/-- The store after accepting `a1` and `b1`. -/
+def s2 : CheckedStore := (s1.accept b1).2
+
+/-- The store with all four records. -/
+def all4 : CheckedStore := ((CheckedStore.empty group).acceptAll #[a2, c1, b1, a1]).1
+
+/-- The blob of `all4` with `b1` cut out: `a2` links a record that is not there. -/
+def doctored : ByteArray := encodeBlob group #[a1, c1, a2]
+
+/-- A record with 4097 different links, one more than allowed. -/
+def tooManyLinks : Rec :=
+  Rec.make group (dig 0) ((Array.range 4097).map fun i =>
+    ⟨⟨(u32be i).data ++ Array.replicate 28 0⟩, by simp [ByteArray.size, u32be]⟩) alice
+
+/-- The store holding `a1` and `b1`. -/
+def storeAB : CheckedStore := ((CheckedStore.empty group).acceptAll #[a1, b1]).1
+
+/-- The store holding `a1` and `c1`. -/
+def storeAC : CheckedStore := ((CheckedStore.empty group).acceptAll #[a1, c1]).1
+
+end Examples
+
+open Examples CheckedStore
+
+-- `accept`: the first message is accepted and becomes the only head.
+/-- info: "accepted a1" -/
+#guard_msgs in #eval showResult ((empty group).accept a1).1
+/-- info: #["a1"] -/
+#guard_msgs in #eval names s1.headsArray
+
+-- A gap: `a2` arrives before the replies it links. The store is unchanged.
+/-- info: "missing #[c1, b1]" -/
+#guard_msgs in #eval showResult (s1.accept a2).1
+/-- info: 1 -/
+#guard_msgs in #eval (s1.accept a2).2.size
+
+-- `b1` resolves; it replaces `a1` as the head. Accepting `a1` again changes nothing.
+/-- info: "accepted b1" -/
+#guard_msgs in #eval showResult (s1.accept b1).1
+/-- info: #["b1"] -/
+#guard_msgs in #eval names s2.headsArray
+/-- info: ("accepted a1", 2) -/
+#guard_msgs in #eval (showResult (s2.accept a1).1, (s2.accept a1).2.size)
+
+-- Refusals: another chat; too many links; a different record under the same digest (made on a
+-- raw store, since a real SHA-256 collision is not available).
+/-- info: "wrongChat" -/
+#guard_msgs in #eval showResult (s2.accept (Rec.make otherGroup (dig 0xd1) #[] alice)).1
+/-- info: "tooLarge" -/
+#guard_msgs in #eval showResult (s2.accept tooManyLinks).1
+/-- info: "collision a1" -/
+#guard_msgs in #eval showResult (rawAccept ⟨group, (∅ : RecMap).insert (hashRecord a1) b1, ∅⟩ a1).1
+
+-- `acceptAll` takes the records in any order. Without `c1`, `a2` is left over.
+/-- info: (#["a2"], 4, 0) -/
+#guard_msgs in #eval
+  let (c, left) := (empty group).acceptAll #[a2, c1, b1, a1]
+  (names c.headsArray, c.size, left.size)
+/-- info: (#["b1"], #["a2"]) -/
+#guard_msgs in #eval
+  let (c, left) := (empty group).acceptAll #[a2, b1, a1]
+  (names c.headsArray, left.map (nameOf ∘ hashRecord))
+
+-- `has`, `get`, `reachSet`. From `c1` you reach `c1` and `a1`; from `a2`, everything. A start
+-- digest that is not stored is left out.
+/-- info: (true, true, false) -/
+#guard_msgs in #eval
+  (all4.has (hashRecord c1), all4.get (hashRecord c1) == some c1, all4.has (dig 0))
+/-- info: #["a1", "c1"] -/
+#guard_msgs in #eval names (all4.reachSet #[hashRecord c1]).toList.toArray
+/-- info: #["a1", "c1", "b1", "a2"] -/
+#guard_msgs in #eval names (all4.reachSet #[hashRecord a2, dig 0]).toList.toArray
+
+-- `encode` and `open`: the blob opens to the same store. Wrong chat and bad bytes are refused.
+/-- info: 542 -/
+#guard_msgs in #eval all4.encode.size
+/-- info: "ok, heads #[a2], 4 records" -/
+#guard_msgs in #eval showOpen (CheckedStore.open group all4.encode)
+#guard match CheckedStore.open group all4.encode with
+  | .ok c => c.encode == all4.encode
+  | .error _ => false
+/-- info: "wrongChat" -/
+#guard_msgs in #eval showOpen (CheckedStore.open otherGroup all4.encode)
+/-- info: "malformed" -/
+#guard_msgs in #eval showOpen (CheckedStore.open group (all4.encode.push 0))
+
+-- A doctored restore: `b1` was cut out. `open` refuses and names what is missing; `salvage`
+-- keeps what checks and names what it dropped.
+/-- info: "unverifiable #[a2], missing #[b1]" -/
+#guard_msgs in #eval showOpen (CheckedStore.open group doctored)
+/-- info: "heads #[c1], dropped #[a2], missing #[b1]" -/
+#guard_msgs in #eval
+  match salvage group doctored with
+  | .ok sv =>
+    s!"heads {names sv.store.headsArray}, dropped {names sv.dropped}, missing {names sv.missing}"
+  | .error e => reprStr e
+
+-- `merge`: two members' stores, each with one of the parallel replies.
+/-- info: "ok, heads #[c1, b1], 3 records" -/
+#guard_msgs in #eval showOpen (storeAB.merge storeAC)
+/-- info: "ok, heads #[c1, b1], 3 records" -/
+#guard_msgs in #eval showOpen (storeAB.mergeBlob storeAC.encode)
+/-- info: "wrongChat" -/
+#guard_msgs in #eval showOpen (storeAB.merge (empty otherGroup))
+
+-- `Built` rejects bad stores: a record of another chat, and a head that is not stored.
+example : ¬ Built ⟨group, (∅ : RecMap).insert (dig 0) (Rec.make otherGroup (dig 1) #[] alice), ∅⟩ :=
+  fun h => absurd (h.group_eq (dig 0) (Rec.make otherGroup (dig 1) #[] alice) (by simp))
+    (by decide)
+example : ¬ Built ⟨group, ∅, (∅ : DigestSet).insert (dig 1)⟩ :=
+  fun h => by simpa using ((h.heads_iff (dig 1)).mp (by simp)).1
 
 end Zrdt

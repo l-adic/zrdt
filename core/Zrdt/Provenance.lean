@@ -190,4 +190,132 @@ def classifyRef (c : CheckedStore) (facts : Array Fact) : Std.ExtTreeMap Digest 
   let live := liveFacts facts
   c.raw.map.map fun d r => statusRef c live d r
 
+/-! ## Example: restore from anyone (docs/PLAN.md §8, beat 5)
+
+Dave imports Bob's export of the chat in `Zrdt.Store` (`a1`, `b1`, `c1`, `a2`). Someone appended
+a fake `f1` in Bob's name on top of it. Then members write live. The statuses below are checked
+when this file is built, and each one is compared with `classifyRef`. -/
+
+namespace Examples
+
+/-- A fake in Bob's name, on top of `a2`. Bob never wrote it. -/
+def f1 : Rec := Rec.make group (dig 0xf1) #[hashRecord a2] bob
+
+/-- Alice writes after `a2` (she never saw `f1`). -/
+def a3 : Rec := Rec.make group (dig 0xa3) #[hashRecord a2] alice
+
+/-- Bob writes after `a3` (he never saw `f1`). -/
+def b2 : Rec := Rec.make group (dig 0xb2) #[hashRecord a3] bob
+
+/-- Carol links the fake in a live message. -/
+def c2 : Rec := Rec.make group (dig 0xc2) #[hashRecord f1] carol
+
+/-- Bob writes after `b2` and `c2`, so his message now reaches the fake. -/
+def b3 : Rec := Rec.make group (dig 0xb3) #[hashRecord b2, hashRecord c2] bob
+
+/-- Names of all example records. -/
+def namedAll : List (Rec × String) :=
+  named ++ [(f1, "f1"), (a3, "a3"), (b2, "b2"), (c2, "c2"), (b3, "b3")]
+
+/-- A status in words, with names for members. -/
+def showStatus : Status → String
+  | .confirmedByAuthor => "confirmed by author"
+  | .notConfirmedByAuthor => "NOT confirmed by author"
+  | .heldBy a => if a == alice then "held by alice" else if a == bob then "held by bob"
+      else if a == carol then "held by carol" else "held by someone"
+  | .unconfirmed => "unconfirmed"
+
+/-- A live fact for a record, with an optional disown list. -/
+def liveFact (r : Rec) (disown : Array Digest := #[]) : Fact := ⟨hashRecord r, .live, disown⟩
+
+/-- Load the records, classify them, and list `name: status` sorted by name. -/
+def classified (rs : Array Rec) (facts : Array Fact) : Array String :=
+  let c := ((CheckedStore.empty group).acceptAll rs).1
+  let nameOf (d : Digest) := ((namedAll.find? fun (r, _) => hashRecord r == d).map (·.2)).getD "?"
+  ((classify c facts).toList.map fun (d, st) => s!"{nameOf d}: {showStatus st}").toArray.qsort
+    (· < ·)
+
+/-- Print `classified`, one record per line. -/
+def printClassified (rs : Array Rec) (facts : Array Fact) : IO Unit :=
+  for line in classified rs facts do IO.println line
+
+/-- `classify` and `classifyRef` agree on these records and facts. -/
+def agrees (rs : Array Rec) (facts : Array Fact) : Bool :=
+  let c := ((CheckedStore.empty group).acceptAll rs).1
+  (classify c facts).toList == (classifyRef c facts).toList
+
+end Examples
+
+open Examples
+
+-- Imported, nobody has written live: everything is unconfirmed.
+/--
+info: a1: unconfirmed
+a2: unconfirmed
+b1: unconfirmed
+c1: unconfirmed
+f1: unconfirmed
+-/
+#guard_msgs in #eval printClassified #[a1, b1, c1, a2, f1] #[]
+
+-- Alice writes `a3` live: her messages are confirmed, the replies are held by her. The fake is
+-- still unconfirmed: no live message reaches it.
+/--
+info: a1: confirmed by author
+a2: confirmed by author
+a3: confirmed by author
+b1: held by alice
+c1: held by alice
+f1: unconfirmed
+-/
+#guard_msgs in #eval printClassified #[a1, b1, c1, a2, f1, a3] #[liveFact a3]
+
+-- Bob writes `b2` live. It reaches `b1` but not `f1`, and `f1` does not reach it: the fake is
+-- "not confirmed by Bob".
+/--
+info: a1: confirmed by author
+a2: confirmed by author
+a3: confirmed by author
+b1: confirmed by author
+b2: confirmed by author
+c1: held by alice
+f1: NOT confirmed by author
+-/
+#guard_msgs in #eval printClassified #[a1, b1, c1, a2, f1, a3, b2] #[liveFact a3, liveFact b2]
+
+-- Before Bob writes, Carol links the fake live: it is "held by carol".
+/--
+info: a1: confirmed by author
+a2: confirmed by author
+a3: confirmed by author
+b1: held by alice
+c1: confirmed by author
+c2: confirmed by author
+f1: held by carol
+-/
+#guard_msgs in #eval printClassified #[a1, b1, c1, a2, f1, a3, c2] #[liveFact a3, liveFact c2]
+
+-- Bob's `b3` links Carol's `c2`, so it reaches the fake. Without a disown the fake would count as
+-- Bob's (the limit `relay_attribution_indistinguishable`). Bob's app disowns it, and then it is
+-- "not confirmed by Bob". Only `f1` is shown; every other record is confirmed by its author.
+#guard (classified #[a1, b1, c1, a2, f1, a3, b2, c2, b3]
+  #[liveFact a3, liveFact b2, liveFact c2, liveFact b3]).all (·.endsWith ": confirmed by author")
+/-- info: f1: NOT confirmed by author -/
+#guard_msgs in #eval
+  let lines := classified #[a1, b1, c1, a2, f1, a3, b2, c2, b3]
+    #[liveFact a3, liveFact b2, liveFact c2, liveFact b3 #[hashRecord f1]]
+  IO.println ((lines.find? fun (l : String) => l.startsWith "f1").getD "?")
+
+-- Relayed and imported records count for nothing here; only live ones do.
+#guard classified #[a1, b1] #[⟨hashRecord b1, .relayed carol, #[]⟩] ==
+  #["a1: unconfirmed", "b1: unconfirmed"]
+
+-- The fast `classify` agrees with the literal `classifyRef` on every step above.
+#guard agrees #[a1, b1, c1, a2, f1] #[]
+#guard agrees #[a1, b1, c1, a2, f1, a3] #[liveFact a3]
+#guard agrees #[a1, b1, c1, a2, f1, a3, b2] #[liveFact a3, liveFact b2]
+#guard agrees #[a1, b1, c1, a2, f1, a3, c2] #[liveFact a3, liveFact c2]
+#guard agrees #[a1, b1, c1, a2, f1, a3, b2, c2, b3]
+  #[liveFact a3, liveFact b2, liveFact c2, liveFact b3 #[hashRecord f1]]
+
 end Zrdt
