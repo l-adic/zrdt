@@ -7,4 +7,13 @@ import Crdt.Sequence
 import Crdt.AuthorityFrontier
 import Crdt.Merkle.Defs
 import Crdt.Merkle.Integrity
-import Crdt.Merkle.TaskList
+import Crdt.Merkle.Chat
+import Crdt.Merkle.Bridge
+import Crdt.Merkle.Refine
+import Crdt.Merkle.Classify
+import Crdt.Merkle.ClassifyFast
+import Crdt.Merkle.ClassifyStatus
+import Crdt.Merkle.Api
+import Crdt.Merkle.EncodeProofs
+import Crdt.Merkle.LoadSpec
+import Crdt.Merkle.LoadApi

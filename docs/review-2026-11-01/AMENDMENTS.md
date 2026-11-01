@@ -5,6 +5,14 @@ decision in `REVIEW.md` §0a, and the reconciliation in `UPDATE-690ae65.md`). Th
 single source of names and decisions for the four documents. Every change it causes in them is
 marked **[amendment]** there.
 
+Settled after the rewrite, on review of the four rewritten documents:
+- the opening is exactly the committed bytes (A4);
+- `message.zrdt` is erasable (A4);
+- every later message carries the full disown list, and the `CLASSIFY` precedence is fixed (A8);
+- structure-only relays are accepted (A8);
+- the advertised theorems are named `Zrdt.CheckedStore.*`, stated in `Crdt/Merkle/Api.lean`
+  (A5).
+
 **What it keeps from the teammate's rewrite (690ae65):**
 - `CheckedStore` with constructors only;
 - `open`/`salvage` as one worklist;
@@ -53,7 +61,7 @@ marked **[amendment]** there.
 - `hashRecord r := sha256 (encode r)` is computable. It runs under `#eval`, and under
   `decide +kernel` for small examples.
 - Delete `ffi/sha256.c` and the "vendored SHA-256" wording everywhere.
-- The prototype is in `review-2026-11-01/spikes/pure-lean-core/Sha256.lean`.
+- A prototype from the review exists, kept outside the repo (`~/devel/zrdt-review-spikes` on the reviewer's machine).
 
 ## A3. `zrdtd`, a separate process, replaces the in-process N-API module (R§1.2–1.4)
 
@@ -121,9 +129,12 @@ marked **[amendment]** there.
   - Limits: count < 2^24 and nlinks ≤ 4096.
   - `Built` includes these bounds. `accept` and `open` return `TOO_LARGE` beyond them.
   - The decoder never pre-sizes an allocation from an untrusted count. Add a fuzz vector.
-- **The store holds structure only.** The content (the opening: nonce plus wire bytes) lives in
-  Desktop, as a new message attribute `zrdtOpening` marked `erase` in
-  `messageAttributesEraseBehavior`. Desktop's delete, expiry and view-once paths remove it.
+- **The store holds structure only.** The content (the opening: the nonce plus exactly the
+  committed bytes, i.e. the DataMessage with fields 15 and 200 already removed) lives in Desktop,
+  as a new message attribute `zrdtOpening` marked `erase` in `messageAttributesEraseBehavior`.
+  Desktop's delete, expiry and view-once paths remove it. No opening (stored, relayed or dumped)
+  carries the group master key; the host supplies the group context from the conversation when it
+  re-enters an opening. The frozen send copy `message.zrdt` (A7) is classified `erase` too.
 
 ## A5. `CheckedStore` and the advertised statements (U§4.1, U§4.2, U§5)
 
@@ -142,7 +153,7 @@ marked **[amendment]** there.
     Closure (every link is a key) follows.
   - `CheckedStore := { raw : RawStore, built : Built raw }`.
   - Constructors: `empty`, and `accept` with `rawAccept_built`; a prototype exists in
-    `spikes/checkedstore-mathlib-free/`.
+    the review (kept outside the repo (`~/devel/zrdt-review-spikes` on the reviewer's machine)).
   - **One worklist, `acceptAll : CheckedStore → Array Rec → CheckedStore × Array Rec`,** which
     inserts only through the checked `accept`. `merge`, `open` and `salvage` are defined from it,
     so `Built` holds by construction. A bug in the worklist can only reject records or leave
@@ -204,7 +215,7 @@ message ZrdtMeta {
 message DataMessage { ... optional ZrdtMeta zrdt = 200; }   // present ⇒ record, if in scope (A7)
 
 message ZrdtResendRequest { bytes groupId = 1; repeated bytes digests = 2; }
-message ZrdtResend        { bytes groupId = 1; bytes record = 2; optional bytes opening = 3; } // opening = nonce ‖ DataMessage bytes
+message ZrdtResend        { bytes groupId = 1; bytes record = 2; optional bytes opening = 3; } // opening = nonce ‖ DataMessage bytes without fields 15 and 200
 message ZrdtNotFound      { bytes groupId = 1; repeated bytes digests = 2; }
 message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200;
                                        ZrdtResend zrdtResend = 201; ZrdtNotFound zrdtNotFound = 202; } }
@@ -273,17 +284,24 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
   - `confirmedByAuthor`;
   - `heldBy(aci)`: reached by a live record of another member;
   - `unconfirmed`;
-  - `notConfirmedByAuthor`: the author has a live record concurrent with it, and does not reach
-    it or disowns it. Decided by reachability, never by receive order, so the server cannot cause
-    false accusations by reordering.
+  - `notConfirmedByAuthor`: a live record from the author lists it in `disown`, or the author has
+    a live record concurrent with it (neither reaches the other) and no live record from the
+    author reaches it. Decided by reachability, never by receive order, so the server cannot cause
+    false accusations by reordering. Precedence when several apply: `confirmedByAuthor`,
+    `notConfirmedByAuthor`, `heldBy`, `unconfirmed` (a disowned record can never be
+    `confirmedByAuthor`).
 - **Never refuse a record in your own name.** Refusing would stall everything that links it.
-  Accept it, alarm locally ("someone linked a message in your name you did not send"), and put it
-  in `ZrdtMeta.disown` in your next message.
+  Accept it, alarm locally ("someone linked a message in your name you did not send"), and add it
+  to your disown set. **Every** later message carries the full set in `ZrdtMeta.disown`, because
+  only live messages count and the server can drop any single one. Openings contain no field 200,
+  so relayed or imported messages never contribute a disown list.
 - **Resend:** the request goes 1:1 to the referencing sender first, then to the group. Replies
   are always 1:1.
   - **Relay:** the responder sends `ZrdtResend{record, opening}`. The receiver checks
     `HASH(record parts) == digest` and `COMMIT(opening) == record.commit`, then shows the message
-    as "relayed by X", which becomes normal once author-confirmed.
+    as "relayed by X", which becomes normal once author-confirmed. A relay **without** an opening
+    (the responder no longer holds the content, or the requester joined later) is accepted as
+    structure only: it resolves the links and shows "a message from A (content unavailable)".
   - **Author fast path:** once the record arrives, the receiver knows its author. It asks the
     author 1:1, and the author re-sends the original through Desktop's sendLog/`SavedProto` path
     (`handleRetry.preload.ts:236-245`). That copy arrives `live`, so it is author-confirmed at

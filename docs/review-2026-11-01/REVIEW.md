@@ -10,7 +10,7 @@ included a Lean library loaded as an N-API addon in Node 24.22.0, Electron-as-No
 Electron 45 renderer preload. Eight further verifiers then tried to refute every serious finding by
 reproducing it themselves. Result: 72 findings checked, **40 confirmed, 32 partly right
 (corrected below), 0 refuted**. Severities in this document are the post-verification ones.
-Reusable spike sources are in `spikes/` next to this file; see the appendix.
+The spike sources are kept outside the repo (`~/devel/zrdt-review-spikes` on the reviewer's machine); see the appendix.
 
 ---
 
@@ -171,7 +171,7 @@ Three verified ways around it:
 | Option | Result | Cost |
 |---|---|---|
 | A. Link the `.node` against `libleanshared.so` (APP §2 already names it) | Works in Node and Electron 45. `-Bsymbolic`, so no libuv/GMP interposition. | 231 MB `.so` (162 MB stripped), +24–36 MB RSS |
-| B. Rebuild the runtime from lean4 @eb6cafb with `-fPIC -ftls-model=global-dynamic` | 40 s build. 5 MB self-contained `.node`, 0.8 ms load, 1.8 ms init, 9 MB RSS. Works in an Electron 45 renderer. | Must stay in sync on every Lean bump: lean4 tag, mimalloc v3.4.5 (= `MI_MALLOC_VERSION` 30405 in `lean.h`), libuv 1.48 and gmp 6.3 headers, `MIMALLOC_OPTS`. Built with g++, which upstream does not test. Recipe: `spikes/pic-runtime/build_rt_pic.sh` |
+| B. Rebuild the runtime from lean4 @eb6cafb with `-fPIC -ftls-model=global-dynamic` | 40 s build. 5 MB self-contained `.node`, 0.8 ms load, 1.8 ms init, 9 MB RSS. Works in an Electron 45 renderer. | Must stay in sync on every Lean bump: lean4 tag, mimalloc v3.4.5 (= `MI_MALLOC_VERSION` 30405 in `lean.h`), libuv 1.48 and gmp 6.3 headers, `MIMALLOC_OPTS`. Built with g++, which upstream does not test. Recipe: `pic-runtime/build_rt_pic.sh` in the kept spikes |
 | D. Separate process (§1.3) | Standard `lean_exe` link, libc-only, identical on Linux and macOS | A frame protocol and process supervision |
 
 PLAN §7 row 1's day-1 spike ("export one function, call it from a C `main` and from Node") would
@@ -202,7 +202,7 @@ verifier both recommend the daemon:
 - **No hand-written C** in the trusted base if SHA-256 is pure Lean.
 - **Effort:** about 1–1.5 days, against 3–4 days with a long tail for N-API on Linux.
 
-Design (verified in `spikes/one-dispatcher/`):
+Design (verified in the `one-dispatcher` spike):
 
 ```lean
 initialize stores : IO.Ref (Std.HashMap String ChatStore) ← IO.mkRef {}
@@ -280,7 +280,7 @@ All of these are verified:
 
 ### 1.5 SHA-256: choose pure Lean (answers PLAN §9 Q4)
 
-`spikes/pure-lean-core/Sha256.lean`, about 70 lines:
+The `pure-lean-core/Sha256.lean` spike, about 70 lines:
 
 - passes the NIST vectors with `#guard`;
 - runs at about 9 µs per 201-byte record and 31 ms per MiB compiled;
@@ -648,7 +648,7 @@ multi-recipient sends, sync messages, receipts, and queued delivery on reconnect
 **Do not override `send()`** as APP §8a shows. It also intercepts the fake phones' own traffic
 (`PrimaryDevice` is built with `send: this.send.bind(this)`), and inside `send()` neither the
 source nor the recipient set is visible. **Override `handleMessage`** (for `deviceId ≠ 1`) **plus
-`prepareMultiDeviceMessage`**, as `spikes/villain/evil.sketch.ts` does.
+`prepareMultiDeviceMessage`**, as the `villain/evil.sketch.ts` spike does.
 
 The sketch is checked against the real API, but has two defects:
 
@@ -904,7 +904,7 @@ PLAN §7 and APP §10 have no date and no test. Replace them with these dated ch
   - `…/wf_2753fa62-2e6/journal.jsonl` (verification)
 - **Spike directories** are under `/tmp/zrdt-spike-*` and `/tmp/zrdt-verify-*` (about 2.3 GB;
   volatile).
-- **Kept sources** in `spikes/`:
+- **Kept sources**, kept outside the repo (`~/devel/zrdt-review-spikes` on the reviewer's machine):
   - `pure-lean-core/`: Mathlib-free `Sha256.lean` (NIST-checked), `Digest.lean`, `Store.lean`,
     `Ffi.lean`, and a `lakefile.toml` showing the `:static` facet and the TOML extern workarounds.
   - `one-dispatcher/`: `Zv.lean` (one `handle`, served over stdin/stdout and as an `@[export]`)

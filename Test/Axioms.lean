@@ -4,6 +4,7 @@ Released under the MIT license as described in the file LICENSE.
 Authors: crdt-lean contributors
 -/
 import Crdt
+import Zrdt.Proto
 
 /-!
 # Axiom footprint gate
@@ -15,8 +16,9 @@ fails elaboration on ANY drift — a new axiom, `sorry` (`sorryAx`), or
 
 This module is a `defaultTarget`, so a plain `lake build` elaborates it and the
 gate cannot silently fail to run. Scope: the CvRDT merge algebra core and the
-G-Counter convergence headlines, and the phase 1 hash-linked record layer
-(`Crdt.Merkle`). Extending the gate to the OR-Set / Sequence modules is a follow-up.
+G-Counter convergence headlines (from crdt-lean), and, for zrdt, exactly the
+`Api.lean` statements of docs/PLAN.md §3.2 plus `Zrdt.encode_injective`.
+Extending the gate to the OR-Set / Sequence modules is a follow-up.
 -/
 
 -- Merge algebra core (`Crdt.Defs`).
@@ -201,31 +203,78 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Crdt.AuthorityFrontier.handoff_needs_connection' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.AuthorityFrontier.handoff_needs_connection
 
--- Hash-linked records, phase 1 (`Crdt.Merkle`).
+-- zrdt: exactly the advertised statements about the shipped store (`Crdt/Merkle/Api.lean`,
+-- docs/PLAN.md §3.2), in the order of §3.2, and `Zrdt.encode_injective`
+-- (`Crdt/Merkle/EncodeProofs.lean`), the same names as `comparator.json`. Some of their proof
+-- obligations are pinned in a separate block below; they are not advertised.
 
-/-- info: 'Crdt.Merkle.accept_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.accept_unique
+/-- info: 'Zrdt.CheckedStore.fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.fetched
 
-/-- info: 'Crdt.Merkle.fetched_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.fetched_agree
+/-- info: 'Zrdt.CheckedStore.no_collision' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.no_collision
 
-/-- info: 'Crdt.Merkle.merge_fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.merge_fetched
+/-- info: 'Zrdt.CheckedStore.agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.agree
 
-/-- info: 'Crdt.Merkle.fetched_build' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.fetched_build
+/-- info: 'Zrdt.CheckedStore.abs_accept' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.abs_accept
 
-/-- info: 'Crdt.Merkle.heads_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.heads_insert
+/-- info: 'Zrdt.CheckedStore.abs_merge' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.abs_merge
 
-/-- info: 'Crdt.Merkle.TaskList.add_wins' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.add_wins
+/-- info: 'Zrdt.CheckedStore.open_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.open_iff
 
-/-- info: 'Crdt.Merkle.TaskList.fetched_live_agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.fetched_live_agree
+/-- info: 'Zrdt.CheckedStore.salvage_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.salvage_spec
 
-/-- info: 'Crdt.Merkle.TaskList.remove_requires_closure' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Crdt.Merkle.TaskList.remove_requires_closure
+/-- info: 'Zrdt.CheckedStore.encode_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.encode_open
+
+/-- info: 'Zrdt.CheckedStore.confirmed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.confirmed
+
+/-- info: 'Zrdt.CheckedStore.classify_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.classify_spec
+
+/-- info: 'Zrdt.encode_injective' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.encode_injective
+
+-- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
+-- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
+-- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
+-- axiom in them fails the build too; they are not part of what docs/PLAN.md §3.2 promises, and
+-- `comparator.json` does not list them.
+
+/-- info: 'Crdt.Merkle.authorConfirmed_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.authorConfirmed_sound
+
+/-- info: 'Crdt.Merkle.salvage_maximal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.salvage_maximal
+
+/-- info: 'Crdt.Merkle.confirmed_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.confirmed_exact
+
+/-- info: 'Crdt.Merkle.fetched_union' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.fetched_union
+
+/-- info: 'Zrdt.Proto.acceptRecord_accepted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.acceptRecord_accepted
+
+/-- info: 'Zrdt.openingMatches_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.openingMatches_spec
+
+-- `COMMIT`'s opening always passes `openingMatches` (`core/Zrdt/Commit.lean`, `Proto.lean`).
+
+/-- info: 'Zrdt.committedBytes_idem' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.committedBytes_idem
+
+/-- info: 'Zrdt.commitWithOpening_matches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.commitWithOpening_matches
+
+/-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
