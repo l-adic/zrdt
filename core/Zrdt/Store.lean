@@ -155,6 +155,12 @@ theorem mem_missingLinks {m : RecMap} {r : Rec} {d : Digest} :
   rw [missingLinks, Array.mem_filter, Std.ExtTreeMap.mem_iff_contains]
   cases m.contains d <;> simp
 
+/-- The missing links are sorted, like the links. -/
+theorem missingLinks_sorted {m : RecMap} {r : Rec} : StrictlySorted (missingLinks m r) := by
+  unfold StrictlySorted missingLinks
+  rw [Array.toList_filter]
+  exact r.links_sorted.filter _
+
 /-- Accept one record into a raw store (see the module header). The checks, in order: the chat;
 the number of links; whether the digest is already stored (the same record: accepted, nothing
 changes; a different one: collision); whether the store is full; whether every link is stored.
@@ -326,7 +332,7 @@ theorem rawAccept_unchanged {c : RawStore} {r : Rec} (h : ∀ d, (rawAccept c r)
 sorted. -/
 theorem rawAccept_missing {c c' : RawStore} {r : Rec} {ds : Array Digest}
     (h : rawAccept c r = (.missing ds, c')) :
-    c' = c ∧ ds ≠ #[] ∧ (∀ x, x ∈ ds ↔ x ∈ r.links ∧ x ∉ c.map) ∧ ds = missingLinks c.map r := by
+    c' = c ∧ ds ≠ #[] ∧ (∀ x, x ∈ ds ↔ x ∈ r.links ∧ x ∉ c.map) ∧ StrictlySorted ds := by
   have hc : c' = c := by
     have := rawAccept_unchanged (c := c) (r := r) (by simp [h])
     rwa [h] at this
@@ -344,7 +350,7 @@ theorem rawAccept_missing {c c' : RawStore} {r : Rec} {ds : Array Digest}
     · simp at h
     · rename_i hne
       obtain ⟨⟨⟩, rfl⟩ := Prod.mk.inj h
-      refine ⟨rfl, ?_, fun x => mem_missingLinks, rfl⟩
+      refine ⟨rfl, ?_, fun x => mem_missingLinks, missingLinks_sorted⟩
       intro he
       simp [he] at hne
 
@@ -891,6 +897,34 @@ open Examples CheckedStore
 #guard_msgs in #eval showOpen (storeAB.mergeBlob storeAC.encode)
 /-- info: "wrongChat" -/
 #guard_msgs in #eval showOpen (storeAB.merge (empty otherGroup))
+
+-- `AcceptOrder`, newest first: `b1` links `a1`, which is further down. The other way round,
+-- `b1` would be accepted before what it links.
+example : AcceptOrder [b1, a1] :=
+  .cons (fun d hd => ⟨a1, by simp, by simp [b1] at hd; exact hd.symm⟩)
+    (.cons (fun d hd => by simp [a1] at hd) .nil)
+example : ¬ AcceptOrder [a1, b1] := by
+  rintro (_ | ⟨_, _ | ⟨h, _⟩⟩)
+  simpa using h (hashRecord a1) (by simp [b1])
+
+-- `missingLinks` and `records` (sorted by digest).
+#guard missingLinks s1.raw.map a2 == #[hashRecord c1, hashRecord b1]
+#guard (names (all4.records.map hashRecord)) == #["a1", "c1", "b1", "a2"]
+
+-- `plan`: with an empty store, `a1` waits for nothing; `a2` waits for two digests.
+#guard let (counts, waiting, ready) := plan (empty group) #[a2, c1, b1, a1]
+  counts == #[2, 1, 1, 0] && waiting.size == 3 && ready == [3]
+
+-- `findCollision` and `leftoverReport` on the doctored restore: no collision; `a2` is dropped
+-- and `b1` is missing.
+#guard let (c, left) := (empty group).acceptAll #[a1, c1, a2]
+  findCollision c (withDigests left) == none &&
+    leftoverReport c (withDigests left) == (#[hashRecord a2], #[hashRecord b1])
+#guard findCollision all4 #[(hashRecord a1, b1)] == some (hashRecord a1)
+
+-- `checkInput`.
+#guard checkInput group #[a1, b1] == none
+#guard checkInput otherGroup #[a1] == some .wrongChat
 
 -- `Built` rejects bad stores: a record of another chat, and a head that is not stored.
 example : ¬ Built ⟨group, (∅ : RecMap).insert (dig 0) (Rec.make otherGroup (dig 1) #[] alice), ∅⟩ :=

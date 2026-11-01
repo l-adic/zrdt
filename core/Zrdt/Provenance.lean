@@ -306,6 +306,22 @@ f1: held by carol
     #[liveFact a3, liveFact b2, liveFact c2, liveFact b3 #[hashRecord f1]]
   IO.println ((lines.find? fun (l : String) => l.startsWith "f1").getD "?")
 
+-- `linkedBy` (links followed backwards), `reachersOf`, `reachersOfAll`.
+#guard let back := linkedBy all4
+  back[hashRecord a1]?.map (·.length) == some 2 && back[hashRecord a2]? == some []
+#guard let back := linkedBy all4
+  (reachersOf back (hashRecord c1)).toList == [hashRecord c1, hashRecord a2]
+#guard let back := linkedBy all4
+  ((reachersOfAll back #[hashRecord b1, hashRecord c1]).map (·.toList)) == some [hashRecord a2]
+
+-- `reaches` and `minAci`.
+#guard reaches all4 (hashRecord a2) (hashRecord a1) && !reaches all4 (hashRecord a1) (hashRecord a2)
+#guard minAci carol alice == alice && minAci alice bob == alice
+
+-- `authorViews`: Alice's live `a2` reaches everything; nobody else has a live record.
+#guard let v := authorViews all4 (liveFacts #[liveFact a2])
+  v.size == 1 && (v[alice]?.map (·.reach.size)) == some 4
+
 -- Relayed and imported records count for nothing here; only live ones do.
 #guard classified #[a1, b1] #[⟨hashRecord b1, .relayed carol, #[]⟩] ==
   #["a1: unconfirmed", "b1: unconfirmed"]
