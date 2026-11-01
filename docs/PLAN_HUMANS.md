@@ -215,140 +215,136 @@ Example: `build hash [r0, r1] = {r0, r1}`, but `build hash [r1, r0] = {r0}`: `r1
 what it links and was dropped. The app keeps such records in a pending buffer and retries; see
 theorem 4.
 
-## 4. The capstone theorems
+## 4. The theorems
 
+Five statements about the structure, one about the code, and three examples that mark the limits.
 Several conclusions end in `∨ CollisionIn hash (…)`: "or two different records in the stores
 involved have the same hash". That clause is how a hash collision shows up. It is never a
-hypothesis. If the main conclusion fails, the theorem hands you the two colliding records. For a
-sound hash this branch never happens in practice; for the proofs it means no assumption about the
-hash is needed at all.
+hypothesis; if the main conclusion fails, the theorem hands you the two colliding records.
 
-Status key: **proved** means it builds today with no `sorry` and only the standard axioms;
-**to write** means the statement is settled and the proof is planned (see `PLAN.md`).
+Status key: **proved** builds today with no `sorry` and only the standard axioms; **proved in
+scratch** is checked against today's build but not yet in the repository; **to prove** means the
+statement is settled and the proof is planned (`PLAN.md`).
 
 ### (1) Same heads, same chat — `fetched_agree`
 
 If two phones both pass the check and have the same heads, they hold exactly the same set of
-messages with the same links.
-
-Why it matters: a few hashes on the screen are enough to compare two people's entire chats.
+messages with the same links. A few hashes on a screen are enough to compare two people's chats.
 
 ```lean
 theorem fetched_agree (hS : Fetched hash s hs) (hT : Fetched hash t hs) :
     s = t ∨ CollisionIn hash (s ∪ t)
 ```
 
-**Proved** (`Crdt/Merkle/Integrity.lean`). It rests on `reach_mono_of_complete` (with no
-collision, anything reachable in one complete store is reachable in the other) and
-`subset_of_fetched` (a tight store is inside any complete store for the same heads).
+**Proved** (`Integrity.lean`), from `reach_mono_of_complete` and `subset_of_fetched`.
 
-### (2) Nobody can hide a message from you — `no_silent_exclusion`
+### (2) An honest phone always passes — `fetched_build`
 
-If Bob holds a message `m`, and `m` lies behind one of Carol's heads (as seen in Bob's store), and
-Carol's store passes the completeness check, then Carol holds `m` too. The server can delay a
-message. It cannot make Carol believe she is caught up past a message she never received.
-
-```lean
-theorem no_silent_exclusion (hS : Complete hash s hs) (hm : m ∈ t)
-    (hreach : Reach hash t hs (hash m)) :
-    m ∈ s ∨ CollisionIn hash (s ∪ t)
-```
-
-**To write** (proposed statement). It is `reach_mono_of_complete` applied from `t` to `s`, then
-`Complete` for `s`.
-
-### (3) An honest phone always passes — `fetched_build`
-
-A phone that accepts records one at a time, each only once its links resolve, is always in a
-state the check accepts, and its heads are the correct digest of what it holds.
-
-Why it matters: without this, theorem (1) would be true but unusable; no phone could meet its
-hypotheses.
+A phone that accepts records one at a time, each only once its links resolve, is always in a state
+the check accepts, and its heads are the correct digest of what it holds. Without this, (1) would be
+true but unusable.
 
 ```lean
 theorem fetched_build (l : List (Record α H K)) :
     Fetched hash (build hash l) (heads hash (build hash l)) ∨ CollisionIn hash (build hash l)
 ```
 
-**Proved**. Along the way: `closed_accept` (accepting keeps a store closed) and `heads_insert`
-(after accepting a new record, the heads are its hash plus the old heads it did not link):
+**Proved**. It holds for *any* list of records, which is what makes salvage (4) and the
+`CheckedStore` certificate (6) work.
 
-```lean
-theorem heads_insert (hs : Closed hash s) (hr : r ∉ s) (hl : r.links ⊆ digests hash s) :
-    heads hash (insert r s) = insert (hash r) (heads hash s \ r.links)
-      ∨ CollisionIn hash (insert r s)
-```
+### (3) Catching up is safe — `fetched_union`
 
-### (4) Catching up is safe, in any order — `fetched_union` and `strong_eventual_consistency`
-
-Merging two stores that pass the check gives a store that passes the check from the union of
-their head sets. And the result of receiving a set of messages depends only on the set, never on
-the order or on repeats.
+Merging two stores that pass the check gives a store that passes the check, from the union of their
+head sets. Sync never has to be re-verified from scratch.
 
 ```lean
 theorem fetched_union (hS : Fetched hash s hs₁) (hT : Fetched hash t hs₂) :
     Fetched hash (s ∪ t) (hs₁ ∪ hs₂)
-
-theorem strong_eventual_consistency (l₁ l₂ : List (Store α H K))
-    (h : l₁.toFinset = l₂.toFinset) : l₁.foldr merge ⊥ = l₂.foldr merge ⊥
 ```
 
-`fetched_union` is **to write** (no collision clause is needed: both halves follow by induction
-on `Reach`). Note that `heads hash (s ∪ t)` may be smaller than `hs₁ ∪ hs₂` when one side has
-already linked the other's heads; `Fetched` is stated from `hs₁ ∪ hs₂`, which reaches the same
-records. `strong_eventual_consistency` is **proved** (phase 0, re-stated for stores in
-`Defs.lean`). A third statement, `build_retry_eq_union` (**to write**), covers the pending
-buffer: accepting a closed set of records with retries yields the whole set, in any order.
+**To prove**; no collision clause is needed. (`heads hash (s ∪ t)` may be smaller than `hs₁ ∪ hs₂`
+when one side has linked the other's heads; `Fetched` from `hs₁ ∪ hs₂` reaches the same records.)
 
-### (5) The check the phone runs is the check the theorems are about — `check_iff_fetched`
+### (4) Nothing recoverable is lost — `salvage_maximal`
 
-The fast implementation (`ChatStore`, a hash map plus a head set) tracks the specification
-exactly. `abs` turns a `ChatStore` into the `Finset` it represents; `Inv` is the invariant that a
-well-formed `ChatStore` satisfies.
+Take any set of records, in any order, and accept each one as soon as its links are present,
+repeating until nothing changes. The result is accept-built (so it passes the check, by (2)), and it
+is the *largest* subset that any client could ever have accepted. Everything else is reported, by
+hash, as unverifiable.
 
 ```lean
-theorem abs_accept (h : Inv s) : abs (s.accept r) = accept hashRecord (abs s) r
-theorem heads_eq (h : Inv s) : s.heads = heads hashRecord (abs s)
-theorem check_iff_fetched (h : Inv s) :
-    s.check = .ok ↔ Fetched hashRecord (abs s) (heads hashRecord (abs s))
+def AcceptBuilt (s : Store α H K) : Prop := ∃ l : List _, l.toFinset = s ∧ build hash l = s
+
+theorem salvage_built (u : Store α H K) : AcceptBuilt hash (buildRetry hash u)
+theorem salvage_maximal (hs : AcceptBuilt hash s) (hsu : s ⊆ u) : s ⊆ buildRetry hash u
 ```
 
-Why it matters: this is the difference between "we proved a model" and "we proved the code".
-With these, theorem (1) reads: two phones whose `check` says ok and whose heads match hold the
-same history.
+**To prove**. Two uses: the pending buffer (messages that arrive before what they link are retried,
+and in any arrival order you end with the whole set), and a damaged restore ("3 messages could not be
+verified; 1,204 were" is backed by this theorem rather than by a guess).
 
-**To write**, in `Crdt/Merkle/Refine.lean`, once `Impl.lean` exists. This is the largest proof
-task in the project; see section 5.
+### (5) A live message confirms exactly what it points at — `confirmed_exact`
 
-### (6) Two stories can't be told without it showing — `fork_visible`
-
-If a member sends two different messages as if they were the same message (same author, same
-links, different content), then after a merge both are present, with different hashes.
+Your store and a member's store are both closed, and a message from that member has links that
+resolve in both. Then the records reachable from those links in your store are, record for record,
+the records reachable from them in the member's store. This is what makes a history imported from
+anyone verifiable by the next live message (`RESTORE_PLAN.md`).
 
 ```lean
-theorem fork_visible (ha : a ∈ s) (hb : b ∈ t)
-    (hauthor : a.author = b.author) (hlinks : a.links = b.links) (hne : a.payload ≠ b.payload) :
-    a ∈ s ∪ t ∧ b ∈ s ∪ t ∧ (hash a ≠ hash b ∨ CollisionIn hash (s ∪ t))
+theorem confirmed_exact (hcs : Closed hash s) (hct : Closed hash t)
+    (hhs : hs ⊆ digests hash s) (hht : hs ⊆ digests hash t) :
+    reachSet hash s hs = reachSet hash t hs ∨
+      CollisionIn hash (reachSet hash s hs ∪ reachSet hash t hs)
 ```
 
-**To write**. It is short: union never drops a record, and distinct records with equal hashes are
-a collision by definition. Its value is the combination with Signal: Signal's signature says who
-sent each version, zrdt makes the two versions sit side by side.
+**Proved in scratch**, as (1) applied to `reachSet`, the records reachable from a set of hashes; the
+lemma `fetched_reachSet` says that in a closed store the reachable part is itself fetched.
 
-### The limit: `withheld_tail_undetectable`
+### (6) The code the phone runs is the code the theorems are about — `CheckedStore`
 
-What links alone cannot catch: the server never delivering the *latest* messages, the ones nothing
-has replied to yet. A phone holding only the earlier part passes every check.
+The implementation is a type, `CheckedStore`: a hash map from digest to record, a cached head set,
+the chat id, and a proof that the store is accept-built, every key is the hash of its record, every
+record belongs to this chat, and the cache is right. The proof field costs nothing at run time. The
+only ways to make one are `empty`, `accept`, `merge`, `open` (rebuild a blob by accepting each
+record once its links are present) and `salvage`; there is no unchecked store anywhere in the
+library or the app. The refinement theorems say each of these computes what the spec defines:
 
 ```lean
--- a concrete countermodel over the toy hash
-example : ∃ s t : Store ℕ ℕ Unit, s ⊂ t ∧
-    Fetched toyHash s (heads toyHash s) ∧ Fetched toyHash t (heads toyHash t) ∧
-    ¬ CollisionIn toyHash t
+theorem built_fetched (c : CheckedStore) :
+    Fetched hashRecord (abs c) (heads hashRecord (abs c)) ∨ CollisionIn hashRecord (abs c)
+theorem abs_accept    : -- per result case: accepted ⇒ abs c' = accept hashRecord (abs c) r, …
+theorem abs_merge     : c.merge d = .ok e → abs e = abs c ∪ abs d
+theorem heads_eq      : c.heads = heads hashRecord (abs c)
+theorem reachSet_iff  : d ∈ c.reachSet hs ↔ (a record of abs c with hash d is reachable from hs)
+theorem open_sound    : open b = .ok c → abs c = recordsOf b
+theorem open_complete : AcceptBuilt hashRecord (recordsOf b) → ∃ c, open b = .ok c
+theorem encode_injective : Function.Injective encode
 ```
 
-**To write** (take `s = {r0}` and `t = {r0, r1}`). This is why the app has a compare screen: the
-remedy for a withheld tail is a second person's heads. Theorem (1) then names the missing digest.
+**To prove**, after the implementation exists (`PLAN.md` phase B). This is the largest proof task
+in the project and the one that answers "proofs about the code, or about a model?".
+
+### What links alone cannot do — three examples
+
+Each is a concrete countermodel, checked by `decide`, and each is why some part of the app exists.
+
+- **A withheld newest message passes every local check.** A phone holding everything except the
+  latest message is in a perfectly consistent state. Remedy: the compare screen (another member's
+  heads), after which (1) names the missing digest.
+- **A dump whose tail was replaced passes `open`.** A consistent fake tail is a valid history that
+  ends somewhere. Remedy: the next live message, by (5); the fake stays unconfirmed.
+- **"Withheld" and "never existed" are the same local state.** Two worlds that differ only in
+  whether another member holds the record give the phone the identical view. Remedy: ask; the
+  referencing sender holds what it linked (`heads_subset_digests`), so its answer is decisive.
+
+### Consequences that are not separate theorems
+
+Some things the design gives are one-line applications of the above and are not advertised as
+results: a member who sends two different messages as the same message produces two records with
+different hashes that both survive a merge (union keeps everything, and equal hashes on different
+records is the definition of a collision); a resent record is accepted only if it hashes to the
+requested digest (`accept_unique`); a message reaches a record only if its sender held it
+(`reach_implies_held`).
 
 ## 5. From proofs to running code
 
@@ -356,31 +352,35 @@ Four layers, top to bottom.
 
 ```
   Finset spec        Crdt/Merkle/Defs, Integrity, Chat   — the definitions and theorems above
-        │  refinement theorems (Refine.lean): abs, Inv, abs_accept, heads_eq, check_iff_fetched
-  ChatStore          Crdt/Merkle/Impl.lean               — Std.HashMap Digest Record + head set
+        │  refinement theorems (Refine.lean), one per constructor and observer
+  CheckedStore       Crdt/Merkle/Impl.lean               — hash map + head cache + certificate
         │  lake build → C
   libzrdt            Crdt/Merkle/Ffi.lean (@[export zrdt_*]) + Lean runtime + vendored SHA-256
         │  FFI
   host app           Signal-Desktop fork (see APP.md)    — transport, storage of the blob, UI
 ```
 
-**The spec layer** is what section 3 and 4 describe. It runs (`decide`, `#eval`) but slowly: a
+**The spec layer** is what sections 3 and 4 describe. It runs (`decide`, `#eval`) but slowly: a
 `Finset` is a list under the hood.
 
-**The implementation layer** is ordinary Lean code. `ChatStore` holds a `Std.HashMap` from digest
-to record and a `Std.HashSet` of heads. Its operations are the ones the app calls: `accept`,
-`heads`, `check` (every link resolves, and a walk from the heads visits every entry), `merge`,
-`encodeStore`/`decodeStore`, `has`, `reaches`. Here `hash` becomes concrete:
-`hashRecord r := sha256 (encode r)`, with `sha256` an opaque function implemented in C and
-`encode` a canonical byte encoding written in Lean (`Crdt/Merkle/Encode.lean`).
+**The implementation layer** is ordinary Lean code with one dependent type. `CheckedStore` pairs a
+raw store (a `Std.HashMap` from digest to record, a `Std.HashSet` of heads, the chat id) with a
+proof that it is accept-built, chat-bound and correctly cached. The constructors `empty`, `accept`,
+`merge`, `open` and `salvage` are the only producers, so the proof is maintained by construction and
+nothing in the library ever handles an unchecked store. `open` is the checker: it decodes the
+records and accepts each one once its links are present (a linear worklist); if it consumes
+everything, the order it found is the certificate, otherwise the leftovers are the salvage report.
+Here `hash` becomes concrete: `hashRecord r := sha256 (encode r)`, with `sha256` implemented in C and
+`encode` a canonical byte encoding written in Lean (`Encode.lean`) that includes the chat id, so a
+record from another chat is rejected on arrival.
 
-**Refinement** means: an abstraction function `abs : ChatStore → Store` (the set of records in
-the map), an invariant `Inv` (every key is the hash of its value; the head set equals `heads` of
-the abstraction), and one theorem per operation saying the implementation's result abstracts to
-the spec's result (`abs_accept`, `heads_eq`, `abs_merge`, `decode_encode`, `check_iff_fetched`).
-After that, every theorem in section 4 is a theorem about the compiled code, not about a model.
-That is the answer to "are the proofs about the code or about a model of it": the code *is* the
-Lean, and the only gap between the proved definitions and the shipped binary is the compiler.
+**Refinement** means: an abstraction function `abs : CheckedStore → Store` (the set of records in
+the map) and, for each constructor and observer, a theorem that its result abstracts to the spec's
+result (`abs_accept`, `abs_merge`, `heads_eq`, `reachSet_iff`, `open_sound`, `open_complete`), plus
+`built_fetched`, which turns the certificate into the hypothesis every spec theorem needs. After
+that, every theorem in section 4 is a theorem about the compiled code, not about a model. That is
+the answer to "are the proofs about the code or about a model of it": the code *is* the Lean, and
+the only gap between the proved definitions and the shipped binary is the compiler.
 
 **Trusted base**, in full:
 
@@ -406,18 +406,21 @@ pins every main theorem to `[propext, Classical.choice, Quot.sound]` on every bu
   changes.
 - **A gap placeholder.** When a message arrives whose links name something the phone does not
   hold, a placeholder appears where the missing message belongs: "1 message you haven't
-  received". The phone asks the server, then a peer, to resend it by digest (theorem (2)).
+  received". The phone asks the member who referenced it, then the group, to resend it by digest (theorem (4)).
 - **A compare screen.** Shows the heads as a QR or word list. Comparing with Bob gives one of:
   identical; Bob has messages you don't (fetch); you have messages Bob doesn't (he's behind);
   both have new messages (merge); or Bob has a message the server won't give you, with its digest
   (the withheld tail).
-- **A rejected banner.** On restore or sync, if `check` fails: "This copy of the chat was altered:
-  message ·k7f2 is missing", and the copy is not merged (theorems (1), (5)).
+- **A rejected banner.** On restore or sync, if `open` fails: "This copy of the chat was altered:
+  message ·k7f2 is missing", and the copy is not merged; "keep what verifies" loads the salvaged
+  part (theorems (4), (6)).
 - **Checkpoints.** A message whose text is "checkpoint" from someone who is caught up pins down
   the whole chat; its code can be read aloud. "Seen by" is computed from links (Bob has seen it
   if any message of his reaches it), so the server cannot forge it, only withhold it.
 - **A fork marker.** Two messages from the same author at the same point are both shown and
-  marked "sent as two versions" (theorem (6)).
+  marked "sent as two versions" (a consequence of merge being union; §4).
+- **Import and confirmation.** A history imported from a file shows every message grey until a live
+  message from a member reaches it; then it turns normal (theorem (5); `RESTORE_PLAN.md`).
 
 Short codes are for glancing. A real comparison needs at least 80 bits (six or more words, or a
 QR of the full digest), so that a server cannot grind two histories into the same display.
@@ -452,9 +455,11 @@ Details, protobuf changes, file paths and the demo script are in `APP.md`.
 - **On receive**, after Signal has decrypted and verified the sender, the fork calls
   `libzrdt`'s `accept`. Accepted messages are stored as today; messages whose links do not
   resolve go to a pending buffer and produce a gap placeholder.
-- **Recovery by digest.** Two new message types, `ZrdtResendRequest` and `ZrdtResend`, let a
-  phone ask the group for a message it is missing, and let any member answer. The answer is
-  verified by hash, so it can come from anyone.
+- **Recovery by digest.** Three new message types, `ZrdtResendRequest`, `ZrdtResend` and
+  `ZrdtNotFound`. The request goes to the member whose message referenced the digest first, then to
+  the group; replies go back directly. The answer is verified by hash, so it can come from anyone.
+- **Whole-history restore** from any file or member, verified by the next live message:
+  `RESTORE_PLAN.md`.
 - **The villain.** Signal-Desktop ships a mock Signal server for its own integration tests. Its
   single delivery function is overridden in an `EvilServer` subclass (about fifty lines) that can
   drop, delay, reorder, replay, and partition envelopes per recipient. It still cannot read them.

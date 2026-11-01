@@ -26,8 +26,10 @@ history. With it, any peer will do.
 
 ## 2. What "correct" means, at each stage
 
-**Stage 0, on import.** `zrdt_decode` recomputes every digest; `zrdt_check` passes iff every link
-resolves (`Complete`) and every record is reachable from the dump's heads (`Tight`). This rules
+**Stage 0, on import.** `zrdt_open` recomputes every digest and rebuilds the store by accepting each
+record once its links are present. It succeeds iff every record can be accepted, which implies that
+every link resolves and every record is reachable from the dump's heads (`built_fetched`);
+`zrdt_salvage` returns the largest acceptable part and names the rest (`salvage_maximal`). This rules
 out a record removed from the middle, any altered record, and corruption, because each of those
 breaks a link of everything after it. It cannot rule out a **stale** dump (a prefix) or a dump
 whose **whole tail was replaced** by a consistent fake. Both are valid histories that end
@@ -57,10 +59,9 @@ and that is itself the warning.
 
 - **Export**: `zrdt_encode(store)` to a file (`<group>.zrdt`), plus the heads as a QR or word
   list if the receiver wants to compare before importing. Transport is the user's choice.
-- **Import**: `zrdt_decode` → `zrdt_check` → on `ok`, `zrdt_merge` into the current store
-  (`fetched_union` says the merge is a checked store from the union of head sets). On
-  `missing(d)` or `unreachable(d)`: refuse, show the digest, offer "import anyway as unconfirmed"
-  only if a product decision wants it (not in the demo).
+- **Import**: `zrdt_open` → on success, `zrdt_merge` into the current store (`fetched_union` says
+  the merge is a checked store from the union of head sets). On `unverifiable`: refuse, show the
+  digests, and offer "keep what verifies" (`zrdt_salvage`; the store it returns is checked).
 - **Provenance**: the host marks each record `live` (received through Signal from an
   authenticated sender, or sent by this device) or `imported`. Only `live` records' links are
   used as confirmation sources. This flag is host state, not part of the record, and the host is
@@ -74,16 +75,9 @@ and that is itself the warning.
 
 ## 4. Library and refinement additions
 
-C API (`PLAN.md` §3.3) gets one function, batched so the host does not loop:
-
-```c
-zrdt_digests zrdt_reach_set(const zrdt_store *, const zrdt_digest *from, size_t nfrom);
-/* digests of every record reachable from `from`, following links within the store */
-```
-
-`Impl.lean`: `reachSet : ChatStore → List Digest → List Digest` (worklist, `termination_by`).
-`Refine.lean`: `reachSet_iff : Inv c → (d ∈ c.reachSet hs ↔ ∃ r ∈ abs c, hash r = d ∧ Reach hashRecord (abs c) hs.toFinset d)`.
-Spec side: the definitions in the appendix.
+Already in `PLAN.md` §3.3 and §4 B after the `CheckedStore` rewrite: `zrdt_open` / `zrdt_salvage`
+(the checker is the constructor), `zrdt_reach_set` with `reachSet_iff`, and `confirmed_exact` with
+its lemmas in `Chat.lean`. Nothing further is needed from the library for this plan.
 
 ## 5. UI
 
@@ -133,17 +127,10 @@ real."
 - Phase 2 (signatures inside records) would make dump records self-authenticating on import.
   Not needed for this plan; confirmation by live links does the job without it.
 
-## 8. Amendments to the other documents (to apply when this plan is accepted)
+## 8. Amendments to the other documents
 
-- `PLAN.md` §3.3: add `zrdt_reach_set`. §4 phase A: add the appendix theorems and the
-  rewritten-tail countermodel to `Chat.lean`; gate `confirmed_exact`. §4 phase B: `reachSet`
-  in `Impl.lean`, `reachSet_iff` in `Refine.lean`. §4 phase D: import/export, provenance flag,
-  confirmed set, badges. §8: beat 5. §7: the trusted-host flag.
-- `APP.md` §5–§7: import path replaces "re-fetch from a member"; provenance flag on the message
-  model (`zrdtProvenance: 'live' | 'imported'`); confirmed set in the conversation state;
-  `demo/doctor.ts` gains the "replace tail with fakes" mode. §9: beat 5.
-- `PLAN_HUMANS.md` §4: theorem (7) `confirmed_exact` with the two supporting statements; §6:
-  the confirmed badge; §8: import from anyone.
+Applied on 2026-10-31 as part of the `CheckedStore` rewrite of `PLAN.md` (§2, §3.3–3.5, phases A, B,
+D, §8), `APP.md` (§3, §5–§7, §9) and `PLAN_HUMANS.md` (§4–§6, §8).
 
 ## Appendix: the theorems, as proved in scratch
 
@@ -200,16 +187,17 @@ theorem reach_implies_held {t : Store α H K} {hs : Finset H} {f : Record α H K
   · exact Or.inr (CollisionIn.of_mem hash (Finset.mem_insert_of_mem hr)
       (Finset.mem_insert_self f t) hrf he)
 
-/-- An honest member's latest message reaches every record that member holds. -/
-theorem latest_reaches_all_own {t : Store α H K} {hs : Finset H} (hf : Fetched hash t hs)
-    {m : Record α H K} (hm : m.links = hs) : ∀ r ∈ t, Reach hash t m.links (hash r) := by
-  rw [hm]; exact hf.2
 ```
 
-How the stages map to the statements: stage 0 is `check_iff_fetched` (phase B); stage 1 is
+`reach_implies_held` is kept as a lemma, not advertised. A third statement from the scratch file,
+`latest_reaches_all_own` (an honest member's latest message reaches every record that member holds),
+is `Tight` restated and is not added; the foreign marker uses `built_fetched`'s `Tight` half directly.
+
+How the stages map to the statements: stage 0 is `open_sound` / `open_complete` and
+`salvage_maximal` (phase B); stage 1 is
 `confirmed_exact` with `s` the importing device's store, `t` the member's store and `hs` the
 member's message's links (`hht` holds because the member accepted its own message; `hhs` is the
-"links resolve" case); stage 2 is `reach_implies_held` (a fake is not in `t`, so not reached) and
-`latest_reaches_all_own` (A's genuine records are reached). To add alongside: an `example` with
+"links resolve" case); stage 2 is `reach_implies_held` (a fake is not in `t`, so not reached) and the `Tight` half of
+`built_fetched` (A's genuine records are reached). To add alongside: an `example` with
 two concrete stores that share a prefix, differ after it, and both pass `check`, as the
 rewritten-tail counterpart of `withheld_tail_undetectable`.

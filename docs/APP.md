@@ -13,7 +13,8 @@ starts from goes in `PLAN.md`.
 
 Fork Signal Desktop. Add one proto field (`zrdt_links`) so every group message carries the
 sender's heads. On send, ask `libzrdt` for the heads; on receive, hand the message to
-`zrdt_accept`. Persist the store as a blob. Add five small UI pieces (code, gap row, compare screen,
+`zrdt_accept`. Persist the store as a blob and reload it with `zrdt_open`; every store handle the
+app holds is checked (`PLAN.md` §3.3). Add five small UI pieces (code, gap row, compare screen,
 rejected banner, checkpoint "seen by"). Run three desktops against a Signal server we control
 and make it misbehave on cue. Signal keeps doing confidentiality and sender authentication; zrdt
 adds completeness and consistency of the history.
@@ -88,17 +89,17 @@ change any TypeScript.
 
 A zrdt record is `(payload, links, author)`:
 
-- `payload` = canonical bytes of `(sender timestamp u64, text body, attachment digests)`. Built by
-  **zrdt's encoder on both ends** from those three inputs; the TypeScript never concatenates
-  bytes itself. Attachment digest = `AttachmentPointer.digest` (32 bytes; confirm field name on
-  checkout). Long bodies that Signal moves into `bodyAttachment` count as an attachment digest,
-  with `body` empty; this must be the same rule on send and receive.
+- `payload` = `(group id, sender timestamp u64, text body, attachment digests)`. The library builds
+  the record from these parts (`zrdt_record`, `PLAN.md` §3.3); the TypeScript never concatenates
+  bytes. The group id inside the hash binds a record to its chat, so a resend or import from another
+  group is rejected (`ZRDT_WRONG_CHAT`). Attachment digest = `AttachmentPointer.digest` (32 bytes;
+  confirm field name on checkout). Long bodies that Signal moves into `bodyAttachment` count as an
+  attachment digest, with `body` empty; this must be the same rule on send and receive.
 - `links` = the sender's heads at send time, from `zrdt_heads(store)` of that group's store.
 - `author` = sender ACI, 16 bytes (`authorAciBinary`-style; the ACI is what sealed sender
   authenticates).
 
-The digest (`zrdt_hash(payload, links[], author)`, SHA-256 over the canonical encoding) is
-**never sent**. Each receiver recomputes it. If the sender and receiver reconstruct different
+The digest (`zrdt_hash(&record)`, SHA-256 over the canonical encoding) is **never sent**. Each receiver recomputes it. If the sender and receiver reconstruct different
 bytes, the message simply fails to link for others; that is a bug to catch with the differential
 tests in `PLAN.md`, not a security event.
 
@@ -111,13 +112,15 @@ message DataMessage {
   repeated bytes zrdt_links = 200;          // 32-byte digests; sender's heads at send time
 }
 
-message ZrdtResendRequest { repeated bytes digests = 1; }
+message ZrdtResendRequest { repeated bytes digests = 1; bytes groupId = 2; }
 message ZrdtResend        { bytes record = 1; bytes dataMessage = 2; bytes authorAci = 3; }
+message ZrdtNotFound      { repeated bytes digests = 1; bytes groupId = 2; }
 
 message Content {
   // ... existing fields ...
   optional ZrdtResendRequest zrdtResendRequest = 200;
   optional ZrdtResend        zrdtResend        = 201;
+  optional ZrdtNotFound      zrdtNotFound      = 202;
 }
 ```
 
@@ -144,7 +147,7 @@ Touchpoints **(paths verified; function lines approximate, confirm on checkout)*
   `zrdtLinks` to the message-options type and set `proto.zrdtLinks`.
 - `ts/messages/send.preload.ts` (`send`, ~line 41): the outgoing job. Before building the proto,
   call `zrdt_heads(store)` for the conversation's store and pass them as `zrdtLinks`. After the
-  send resolves, build the record and `zrdt_accept(store, payload, links, author)`; it must return
+  send resolves, build the record and `zrdt_accept(store, &record)`; it must return
   `accepted` (our own links always resolve); persist. Desktop already stores the sent
   `dataMessage` bytes on the message model (~line 78) **(verified)**; keep them, `ZrdtResend` needs
   them.
@@ -172,12 +175,15 @@ Touchpoints **(paths verified)**:
 
 Per incoming group message:
 
-1. `r = zrdt_accept(store, payload, zrdtLinks, authorAci)`.
+1. Build `zrdt_record` from the group id, `timestamp`, `body`, attachment digests, `zrdtLinks` and
+   `authorAci`; `r = zrdt_accept(store, &record)`.
 2. `{accepted, digest}`: set `zrdtDigest`, `zrdtStatus: 'accepted'`; drain the pending buffer
    (retry every pending message whose links are now present); persist.
 3. `{missing, digests}`: set `zrdtStatus: 'pending'`, store the raw message in a per-conversation
    pending buffer (SQL `items` row or a small table), render the gap placeholder for each missing
-   digest, and send `ZrdtResendRequest{digests}` to the group. Model this on the existing
+   digest, and send `ZrdtResendRequest{digests}` as a 1:1 message to the member whose message
+   referenced them (that member held them: `heads_subset_digests`); if neither `ZrdtResend` nor
+   `ZrdtNotFound` arrives within the timeout, send it to the group. Model this on the existing
    `desktop.senderKey.retry` flow in `ts/util/handleRetry.preload.ts` (`onRetryRequest` ~129
    resends the stored sent proto; `RETRY_LIMIT`; dedupe by key) **(verified)**. Reuse its dedupe
    and backoff; one request per digest per minute.
@@ -185,8 +191,11 @@ Per incoming group message:
    the store. Set `zrdtStatus: 'collision'`, do not store it as a normal message, show it with the
    fork marker and the digest. With SHA-256 this never fires in practice; it exists so the
    library's behaviour matches the model's collision clause at the one place it is observable.
-4. On `ZrdtResendRequest` from a member: for each digest with `zrdt_has(store, digest)`, reply with
-   `ZrdtResend` (our stored `dataMessage` bytes, links, author). Reply only inside the group.
+3c. `wrongChat`: the record's group id is not this conversation's. Drop it; it came from another
+   group via a resend or an import.
+4. On `ZrdtResendRequest` from a member: reply 1:1 to the requester with `ZrdtResend` (our stored
+   `dataMessage` bytes, links, author) for each digest we hold (`zrdt_get`), and one `ZrdtNotFound`
+   for the digests we don't. Never broadcast a reply.
 5. On `ZrdtResend`: reconstruct, `zrdt_accept`; on `accepted`, process the inner `DataMessage`
    through the normal path with a flag that skips the link step; drain pending.
 
@@ -205,10 +214,11 @@ Store one blob per group conversation, keyed by conversation id, written with
   `ts/sql/Interface.std.ts` (see `DATABASE_SCHEMA.md`) if blobs get large. Confirm on checkout
   whether `items` values have a size limit in the IPC layer (`ts/sql/cleanDataForIpc.std.ts`).
 
-On startup, per group: `zrdt_decode(bytes)` then `zrdt_check(store)`. `ok` → proceed.
-`missing(d)` or `unreachable(d)` → mark the conversation rejected, show the banner naming `d`,
-and **do not merge** anything into it until the user chooses "re-fetch from a member" (which
-rebuilds the store from `ZrdtResend` replies) or "discard local copy".
+On startup, per group: `zrdt_open(bytes)`. `OK` → proceed. `UNVERIFIABLE` → mark the conversation
+rejected, show the banner naming the digests, and **do not merge** anything into it until the user
+chooses "keep what verifies" (`zrdt_salvage`; the store it returns is checked and the dropped
+digests are listed) or "import a copy from a member" (`RESTORE_PLAN.md`). There is no store handle
+that has not passed this check.
 
 Multi-device: each device (phone, desktop) holds its own store. Sync messages carry links like
 any other message, so a linked desktop accepts its primary's messages the same way.
@@ -225,6 +235,8 @@ Component paths **(verified to exist; which one owns what, confirm on checkout)*
 | Compare screen: our heads, their heads, outcome | new `ZrdtCompareModal.dom.tsx` modelled on `ts/components/SafetyNumberModal.dom.tsx`; button in `ConversationHeader.dom.tsx`; state in `ts/state/ducks/globalModals.preload.ts` |
 | Checkpoint message + "seen by" | render in `TimelineMessage.dom.tsx` when body is exactly `checkpoint`; "seen by" = members whose latest accepted record satisfies `zrdt_reaches(store, latest, checkpointDigest)` |
 | Fork marker | in `TimelineMessage.dom.tsx`: two accepted records with equal author and equal links but different digests → small "sent as two versions" label on both |
+| Import / Export history (`RESTORE_PLAN.md`) | conversation menu (dev menu for the demo): export = `zrdt_encode` to a file; import = `zrdt_open` → `zrdt_merge` |
+| Confirmed badge, unconfirmed banner, foreign marker | `zrdtProvenance: 'live' \| 'imported'` on the message model; confirmed set = `zrdt_reach_set` over live records' links, kept in conversation state; grey until confirmed |
 
 Compare screen logic, given our store `S`, our heads `H`, their heads `H'` (pasted, scanned, or
 received in a `ZrdtResend`-style exchange):
@@ -324,9 +336,13 @@ Alice: "meet at 9 at the trailhead". Nobody replies. Expected: Carol's screen sh
 to you". Villain off; Carol's resend request succeeds; message appears.
 
 **Beat 4, doctored restore (40 s).** From the dev menu on Carol: "Export zrdt store". Edit the
-blob with the provided `demo/doctor.ts` (removes one record). "Import zrdt store". Expected:
-red banner "This copy of the chat was altered: message ·9ac1… is missing", conversation
-read-only until "Re-fetch from a member", which rebuilds and clears the banner.
+blob with the provided `demo/doctor.ts` (removes one record). "Import zrdt store": `zrdt_open`
+fails. Expected: red banner "This copy of the chat was altered: message ·9ac1… is missing",
+conversation read-only until "Keep what verifies" (`zrdt_salvage`) or an import of Bob's copy.
+
+**Beat 5, restore from anyone (60 s).** `RESTORE_PLAN.md` §6: Dave imports Bob's exported file,
+everything grey; Alice sends one message and the history flips to confirmed; the doctored variant
+leaves the fake tail grey and, after Bob writes, marked "not confirmed by Bob".
 
 Close with the one line: Signal already stopped the server from reading or forging; what you
 just saw is it being caught dropping, withholding, and rewriting.
