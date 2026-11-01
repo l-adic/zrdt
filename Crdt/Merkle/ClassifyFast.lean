@@ -260,4 +260,261 @@ theorem mem_reachersOf (c : CheckedStore) {d x : Digest} :
       have hrv : hashRecord r ∈ v := (linkedBy_get c hv).mpr ⟨r, hr, hl'⟩
       exact WalkReach.trans (.step (.start List.mem_cons_self) hv hrv) ih
 
+/-! ## Records that reach every one of a list -/
+
+/-- One step of `reachersOfAll`. -/
+def allStep (back : Std.ExtTreeMap Digest (List Digest) compare) (acc : Option DigestSet)
+    (m : Digest) : Option DigestSet :=
+  some (match acc with
+    | none => reachersOf back m
+    | some s => s.filter ((reachersOf back m).contains ·))
+
+example : (allStep ∅ none (Examples.dig 1)).isSome = true := rfl
+
+/-- `reachersOfAll` is the fold of `allStep`. -/
+theorem reachersOfAll_eq (back : Std.ExtTreeMap Digest (List Digest) compare)
+    (ns : Array Digest) : reachersOfAll back ns = ns.toList.foldl (allStep back) none := by
+  rw [reachersOfAll, Array.foldl_toList]
+  rfl
+
+private theorem foldl_allStep (back : Std.ExtTreeMap Digest (List Digest) compare)
+    (ms : List Digest) (acc : Option DigestSet) :
+    (ms.foldl (allStep back) acc = none ↔ acc = none ∧ ms = []) ∧
+    ∀ s, ms.foldl (allStep back) acc = some s → ∀ x, x ∈ s ↔
+      (∀ s0, acc = some s0 → x ∈ s0) ∧ ∀ m ∈ ms, x ∈ reachersOf back m := by
+  induction ms generalizing acc with
+  | nil =>
+    refine ⟨by simp, fun s h x => ?_⟩
+    simp only [List.foldl_nil] at h
+    subst h
+    simp
+  | cons m ms ih =>
+    obtain ⟨-, ih2⟩ := ih (allStep back acc m)
+    simp only [List.foldl_cons]
+    refine ⟨?_, fun s h x => ?_⟩
+    · constructor
+      · intro h
+        cases hs : List.foldl (allStep back) (allStep back acc m) ms with
+        | none =>
+          have := (ih (allStep back acc m)).1.mp hs
+          simp [allStep] at this
+        | some _ => rw [hs] at h; cases h
+      · rintro ⟨-, h⟩; cases h
+    · rw [ih2 s h x]
+      have hstep : ∀ s1, allStep back acc m = some s1 → (x ∈ s1 ↔
+          (∀ s0, acc = some s0 → x ∈ s0) ∧ x ∈ reachersOf back m) := by
+        intro s1 hs1
+        unfold allStep at hs1
+        cases acc with
+        | none =>
+          cases hs1
+          simp
+        | some s0 =>
+          cases hs1
+          rw [Std.ExtTreeSet.mem_filter]
+          constructor
+          · rintro ⟨hx, hc⟩
+            rw [Std.ExtTreeSet.get_eq] at hc
+            exact ⟨fun s0' he => by cases he; exact hx,
+              Std.ExtTreeSet.contains_iff_mem.mp hc⟩
+          · rintro ⟨hx, hc⟩
+            have hx' := hx s0 rfl
+            exact ⟨hx', by rw [Std.ExtTreeSet.get_eq]; exact Std.ExtTreeSet.contains_iff_mem.mpr hc⟩
+      constructor
+      · rintro ⟨h1, h2⟩
+        have := (hstep _ rfl).mp (h1 _ rfl)
+        exact ⟨this.1, fun m' hm' => by
+          rcases List.mem_cons.mp hm' with rfl | hm'
+          · exact this.2
+          · exact h2 m' hm'⟩
+      · rintro ⟨h1, h2⟩
+        refine ⟨fun s1 hs1 => (hstep s1 hs1).mpr ⟨h1, h2 m List.mem_cons_self⟩,
+          fun m' hm' => h2 m' (List.mem_cons_of_mem _ hm')⟩
+
+/-- **`reachersOfAll`**: `none` exactly for an empty list; otherwise the records that are in
+`reachersOf back m` for every `m` of the list. -/
+theorem reachersOfAll_spec (back : Std.ExtTreeMap Digest (List Digest) compare)
+    (ns : Array Digest) :
+    (reachersOfAll back ns = none ↔ ns = #[]) ∧
+    ∀ s, reachersOfAll back ns = some s → ∀ x, x ∈ s ↔ ∀ m ∈ ns, x ∈ reachersOf back m := by
+  rw [reachersOfAll_eq]
+  obtain ⟨h1, h2⟩ := foldl_allStep back ns.toList none
+  refine ⟨by rw [h1]; simp, fun s h x => ?_⟩
+  rw [h2 s h x]
+  simp
+
+/-! ## The author views -/
+
+/-- Inserting the digests of a list into a set. -/
+theorem mem_foldl_insert (dis : List Digest) (ds : DigestSet) (e : Digest) :
+    e ∈ dis.foldl (fun s x => s.insert x) ds ↔ e ∈ ds ∨ e ∈ dis := by
+  induction dis generalizing ds with
+  | nil => simp
+  | cons x dis ih =>
+    rw [List.foldl_cons, ih, Std.ExtTreeSet.mem_insert, Digest.compare_eq_iff, List.mem_cons]
+    tauto
+
+/-- One step of the `byAuthor` fold in `authorViews`. -/
+def authorStep (c : CheckedStore) (m : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare)
+    (p : Digest × Array Digest) : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare :=
+  match c.get p.1 with
+  | some r =>
+    let (ls, ds) := m.getD r.author (#[], ∅)
+    m.insert r.author (ls.push p.1, p.2.foldl (fun s x => s.insert x) ds)
+  | none => m
+
+/-- The view of one author, from its live digests `ls` and disowned digests `ds`. -/
+def viewOf (c : CheckedStore) (p : Array Digest × DigestSet) : AuthorView :=
+  let below := c.reachSet (p.1.flatMap fun l => ((c.get l).map (·.links)).getD #[])
+  let newest := p.1.filter (!below.contains ·)
+  ⟨c.reachSet p.1, p.2, reachersOfAll (linkedBy c) newest⟩
+
+/-- `authorViews` is `viewOf` on the fold of `authorStep`. -/
+theorem authorViews_eq (c : CheckedStore) (live : Std.ExtTreeMap Digest (Array Digest) compare) :
+    authorViews c live = (live.toList.foldl (authorStep c) ∅).map fun _ p => viewOf c p := by
+  rw [authorViews, Std.ExtTreeMap.foldl_eq_foldl_toList]
+  rfl
+
+/-- What the `byAuthor` entry of one author holds: no entry when `L` holds for no digest;
+otherwise the live digests are exactly those where `L` holds (there is one), and the disowned
+digests exactly those where `E` holds. -/
+def EntryIs (o : Option (Array Digest × DigestSet)) (L E : Digest → Prop) : Prop :=
+  match o with
+  | none => (∀ l, ¬ L l) ∧ ∀ e, ¬ E e
+  | some p => (∀ l, l ∈ p.1 ↔ L l) ∧ (∀ e, e ∈ p.2 ↔ E e) ∧ ∃ l, L l
+
+example : EntryIs none (fun _ => False) (fun _ => False) := ⟨fun _ h => h, fun _ h => h⟩
+
+/-- `EntryIs` only depends on what `L` and `E` hold for. -/
+theorem EntryIs.congr {o : Option (Array Digest × DigestSet)} {L E L' E' : Digest → Prop}
+    (h : EntryIs o L E) (hL : ∀ l, L l ↔ L' l) (hE : ∀ e, E e ↔ E' e) : EntryIs o L' E' := by
+  cases o with
+  | none => exact ⟨fun l => by rw [← hL]; exact h.1 l, fun e => by rw [← hE]; exact h.2 e⟩
+  | some p =>
+    obtain ⟨h1, h2, l, hl⟩ := h
+    exact ⟨fun l => (h1 l).trans (hL l), fun e => (h2 e).trans (hE e), l, (hL l).mp hl⟩
+
+/-- One `authorStep`, for author `a`. -/
+theorem EntryIs.step (c : CheckedStore) {m : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare}
+    {a : Aci} {L E : Digest → Prop} (h : EntryIs m[a]? L E) (p : Digest × Array Digest) :
+    EntryIs (authorStep c m p)[a]?
+      (fun l => L l ∨ (l = p.1 ∧ ∃ y, c.get p.1 = some y ∧ y.author = a))
+      (fun e => E e ∨ ((∃ y, c.get p.1 = some y ∧ y.author = a) ∧ e ∈ p.2)) := by
+  unfold authorStep
+  cases hg : c.get p.1 with
+  | none => exact h.congr (fun l => by simp) (fun e => by simp)
+  | some y =>
+    dsimp only
+    by_cases hya : y.author = a
+    · subst hya
+      rw [Std.ExtTreeMap.getD_eq_getD_getElem?]
+      cases hm : m[y.author]? with
+      | none =>
+        rw [hm] at h
+        simp only [Option.getD_none, Std.ExtTreeMap.getElem?_insert_self]
+        refine ⟨fun l => ?_, fun e => ?_, p.1, Or.inr ⟨rfl, y, rfl, rfl⟩⟩
+        · simp only [Array.push_empty, Array.mem_singleton]
+          have := h.1 l
+          constructor
+          · rintro rfl; exact Or.inr ⟨rfl, y, rfl, rfl⟩
+          · rintro (h' | ⟨rfl, -⟩)
+            · exact absurd h' this
+            · rfl
+        · rw [← Array.foldl_toList, mem_foldl_insert, Array.mem_toList_iff]
+          have := h.2 e
+          simp only [Std.ExtTreeSet.not_mem_empty, false_or]
+          constructor
+          · intro he; exact Or.inr ⟨⟨y, rfl, rfl⟩, he⟩
+          · rintro (h' | ⟨-, he⟩)
+            · exact absurd h' this
+            · exact he
+      | some q =>
+        rw [hm] at h
+        obtain ⟨h1, h2, l0, hl0⟩ := h
+        simp only [Option.getD_some, Std.ExtTreeMap.getElem?_insert_self]
+        refine ⟨fun l => ?_, fun e => ?_, l0, Or.inl hl0⟩
+        · simp only [Array.mem_push, h1]
+          constructor
+          · rintro (h' | rfl)
+            · exact Or.inl h'
+            · exact Or.inr ⟨rfl, y, rfl, rfl⟩
+          · rintro (h' | ⟨rfl, -⟩)
+            · exact Or.inl h'
+            · exact Or.inr rfl
+        · rw [← Array.foldl_toList, mem_foldl_insert, Array.mem_toList_iff, h2]
+          constructor
+          · rintro (h' | h')
+            · exact Or.inl h'
+            · exact Or.inr ⟨⟨y, rfl, rfl⟩, h'⟩
+          · rintro (h' | ⟨-, h'⟩)
+            · exact Or.inl h'
+            · exact Or.inr h'
+    · have hne : compare y.author a ≠ .eq := fun h => hya (Std.LawfulEqCmp.compare_eq_iff_eq.mp h)
+      simp only [Std.ExtTreeMap.getElem?_insert, hne, ↓reduceIte]
+      refine h.congr (fun l => ?_) (fun e => ?_)
+      · constructor
+        · exact Or.inl
+        · rintro (h' | ⟨-, y', hy', ha⟩)
+          · exact h'
+          · cases hy'; exact absurd ha hya
+      · constructor
+        · exact Or.inl
+        · rintro (h' | ⟨⟨y', hy', ha⟩, -⟩)
+          · exact h'
+          · cases hy'; exact absurd ha hya
+
+/-- The whole `byAuthor` fold, for author `a`. -/
+theorem EntryIs.foldl (c : CheckedStore) (ps : List (Digest × Array Digest))
+    {m : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare} {a : Aci} {L E : Digest → Prop}
+    (h : EntryIs m[a]? L E) :
+    EntryIs (ps.foldl (authorStep c) m)[a]?
+      (fun l => L l ∨ ∃ dis, (l, dis) ∈ ps ∧ ∃ y, c.get l = some y ∧ y.author = a)
+      (fun e => E e ∨ ∃ l dis, (l, dis) ∈ ps ∧ (∃ y, c.get l = some y ∧ y.author = a) ∧
+        e ∈ dis) := by
+  induction ps generalizing m L E with
+  | nil => exact h.congr (fun l => by simp) (fun e => by simp)
+  | cons p ps ih =>
+    rw [List.foldl_cons]
+    refine (ih (h.step c p)).congr (fun l => ?_) (fun e => ?_)
+    · constructor
+      · rintro ((h' | ⟨rfl, hq⟩) | ⟨dis, hd, hq⟩)
+        · exact Or.inl h'
+        · exact Or.inr ⟨p.2, List.mem_cons_self, hq⟩
+        · exact Or.inr ⟨dis, List.mem_cons_of_mem _ hd, hq⟩
+      · rintro (h' | ⟨dis, hd, hq⟩)
+        · exact Or.inl (Or.inl h')
+        · rcases List.mem_cons.mp hd with he | hd
+          · subst he; exact Or.inl (Or.inr ⟨rfl, hq⟩)
+          · exact Or.inr ⟨dis, hd, hq⟩
+    · constructor
+      · rintro ((h' | ⟨hq, he⟩) | ⟨l, dis, hd, hq, he⟩)
+        · exact Or.inl h'
+        · exact Or.inr ⟨p.1, p.2, List.mem_cons_self, hq, he⟩
+        · exact Or.inr ⟨l, dis, List.mem_cons_of_mem _ hd, hq, he⟩
+      · rintro (h' | ⟨l, dis, hd, hq, he⟩)
+        · exact Or.inl (Or.inl h')
+        · rcases List.mem_cons.mp hd with hp | hd
+          · subst hp; exact Or.inl (Or.inr ⟨hq, he⟩)
+          · exact Or.inr ⟨l, dis, hd, hq, he⟩
+
+/-- **The `byAuthor` entry of author `a`**: none when `a` has no stored live record; otherwise
+exactly `a`'s stored live digests (at least one), and the union of their disown lists. -/
+theorem byAuthor_entry (c : CheckedStore) (live : Std.ExtTreeMap Digest (Array Digest) compare)
+    (a : Aci) :
+    EntryIs (live.toList.foldl (authorStep c) ∅)[a]?
+      (fun l => ∃ dis y, live[l]? = some dis ∧ c.get l = some y ∧ y.author = a)
+      (fun e => ∃ l dis y, live[l]? = some dis ∧ c.get l = some y ∧ y.author = a ∧ e ∈ dis) := by
+  have h0 : EntryIs (∅ : Std.ExtTreeMap Aci (Array Digest × DigestSet) compare)[a]?
+      (fun _ => False) (fun _ => False) := by
+    rw [Std.ExtTreeMap.getElem?_empty]; exact ⟨fun _ h => h, fun _ h => h⟩
+  refine (EntryIs.foldl c live.toList h0).congr (fun l => ?_) (fun e => ?_)
+  · simp only [false_or, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some]
+    constructor
+    · rintro ⟨dis, hd, y, hy, ha⟩; exact ⟨dis, y, hd, hy, ha⟩
+    · rintro ⟨dis, y, hd, hy, ha⟩; exact ⟨dis, hd, y, hy, ha⟩
+  · simp only [false_or, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some]
+    constructor
+    · rintro ⟨l, dis, hd, ⟨y, hy, ha⟩, he⟩; exact ⟨l, dis, y, hd, hy, ha, he⟩
+    · rintro ⟨l, dis, y, hd, hy, ha, he⟩; exact ⟨l, dis, hd, ⟨y, hy, ha⟩, he⟩
+
 end Zrdt
