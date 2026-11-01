@@ -22,6 +22,10 @@ through `abs` and `specOf`. They are assembled from:
   (`subset_of_takesIn`, `buildRetry_eq_of_takesIn`);
 - the bridge (`Bridge.lean`, `Refine.lean`): `abs`, `specOf`, `toSpec` injective, `hashSpec`.
 
+`salvage_spec` needs no collision hypothesis: a successful salvage had none
+(`salvageRecords_noCollision`), and the statement says so. This is stronger than the PLAN form
+("(same hypotheses on u)").
+
 PROPOSAL for `Api.lean` (lane P3): `Api.lean` can state these two by name, or import this file.
 -/
 
@@ -108,19 +112,30 @@ example (c : CheckedStore) : ∃ u, decodeBlob c.encode = some (c.group, u) ∧ 
     (∀ r ∈ u, r.group = c.group) ∧ abs c = specOf u ∧ c.group = c.group :=
   open_iff.mp (encode_reopens c)
 
-/-- **`salvage`, over the model.** If `salvage g b` loads `s`, and the records `u` of the blob
-have no collision, then the store holds exactly what the model's salvage `buildRetry` keeps, it
-is of chat `g`, and `dropped` is sorted and holds exactly the digests of the other records. -/
+/-- No collision among the records means no collision in the model. -/
+theorem not_collisionIn_specOf {u : Array Rec} (h : NoCollision u) :
+    ¬ CollisionIn hashSpec (specOf u) := by
+  rintro ⟨X, hX, Y, hY, hne, hh⟩
+  obtain ⟨x, hx, rfl⟩ := mem_specOf.mp hX
+  obtain ⟨y, hy, rfl⟩ := mem_specOf.mp hY
+  simp only [hashSpec_toSpec] at hh
+  exact hne (congrArg toSpec (h x hx y hy hh))
+
+/-- **`salvage`, over the model.** If `salvage g b` loads `s`, and `b` holds the records `u`, then
+the records have no collision, the store holds exactly what the model's salvage `buildRetry`
+keeps, it is of chat `g`, and `dropped` is sorted and holds exactly the digests of the other
+records. -/
 theorem salvage_spec {g : GroupId} {b : ByteArray} {s : Salvaged} {u : Array Rec}
-    (h : salvage g b = .ok s) (hu : decodeBlob b = some (g, u))
-    (hcol : ¬ CollisionIn hashSpec (specOf u)) :
-    abs s.store = buildRetry hashSpec (specOf u) ∧ s.store.group = g ∧
+    (h : salvage g b = .ok s) (hu : decodeBlob b = some (g, u)) :
+    ¬ CollisionIn hashSpec (specOf u) ∧
+      abs s.store = buildRetry hashSpec (specOf u) ∧ s.store.group = g ∧
       (∀ d, d ∈ s.dropped ↔ d ∈ digests hashSpec (specOf u \ buildRetry hashSpec (specOf u))) ∧
       StrictlySorted s.dropped := by
   obtain ⟨u', hu', hs⟩ := salvage_eq_ok_iff.mp h
   rw [hu] at hu'
   simp only [Option.some.injEq, Prod.mk.injEq, true_and] at hu'
   subst hu'
+  have hcol := salvageRecords_noCollision hs
   obtain ⟨_, _, hsg, honly, hclosed, hdrop, hsorted⟩ := salvageRecords_ok hs
   have habs : abs s.store = buildRetry hashSpec (specOf u) := by
     symm
@@ -129,8 +144,8 @@ theorem salvage_spec {g : GroupId} {b : ByteArray} {s : Salvaged} {u : Array Rec
       obtain ⟨r, rfl, hr⟩ := s.store.built.exists_of_mem_abs hx
       exact toSpec_mem_specOf.mpr (honly r (mem_records_iff.mpr hr))
     · exact s.store.acceptBuilt
-    · exact takesIn_of_closed (hclosed (noCollision_of_specOf hcol))
-  refine ⟨habs, hsg, fun d => ?_, hsorted⟩
+    · exact takesIn_of_closed (hclosed hcol)
+  refine ⟨not_collisionIn_specOf hcol, habs, hsg, fun d => ?_, hsorted⟩
   rw [hdrop, ← habs, mem_digests]
   constructor
   · rintro ⟨r, hr, hn, rfl⟩
@@ -148,9 +163,7 @@ example (c : CheckedStore) : ∃ s, salvage c.group c.encode = .ok s ∧
   have hdec := decodeBlob_encodeBlob c.group c.records c.wellSized_records
   obtain ⟨s, hs⟩ := salvage_ok_of hdec c.wellSized_records (fun _ h => group_of_mem_records h)
     c.noCollision_records
-  have habs : abs c = specOf c.records := abs_eq_specOf_iff.mpr fun _ => Iff.rfl
-  have hnc : ¬ CollisionIn hashSpec (abs c) := c.built.no_collision
-  exact ⟨s, hs, (salvage_spec hs hdec (habs ▸ hnc)).1⟩
+  exact ⟨s, hs, (salvage_spec hs hdec).2.1⟩
 
 end CheckedStore
 
