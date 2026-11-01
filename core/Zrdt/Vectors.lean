@@ -3,26 +3,28 @@ import Zrdt.Proto
 /-!
 # Test vectors (docs/PLAN.md §4 C, rungs 6 and 7)
 
-`main` prints `vectors/vectors.json` (`make vectors`). The host's TypeScript stub and `zrdtd` are
-both run over it and must give these bytes. `zrdtd` does not import this file, so the two `main`s
-never meet.
+`Zrdtd/Vectors.lean` prints `vectors/vectors.json` from this file (`make vectors`). The host's
+TypeScript stub and `zrdtd` are both run over it and must give these bytes. This file has no
+`main`, so the library `Zrdt` imports it and a plain `lake build` runs the `#guard`s below.
 
 The file holds:
 
 - `sha256`: the NIST examples (FIPS 180-4) and inputs around the padding boundaries;
 - `records`: records as the host gives them (`linksGiven`, any order, repeats allowed), their
   canonical links, their encoding and their digest;
-- `recordDecode`, `blobDecode`: bytes, and whether the strict decoders accept them;
+- `recordDecode`, `blobDecode`: bytes, and whether the strict decoders accept them (for blobs,
+  also whether the count field alone makes them `TOO_LARGE`);
 - `blobs`: store blobs;
-- `commit`: `DataMessage` bytes, the bytes the commitment covers, and the commitment (`null`
-  where the message is malformed), including messages with fields 15 and 200;
+- `commit`: `DataMessage` bytes, the bytes the commitment covers, the commitment and the opening
+  (`null` where the message is malformed), including messages with fields 15 and 200;
 - `replies`: reply bytes that no request can produce here (`COLLISION` needs two records with the
   same SHA-256);
 - `sessions`: request and reply payloads. Run each session on a fresh `zrdtd`, in order: send
   `length (u32) ‖ request`, read `length (u32) ‖ reply`, and compare the reply. Every op and every
   reply of every op appears, except `COLLISION`. The `fuzz` session holds unreadable requests and
   counts no input could hold. A step marked `buildDependent` (`VERSION`) contains the build text:
-  another build of `zrdtd` gives other bytes there.
+  another build of `zrdtd` gives other bytes there. The file's `build` is the text of the
+  `zrdtd` built from the same sources.
 
 Each step states the status it must get; the `#guard`s below check them, and pin some reply
 bodies, when this file is built.
@@ -156,7 +158,8 @@ def blobCases : Array (String × GroupId × Array Rec) :=
 /-- The `blobs` section. -/
 def blobsJson : Json :=
   .arr <| blobCases.map fun (name, g, rs) =>
-    .obj #[("name", .str name), ("group", hex g.bytes), ("records", .arr (rs.map (hex <| encode ·))),
+    .obj #[("name", .str name), ("group", hex g.bytes),
+      ("records", .arr (rs.map (hex <| encode ·))),
       ("blob", hex (encodeBlob g rs))]
 
 /-- A blob header that claims 2^32 - 1 records, with nothing after it. -/
@@ -169,19 +172,31 @@ def blobDecodeCases : Array (String × ByteArray) :=
     ("count says 2", (encodeBlob group #[first]).set! 41 2),
     ("len says 90", (encodeBlob group #[first]).set! 45 90),
     ("wrong tag", (encodeBlob group #[first]).set! 0 0),
-    ("fuzz: count 2^32 - 1 and nothing after it", hugeCountBlob)]
+    ("records out of digest order", encodeBlob group #[reply, first]),
+    ("a record twice", encodeBlob group #[first, first]),
+    ("fuzz: count 2^32 - 1 and nothing after it", hugeCountBlob),
+    ("count 2^24 and nothing after it: too large", blobTag ++ group.bytes ++ u32be (2^24)),
+    ("count 2^24 - 1 and nothing after it: not too large, malformed",
+      blobTag ++ group.bytes ++ u32be (2^24 - 1))]
 
-/-- The `blobDecode` section. -/
+/-- The `blobDecode` section. `tooLarge`: the count field alone makes the blob `TOO_LARGE`
+(`blobTooLarge`); such a blob never decodes. -/
 def blobDecodeJson : Json :=
   .arr <| blobDecodeCases.map fun (name, b) =>
-    .obj #[("name", .str name), ("bytes", hex b), ("decodes", .bool (decodeBlob b).isSome)]
+    .obj #[("name", .str name), ("bytes", hex b), ("decodes", .bool (decodeBlob b).isSome),
+      ("tooLarge", .bool (blobTooLarge b))]
+
+#guard (blobDecodeCases.map fun (_, b) => ((decodeBlob b).isSome, blobTooLarge b)) ==
+  #[(true, false), (false, false), (false, false), (false, false), (false, false),
+    (true, false), (true, false), (false, true), (false, true), (false, false)]
 
 /-! ## Commitments -/
 
 /-- Example `DataMessage` bytes (fields from `Zrdt.Commit`'s examples). -/
 def commitCases : Array (String × ByteArray) :=
   #[("body, groupV2 (15), timestamp, zrdt (200), unknown field 99", dataMessage),
-    ("the same without fields 15 and 200 (the opening)", bodyField ++ timestampField ++ unknownField),
+    ("the same without fields 15 and 200 (the opening)",
+      bodyField ++ timestampField ++ unknownField),
     ("empty", .empty),
     ("field 15 twice, around the body", groupV2Field ++ bodyField ++ groupV2Field),
     ("field 15 with a longer form of its key (fa 00)", bytesOf [0xfa, 0x00, 0] ++ bodyField),
@@ -198,7 +213,8 @@ def commitJson : Json :=
     .obj #[("name", .str name), ("group", hex group.bytes), ("author", hex alice.bytes),
       ("nonce", hex nonce.bytes), ("dataMessage", hex m),
       ("committedBytes", ((committedBytes m).map hex).getD .null),
-      ("commit", ((commit group alice nonce m).map (hex ·.bytes)).getD .null)]
+      ("commit", ((commit group alice nonce m).map (hex ·.bytes)).getD .null),
+      ("opening", ((commitWithOpening group alice nonce m).map (hex ·.2)).getD .null)]
 
 -- The opening has the same commitment as the full message; malformed messages have none.
 #guard (commitCases.map fun (_, m) => (commit group alice nonce m).isSome) ==
@@ -230,6 +246,21 @@ def raw (name : String) (b : ByteArray) (expect : Code) : Step := { name, reques
 /-- Digests, sorted. -/
 def sorted (ds : Array Digest) : Array Digest := ds.qsort (compare · · == .lt)
 
+/-- Alice's message `dataMessage` (`Zrdt.Commit`): its commitment and its opening. -/
+def m1Opened : Digest × ByteArray :=
+  (commitWithOpening group alice nonce dataMessage).getD (Digest.zero, .empty)
+
+/-- The `COMMIT` reply for `dataMessage`. -/
+def m1Committed : Reply := .committed m1Opened.1 m1Opened.2
+
+/-- A record of Alice's whose commit is the real commitment of `dataMessage`. It links `a1`. -/
+def m1 : Rec := Rec.make group m1Opened.1 #[hashRecord a1] alice
+
+/-- The same commit and links in Bob's name: Alice's opening does not belong to it. -/
+def m1AsBob : Rec := Rec.make group m1Opened.1 #[hashRecord a1] bob
+
+#guard openingMatches group alice m1.commit m1Opened.2 && m1Opened.2.size == 32 + 20
+
 /-- The facts given to `CLASSIFY` in the tour: Alice's `a3` and Bob's `b2` live (Bob disowns
 the fake `f1`), `c2` relayed by Bob, `f1` imported, and a live digest that is not stored. -/
 def tourFacts : Array Fact :=
@@ -258,16 +289,17 @@ def tour : Array Step := #[
   ask "HASH with links 03 01 03 02: sorted, repeat dropped (= reply)"
     (.hash ⟨group, dig 0xc1, #[dig 3, dig 1, dig 3, dig 2], alice⟩) .ok
     (some (.digest (hashRecord reply))),
-  ask "ACCEPT a1" (.accept "camping" (.ofRec a1)) .ok (some (.accept (.accepted (hashRecord a1)))),
+  ask "ACCEPT a1: its digest and encoding" (.accept "camping" (.ofRec a1)) .ok
+    (some (.accept a1 (.accepted (hashRecord a1)))),
   ask "ACCEPT a1 again: accepted, nothing changes" (.accept "camping" (.ofRec a1)) .ok
-    (some (.accept (.accepted (hashRecord a1)))),
+    (some (.accept a1 (.accepted (hashRecord a1)))),
   ask "ACCEPT a2 before b1 and c1: missing both, sorted" (.accept "camping" (.ofRec a2))
-    .missing (some (.accept (.missing (sorted #[hashRecord b1, hashRecord c1])))),
+    .missing (some (.accept a2 (.missing (sorted #[hashRecord b1, hashRecord c1])))),
   ask "HEADS: a1" (.heads "camping") .ok (some (.digests #[hashRecord a1])),
   ask "ACCEPT b1" (.accept "camping" (.ofRec b1)) .ok,
-  ask "ACCEPT c1, its link given twice" (.accept "camping"
+  ask "ACCEPT c1, its link given twice: the canonical encoding comes back" (.accept "camping"
     ⟨group, dig 0xc1, #[hashRecord a1, hashRecord a1], carol⟩) .ok
-    (some (.accept (.accepted (hashRecord c1)))),
+    (some (.accept c1 (.accepted (hashRecord c1)))),
   ask "HEADS: b1 and c1, sorted" (.heads "camping") .ok
     (some (.digests (sorted #[hashRecord b1, hashRecord c1]))),
   ask "ACCEPT a2" (.accept "camping" (.ofRec a2)) .ok,
@@ -283,12 +315,11 @@ def tour : Array Step := #[
   ask "REACH_SET from a2 and a digest that is not stored" (.reachSet "camping"
     #[dig 9, hashRecord a2]) .ok
     (some (.digests (sorted #[hashRecord a1, hashRecord b1, hashRecord c1, hashRecord a2]))),
-  ask "COMMIT a DataMessage with fields 15 and 200"
-    (.commit group alice nonce dataMessage) .ok
-    ((commit group alice nonce dataMessage).map Reply.digest),
-  ask "COMMIT the opening (fields 15 and 200 already removed): the same commitment"
+  ask "COMMIT a DataMessage with fields 15 and 200: the commitment and the opening"
+    (.commit group alice nonce dataMessage) .ok (some m1Committed),
+  ask "COMMIT the opening's bytes (fields 15 and 200 already removed): the same reply"
     (.commit group alice nonce (bodyField ++ timestampField ++ unknownField)) .ok
-    ((commit group alice nonce dataMessage).map Reply.digest),
+    (some m1Committed),
   ask "COMMIT a malformed DataMessage" (.commit group alice nonce (bodyField ++ bytesOf [0x0b]))
     .malformed,
   ask "ENCODE camping (a1 b1 c1 a2)" (.encode "camping") .ok (some (.blob all4.encode)),
@@ -306,6 +337,15 @@ def tour : Array Step := #[
   ask "OPEN list from records in any order" (.open "list" group
     (.records #[encode a2, encode c1, encode b1, encode a1])) .ok,
   ask "ENCODE list: the same blob as camping had" (.encode "list") .ok (some (.blob all4.encode)),
+  ask "OPEN rev from a blob with the records in reverse digest order" (.open "rev" group
+    (.blob (encodeBlob group all4.records.reverse))) .ok,
+  ask "ENCODE rev: the records sorted by digest" (.encode "rev") .ok (some (.blob all4.encode)),
+  ask "OPEN rep from a blob that holds b1 twice" (.open "rep" group
+    (.blob (encodeBlob group #[a1, b1, c1, b1, a2]))) .ok,
+  ask "ENCODE rep: b1 counts once" (.encode "rep") .ok (some (.blob all4.encode)),
+  ask "OPEN rep2 from a record list that holds a1 twice" (.open "rep2" group
+    (.records #[encode a2, encode a1, encode c1, encode b1, encode a1])) .ok,
+  ask "ENCODE rep2: a1 counts once" (.encode "rep2") .ok (some (.blob all4.encode)),
   ask "OPEN a doctored blob (b1 cut out): unverifiable a2, missing b1"
     (.open "bad" group (.blob (encodeBlob group #[a1, c1, a2]))) .unverifiable
     (some (.opened (.error (.unverifiable #[hashRecord a2] #[hashRecord b1])))),
@@ -321,6 +361,9 @@ def tour : Array Step := #[
     (some (.salvaged (.ok (#[hashRecord a2], #[hashRecord b1])))),
   ask "HEADS kept: c1" (.heads "kept") .ok (some (.digests #[hashRecord c1])),
   ask "SALVAGE kept again: already open" (.salvage "kept" group (.blob all4.encode)) .chatOpen,
+  ask "SALVAGE the doctored blob with a2 twice: a2 dropped once" (.salvage "kept3" group
+    (.blob (encodeBlob group #[a2, a1, c1, a2]))) .ok
+    (some (.salvaged (.ok (#[hashRecord a2], #[hashRecord b1])))),
   ask "SALVAGE a list: nothing to drop" (.salvage "kept2" group
     (.records #[encode c1, encode a1])) .ok (some (.salvaged (.ok (#[], #[])))),
   ask "SALVAGE bytes that are not a blob" (.salvage "bad" group (.blob "junk".toUTF8)) .malformed,
@@ -358,6 +401,42 @@ def tooLargeSteps : Array Step := #[
   ask "OPEN a list holding a record with 4097 links" (.open "big2" group
     (.records #[encode tooManyLinks])) .tooLarge]
 
+/-- `ACCEPT_RECORD`: records that come as bytes (relayed, imported), with or without an
+opening. -/
+def acceptRecordSteps : Array Step := #[
+  ask "ACCEPT_RECORD before NEW: no chat" (.acceptRecord "r" (encode a1) none) .noChat,
+  ask "NEW r" (.new "r" group) .ok,
+  ask "ACCEPT_RECORD m1 with its opening, before a1: missing a1"
+    (.acceptRecord "r" (encode m1) (some m1Opened.2)) .missing
+    (some (.accept m1 (.missing #[hashRecord a1]))),
+  ask "ACCEPT_RECORD a1 without an opening (structure only)" (.acceptRecord "r" (encode a1) none)
+    .ok (some (.accept a1 (.accepted (hashRecord a1)))),
+  ask "ACCEPT_RECORD m1 with an opening that still holds field 15: bad opening"
+    (.acceptRecord "r" (encode m1) (some (nonce.bytes ++ dataMessage))) .badOpening,
+  ask "ACCEPT_RECORD m1 with an opening cut inside the nonce: bad opening"
+    (.acceptRecord "r" (encode m1) (some (m1Opened.2.extract 0 31))) .badOpening,
+  ask "ACCEPT_RECORD m1 with the opening of another message: bad opening"
+    (.acceptRecord "r" (encode m1) (some (nonce.bytes ++ bodyField))) .badOpening,
+  ask "ACCEPT_RECORD m1 in Bob's name with Alice's opening: bad opening"
+    (.acceptRecord "r" (encode m1AsBob) (some m1Opened.2)) .badOpening,
+  ask "HEADS r: still a1" (.heads "r") .ok (some (.digests #[hashRecord a1])),
+  ask "ACCEPT_RECORD m1 with its opening" (.acceptRecord "r" (encode m1) (some m1Opened.2)) .ok
+    (some (.accept m1 (.accepted (hashRecord m1)))),
+  ask "ACCEPT_RECORD m1 again, without the opening: accepted, nothing changes"
+    (.acceptRecord "r" (encode m1) none) .ok (some (.accept m1 (.accepted (hashRecord m1)))),
+  ask "HEADS r: m1" (.heads "r") .ok (some (.digests #[hashRecord m1])),
+  ask "ACCEPT_RECORD bytes that are not a record" (.acceptRecord "r" ((encode a1).push 0) none)
+    .malformed,
+  ask "ACCEPT_RECORD a record whose links are out of order" (.acceptRecord "r"
+    ((bytesOfHex? (twoLinksHex "02" "01")).getD .empty) none) .malformed,
+  ask "ACCEPT_RECORD a record of another group" (.acceptRecord "r" (encode foreign) none)
+    .wrongChat,
+  ask "ACCEPT_RECORD a record with 4097 links" (.acceptRecord "r" (encode tooManyLinks) none)
+    .tooLarge,
+  ask "ACCEPT_RECORD m1 into a chat that is not open" (.acceptRecord "nochat" (encode m1)
+    (some m1Opened.2)) .noChat,
+  ask "HEADS r: still m1" (.heads "r") .ok (some (.digests #[hashRecord m1]))]
+
 /-- `2^32 - 1` as 4 bytes. -/
 def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
 
@@ -365,7 +444,7 @@ def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
 def fuzz : Array Step := #[
   raw "an empty payload" .empty .badRequest,
   raw "op 0x00" ⟨#[0x00]⟩ .unknownOp,
-  raw "op 0x10" ⟨#[0x10]⟩ .unknownOp,
+  raw "op 0x11" ⟨#[0x11]⟩ .unknownOp,
   raw "op 0xff with a body" ⟨#[0xff, 1, 2, 3]⟩ .unknownOp,
   raw "VERSION with a byte left over" ⟨#[0x01, 0x00]⟩ .badRequest,
   raw "NEW with the group cut short" ((Request.new "c" group).write.extract 0 20) .badRequest,
@@ -384,9 +463,15 @@ def fuzz : Array Step := #[
     (Write.u8 0x03 ++ Write.str "c" ++ group.bytes ++ Write.u8 1 ++ ffff) .badRequest,
   raw "OPEN a blob whose length field is 2^32 - 1"
     (Write.u8 0x03 ++ Write.str "c" ++ group.bytes ++ Write.u8 0 ++ ffff) .badRequest,
-  ask "OPEN a blob whose header claims 2^32 - 1 records: malformed, nothing allocated"
-    (.open "c" group (.blob hugeCountBlob)) .malformed,
-  ask "SALVAGE the same blob" (.salvage "c" group (.blob hugeCountBlob)) .malformed,
+  ask "OPEN a blob whose header claims 2^32 - 1 records: too large, before any record is read"
+    (.open "c" group (.blob hugeCountBlob)) .tooLarge,
+  ask "SALVAGE the same blob" (.salvage "c" group (.blob hugeCountBlob)) .tooLarge,
+  ask "OPEN a blob whose header claims 2^24 records: too large"
+    (.open "c" group (.blob (blobTag ++ group.bytes ++ u32be (2^24)))) .tooLarge,
+  ask "OPEN a blob of another group whose header claims 2^24 records: too large first"
+    (.open "c" group (.blob (blobTag ++ otherGroup.bytes ++ u32be (2^24)))) .tooLarge,
+  ask "OPEN a blob whose header claims 2^24 - 1 records and holds none: malformed"
+    (.open "c" group (.blob (blobTag ++ group.bytes ++ u32be (2^24 - 1)))) .malformed,
   raw "COMMIT with the nonce cut short" (Write.u8 0x05 ++ group.bytes ++ alice.bytes ++
     ⟨Array.replicate 31 0x4e⟩) .badRequest,
   raw "COMMIT whose DataMessage length is past the end"
@@ -402,16 +487,28 @@ def fuzz : Array Step := #[
   raw "CLASSIFY with a disown count of 2^32 - 1" (Write.u8 0x0D ++ Write.str "c" ++ u32be 1 ++
     (dig 1).bytes ++ Write.u8 0 ++ ffff) .badRequest,
   raw "MERGE whose blob length is 2^32 - 1" (Write.u8 0x0C ++ Write.str "c" ++ ffff) .badRequest,
+  ask "MERGE a blob whose header claims 2^32 - 1 records: too large" (.merge "c" hugeCountBlob)
+    .tooLarge,
+  raw "ACCEPT_RECORD with opening flag 2" (Write.u8 0x10 ++ Write.str "c" ++
+    Write.bytes (encode a1) ++ Write.u8 2) .badRequest,
+  raw "ACCEPT_RECORD with no opening flag" (Write.u8 0x10 ++ Write.str "c" ++
+    Write.bytes (encode a1)) .badRequest,
+  raw "ACCEPT_RECORD with a byte left over"
+    ((Request.acceptRecord "c" (encode a1) none).write.push 0) .badRequest,
+  raw "ACCEPT_RECORD whose opening length is 2^32 - 1" (Write.u8 0x10 ++ Write.str "c" ++
+    Write.bytes (encode a1) ++ Write.u8 1 ++ ffff) .badRequest,
   raw "GET with the digest cut short" (Write.u8 0x0A ++ Write.str "c" ++ ⟨Array.replicate 31 1⟩)
     .badRequest,
   ask "HEADS c: the store is still empty" (.heads "c") .ok (some (.digests #[]))]
 
 /-- The sessions, each run on a fresh `zrdtd`. -/
 def sessions : Array (String × Array Step) :=
-  #[("tour", tour), ("tooLarge", tooLargeSteps), ("fuzz", fuzz)]
+  #[("tour", tour), ("tooLarge", tooLargeSteps), ("acceptRecord", acceptRecordSteps),
+    ("fuzz", fuzz)]
 
-/-- The replies of a session's steps. -/
-def replies (steps : Array Step) : List ByteArray := session (steps.map (·.request)).toList
+/-- The replies of a session's steps; `build` is the build text of `VERSION`. -/
+def replies (steps : Array Step) (build : String := buildId) : List ByteArray :=
+  session (steps.map (·.request)).toList build
 
 /-- Whether every step of a session gets its status, and its whole reply where one is pinned. -/
 def sessionOk (steps : Array Step) : Bool :=
@@ -427,17 +524,18 @@ def failures : List String :=
       !(r[0]? == some s.expect.byte && s.reply?.all (· == r))).map (·.1.name)
 
 -- Every op appears in some session.
-#guard (List.range 15).all fun i =>
+#guard (List.range 16).all fun i =>
   sessions.any fun (_, steps) => steps.any fun s => s.request[0]? == some (i + 1).toUInt8
 
 -- Every status except `COLLISION` appears in some session.
 #guard (Code.all.filter (· != .collision)).all fun c =>
   sessions.any fun (_, steps) => steps.any (·.expect == c)
 
-/-- The `sessions` section. -/
-def sessionsJson : Json :=
+/-- The `sessions` section, for a `zrdtd` whose build text is `build`. -/
+def sessionsJson (build : String) : Json :=
   .arr <| sessions.map fun (name, steps) =>
-    .obj #[("name", .str name), ("steps", .arr <| (steps.toList.zip (replies steps)).toArray.map
+    .obj #[("name", .str name), ("steps", .arr <|
+      (steps.toList.zip (replies steps build)).toArray.map
       fun (s, r) =>
         .obj (#[("name", .str s.name), ("op", .str (opName s.request)),
           ("status", .str s.expect.name), ("request", hex s.request), ("reply", hex r)] ++
@@ -455,7 +553,7 @@ where
 def collisionReplies : Json :=
   .arr #[
     .obj #[("name", .str "ACCEPT: COLLISION at digest a1"),
-      ("reply", hex (Reply.accept (.collision (hashRecord a1))).write)],
+      ("reply", hex (Reply.accept a1 (.collision (hashRecord a1))).write)],
     .obj #[("name", .str "OPEN or MERGE: COLLISION at digest a1"),
       ("reply", hex (Reply.opened (.error (.collision (hashRecord a1)))).write)],
     .obj #[("name", .str "SALVAGE: COLLISION at digest a1"),
@@ -463,15 +561,15 @@ def collisionReplies : Json :=
 
 /-! ## The file -/
 
-/-- All of `vectors/vectors.json`. -/
-def vectors : Json :=
+/-- All of `vectors/vectors.json`, for a `zrdtd` whose build text is `build`. -/
+def vectors (build : String) : Json :=
   .obj #[
     ("about", .str ("Generated by core/Zrdt/Vectors.lean (make vectors); do not edit. " ++
       "Byte layouts: core/Zrdt/Proto.lean (frames, requests, replies) and core/Zrdt/Encode.lean " ++
       "(records, blobs). All bytes are lower-case hex. Run each session on a fresh zrdtd: send " ++
       "u32 length (big-endian) + request, read u32 length + reply, compare the reply.")),
     ("protocol", .num protocolVersion),
-    ("build", .str buildId),
+    ("build", .str build),
     ("sha256", shaJson),
     ("records", recordsJson),
     ("recordDecode", recordDecodeJson),
@@ -479,16 +577,6 @@ def vectors : Json :=
     ("blobDecode", blobDecodeJson),
     ("commit", commitJson),
     ("replies", collisionReplies),
-    ("sessions", sessionsJson)]
+    ("sessions", sessionsJson build)]
 
 end Zrdt.Vectors
-
-/-- Print `vectors/vectors.json`. -/
-def main : IO UInt32 := do
-  match Zrdt.Vectors.failures with
-  | [] =>
-    IO.println (Zrdt.Vectors.vectors.render "")
-    return 0
-  | bad =>
-    IO.eprintln s!"vectors: these steps do not give their expected reply: {bad}"
-    return 1
