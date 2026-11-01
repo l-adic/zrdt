@@ -2,6 +2,8 @@ import Zrdt.Digest
 import Zrdt.Sha256
 import Zrdt.Record
 import Zrdt.Encode
+import Zrdt.Store
+import Zrdt.Provenance
 
 /-!
 # Zrdt: the shipped code (no Mathlib)
