@@ -13,3 +13,5 @@ import Crdt.Merkle.Refine
 import Crdt.Merkle.Classify
 import Crdt.Merkle.ClassifyFast
 import Crdt.Merkle.Api
+import Crdt.Merkle.EncodeProofs
+import Crdt.Merkle.LoadSpec
