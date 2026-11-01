@@ -1,0 +1,36 @@
+name = "spike"
+version = "0.1.0"
+defaultTargets = ["ZCore"]
+
+# Mathlib-free code library: this is what would go into libzrdt.a
+[[lean_lib]]
+name = "ZCore"
+
+# Stand-in for "spec that imports Mathlib": imports `Lean` (Mathlib's tactics import Lean)
+[[lean_lib]]
+name = "ZHeavy"
+
+[[lean_exe]]
+name = "heavy"
+root = "ZHeavy.Main"
+
+[[lean_exe]]
+name = "light"
+root = "ZCore.Main"
+
+[[lean_lib]]
+name = "ModSys"
+
+# variant A: TOML-only, precompileModules + prebuilt object via moreLinkArgs
+[[lean_lib]]
+name = "ZExtA"
+precompileModules = true
+moreLinkArgs = ["ffi/sha_extern.o"]
+
+# variant B: TOML-only, interpreter loads a prebuilt .so
+[[lean_lib]]
+name = "ZExtB"
+moreLeanArgs = ["--load-dynlib=/tmp/zrdt-spike-lean-build/ffi/libsha_extern.so"]
+
+[[lean_lib]]
+name = "ZExtC"

@@ -1,0 +1,16 @@
+name = "scratch"
+version = "0.1.0"
+defaultTargets = ["ModTest"]
+
+[[lean_lib]]
+name = "ModTest"
+
+[[lean_lib]]
+name = "Zrdt"
+
+[[lean_lib]]
+name = "CrdtSim"
+
+[[lean_exe]]
+name = "metamain"
+root = "ModTest.Main"
