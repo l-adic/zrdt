@@ -122,7 +122,7 @@ namespace CheckedStore
 /-! ## Stores are determined by their chat and records -/
 
 /-- A stored record is stored under its own digest. -/
-theorem getElem?_eq_some_iff {c : CheckedStore} {k : Digest} {x : Rec} :
+theorem getElem?_eq_some_iff_records {c : CheckedStore} {k : Digest} {x : Rec} :
     c.raw.map[k]? = some x ↔ x ∈ c.records ∧ hashRecord x = k :=
   ⟨fun h => ⟨mem_records.mpr ⟨k, h⟩, c.built.hash_eq k x h⟩, fun ⟨h, hk⟩ => by
     obtain ⟨k', hk'⟩ := mem_records.mp h
@@ -131,13 +131,13 @@ theorem getElem?_eq_some_iff {c : CheckedStore} {k : Digest} {x : Rec} :
 /-- A record is in the store exactly when it is stored under its digest. -/
 theorem mem_records_iff {c : CheckedStore} {x : Rec} :
     x ∈ c.records ↔ c.raw.map[hashRecord x]? = some x := by
-  rw [getElem?_eq_some_iff]; simp
+  rw [getElem?_eq_some_iff_records]; simp
 
 /-- A digest is a key of the store exactly when it is the digest of a stored record. -/
-theorem mem_map_iff {c : CheckedStore} {d : Digest} :
+theorem mem_map_iff_records {c : CheckedStore} {d : Digest} :
     d ∈ c.raw.map ↔ ∃ x ∈ c.records, hashRecord x = d := by
   rw [Std.ExtTreeMap.mem_iff_isSome_getElem?, Option.isSome_iff_exists]
-  simp only [getElem?_eq_some_iff]
+  simp only [getElem?_eq_some_iff_records]
 
 /-- **Two stores of the same chat with the same records are equal.** The keys are the records'
 digests, and the heads are the keys no record links, so the records fix everything. -/
@@ -148,7 +148,7 @@ theorem eq_of_records {c d : CheckedStore} (hg : c.group = d.group)
     intro k
     apply Option.ext
     intro x
-    rw [getElem?_eq_some_iff, getElem?_eq_some_iff, hr]
+    rw [getElem?_eq_some_iff_records, getElem?_eq_some_iff_records, hr]
   have hheads : c.raw.heads = d.raw.heads := by
     apply Std.ExtTreeSet.ext_mem
     intro dg
@@ -238,13 +238,13 @@ theorem acceptAll_closed {g : GroupId} {u : Array Rec} (hw : WellSized u)
   apply hstuck x ((hleft (x := x)).mpr ⟨hx, hn⟩) (hashRecord x)
   rw [accept_fst]
   apply rawAccept_of_ok ((hg x hx).trans hgrp.symm) (hw.2 x hx)
-    (fun d hd => mem_map_iff.mpr (hl d hd))
+    (fun d hd => mem_map_iff_records.mpr (hl d hd))
   · intro old hold
-    obtain ⟨hold, hh⟩ := getElem?_eq_some_iff.mp hold
+    obtain ⟨hold, hh⟩ := getElem?_eq_some_iff_records.mp hold
     exact hcol old (honly old hold) x hx hh
   · intro hk
     have := size_lt_of_keys (m := e.raw.map) (u := u) (r := x) (fun k hk => by
-      obtain ⟨y, hy, rfl⟩ := mem_map_iff.mp hk
+      obtain ⟨y, hy, rfl⟩ := mem_map_iff_records.mp hk
       exact ⟨y, honly y hy, rfl⟩) hx hk
     have := hw.1
     omega
@@ -483,7 +483,7 @@ theorem findCollision_eq_none {c : CheckedStore} {left : Array Rec}
     | some other =>
       have hg' : c.raw.map[hashRecord r]? = some other := hg
       have : other = r := by
-        obtain ⟨ho, hh⟩ := getElem?_eq_some_iff.mp hg'
+        obtain ⟨ho, hh⟩ := getElem?_eq_some_iff_records.mp hg'
         exact (hcol r hr other (Or.inr ho) hh.symm).symm
       simp only [Option.orElse, this, ↓reduceIte]
       exact ih seen h0 hrs
