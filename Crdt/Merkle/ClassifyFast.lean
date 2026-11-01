@@ -846,8 +846,9 @@ theorem status_spec (c : CheckedStore) (facts : Array Fact) {d : Digest} {r : Re
       | exact ⟨hAC, hFM⟩
       | exact hHU hAC hFM
 
-/-- **`classify` computes the spec's status of every stored record, and of nothing else**
-(advertised as `CheckedStore.classify_spec` in `Api.lean`). -/
+/-- **`classify` computes the spec's status of every stored record, and of nothing else**, in
+the words of `StatusMeans`. `ClassifyStatus.lean` turns this into the spec's `status`
+(`classify_eq_some_iff`, advertised as `CheckedStore.classify_spec` in `Api.lean`). -/
 theorem classify_getElem?_iff (c : CheckedStore) (facts : Array Fact) (d : Digest)
     (st : Zrdt.Status) :
     (classify c facts)[d]? = some st ↔

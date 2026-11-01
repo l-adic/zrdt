@@ -56,8 +56,8 @@ In the order of docs/PLAN.md §3.2:
 
 **What the statements mean depends on** (the trusted surface, beyond the code under test):
 `abs`, `toSpec`, `hashSpec` (`Bridge.lean`); `specOf`, `AcceptMeans` (`Refine.lean`); the spec's
-`accept`, `digests`, `heads`, `Reach`, `Fetched`, `CollisionIn`, `AcceptBuilt`, `buildRetry`
-(`Defs.lean`, `Integrity.lean`); `WellSized`, `decodeBlob`, `encode` (`core/Zrdt/Encode.lean`).
+`accept`, `digests`, `heads`, `Reach`, `Fetched`, `CollisionIn` (`Defs.lean`) and `AcceptBuilt`,
+`buildRetry` (`Chat.lean`); `WellSized`, `decodeBlob`, `encode` (`core/Zrdt/Encode.lean`).
 For `classify_spec` also: `liveOf` (`Classify.lean`), `Status.toSpec` and the order on `Aci`
 (`ClassifyStatus.lean`), and the spec's `status`, `liveRecords`, `authorConfirmed`,
 `foreignMarked`, `holders` (`Chat.lean`).
