@@ -256,6 +256,51 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.CheckedStore.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.serve_content_complete
 
+-- The statements for a store with a boundary (docs/JOIN_PLAN.md §7.3, Part 5 of `Api.lean`):
+-- one for each statement of docs/PLAN.md §3.2 above, the same names in `RelStore`, in
+-- `comparator.json` with the others.
+
+/-- info: 'Zrdt.RelStore.fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.fetched
+
+/-- info: 'Zrdt.RelStore.no_collision' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.no_collision
+
+/-- info: 'Zrdt.RelStore.agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.agree
+
+/-- info: 'Zrdt.RelStore.abs_accept' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.abs_accept
+
+/-- info: 'Zrdt.RelStore.abs_merge' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.abs_merge
+
+/-- info: 'Zrdt.RelStore.open_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.open_iff
+
+/-- info: 'Zrdt.RelStore.salvage_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.salvage_spec
+
+/-- info: 'Zrdt.RelStore.encode_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.encode_open
+
+/-- info: 'Zrdt.RelStore.confirmed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.confirmed
+
+/-- info: 'Zrdt.RelStore.classify_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.classify_spec
+
+-- The statements added for joining, for a responder with a boundary (Part 5 of `Api.lean`).
+
+/-- info: 'Zrdt.RelStore.agree_rel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.agree_rel
+
+/-- info: 'Zrdt.RelStore.serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.serve_content
+
+/-- info: 'Zrdt.RelStore.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.serve_content_complete
+
 -- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
 -- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
 -- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
@@ -370,7 +415,8 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 #guard_msgs in #print axioms Zrdt.Proto.run_addressed
 
 -- The relative store (docs/JOIN_PLAN.md §6.2, §7.1; `core/Zrdt/RelStore.lean`,
--- `core/Zrdt/ChatStore.lean`, `core/Zrdt/Proto.lean`). Not advertised yet: JOIN_PLAN §7.3.
+-- `core/Zrdt/ChatStore.lean`, `core/Zrdt/Proto.lean`). Not advertised under these names: the
+-- statements of JOIN_PLAN §7.3 for a store with a boundary are `RelStore.*` above.
 
 /-- info: 'Zrdt.builtRel_empty_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.builtRel_empty_iff
@@ -492,6 +538,117 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.CheckedStore.tightRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.tightRel
+
+-- The relative-store bridge, NOT advertised (docs/JOIN_PLAN.md §7.3; `Crdt/Merkle/RelSpec.lean`,
+-- `RelRefine.lean`, `ClassifyRel.lean`, `ServeAbsRel.lean`): the spec relative to a boundary,
+-- the two limits that make `Acyclic` a hypothesis, the operations of `RelStore` in the spec model,
+-- `CLASSIFY` on a raw store without a cycle, and `SERVE` from a relative responder.
+
+/-- info: 'Crdt.Merkle.salvage_maximalRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.salvage_maximalRel
+
+/-- info: 'Crdt.Merkle.buildRetryRel_eq_of_takesIn' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.buildRetryRel_eq_of_takesIn
+
+/-- info: 'Crdt.Merkle.subset_of_takesInRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.subset_of_takesInRel
+
+/-- info: 'Crdt.Merkle.tight_of_acyclic' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.tight_of_acyclic
+
+/-- info: 'Crdt.Merkle.acyclic_insertRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.acyclic_insertRel
+
+/-- info: 'Crdt.Merkle.reach_transfer' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.reach_transfer
+
+/-- info: 'Crdt.Merkle.promoted_cycle' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.promoted_cycle
+
+/-- info: 'Crdt.Merkle.promoted_cycle_not_tight' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.promoted_cycle_not_tight
+
+/-- info: 'Zrdt.BuiltRel.acyclic_of_unpromoted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.BuiltRel.acyclic_of_unpromoted
+
+/-- info: 'Zrdt.BuiltRel.acceptBuiltRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.BuiltRel.acceptBuiltRel
+
+/-- info: 'Zrdt.BuiltRel.mem_heads_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.BuiltRel.mem_heads_iff
+
+/-- info: 'Zrdt.RelStore.accept_means' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.accept_means
+
+/-- info: 'Zrdt.RelStore.merge_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.merge_model
+
+/-- info: 'Zrdt.RelStore.load_iff_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.load_iff_model
+
+/-- info: 'Zrdt.RelStore.salvage_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.salvage_model
+
+/-- info: 'Zrdt.RelStore.salvage_ok_of' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.salvage_ok_of
+
+/-- info: 'Zrdt.RelStore.agree_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.agree_model
+
+/-- info: 'Zrdt.RelStore.fetched_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.fetched_model
+
+/-- info: 'Zrdt.RelStore.confirmed_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.confirmed_model
+
+/-- info: 'Zrdt.ReadyStore.classify_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.ReadyStore.classify_spec
+
+/-- info: 'Zrdt.RelStore.classify_model' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.classify_model
+
+/-- info: 'Zrdt.Serve.Rel.serve_abs' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_abs
+
+/-- info: 'Zrdt.Serve.Rel.serve_heads' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_heads
+
+/-- info: 'Zrdt.Serve.Rel.serve_heads_code' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_heads_code
+
+/-- info: 'Zrdt.Serve.Rel.serve_closed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_closed
+
+/-- info: 'Zrdt.Serve.Rel.serve_tight' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_tight
+
+/-- info: 'Zrdt.Serve.Rel.serve_boundary_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_boundary_spec
+
+/-- info: 'Zrdt.Serve.Rel.serve_after_reaches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.serve_after_reaches
+
+/-- info: 'Zrdt.Serve.Rel.replyRecords_subset' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.replyRecords_subset
+
+-- `serve_after` and `serve_boundary` with their hypotheses met by real replies
+-- (`Crdt/Merkle/ServeExamples.lean`).
+
+/-- info: 'Zrdt.Serve.Examples.reply_after' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Examples.reply_after
+
+/-- info: 'Zrdt.Serve.Rel.Examples.reply_boundary' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.Rel.Examples.reply_boundary
+
+-- `RelStore.serve_content_complete` with its hypotheses met on a store with a non-empty boundary
+-- (Part 5 of `Api.lean`).
+
+/-- info: 'Zrdt.Examples.selfRel_served' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Examples.selfRel_served
+
+/-- info: 'Zrdt.Examples.selfRel_get' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Examples.selfRel_get
+
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

@@ -7,6 +7,7 @@ import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.ClassifyStatus
 import Crdt.Merkle.Rel
+import Crdt.Merkle.RelBridge
 import Zrdt.Serve
 
 /-!
@@ -20,8 +21,8 @@ no axiom other than `propext`, `Classical.choice` and `Quot.sound`, and that the
 it.
 
 This file imports only the modules that define what the statements mention (`Bridge.lean`,
-`Refine.lean`, `ClassifyStatus.lean`, `Rel.lean`, `core/Zrdt/Serve.lean`, and through them the
-spec and the shipped code). It must not import `Api.lean`, `EncodeProofs.lean`, `LoadApi.lean`
+`Refine.lean`, `ClassifyStatus.lean`, `Rel.lean`, `RelBridge.lean`, `core/Zrdt/Serve.lean`, and
+through them the spec, `RelSpec.lean` and the shipped code). It must not import `Api.lean`, `EncodeProofs.lean`, `LoadApi.lean`
 or `ServeAbs.lean`: those declare the names below or import a module that does.
 
 Keep this file in step with `Api.lean` and with the list in `comparator.json` and
@@ -106,6 +107,102 @@ theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
     (hs : Serve.serveOpening me q (hashRecord r) r op = true)
     (hmode : (q.wanted = none ∧
         ¬ Reach hashSpec (abs c) (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
+      ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
+    Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
+      Serve.serve c.raw me held q :=
+  sorry
+
+-- The statements for a store with a boundary (docs/JOIN_PLAN.md §7.3, Part 5 of `Api.lean`).
+
+theorem RelStore.fetched (c : RelStore) (hac : Acyclic hashSpec c.raw.abs) :
+    (∀ d, Reach hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) d →
+      d ∈ inView hashSpec c.raw.abs (boundarySet c.boundary)) ∧
+    Tight hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) :=
+  sorry
+
+theorem RelStore.no_collision (c : RelStore) : ¬ CollisionIn hashSpec c.raw.abs :=
+  sorry
+
+theorem RelStore.agree (c d : RelStore) (h : c.heads = d.heads)
+    (hc : Acyclic hashSpec c.raw.abs) (hd : Acyclic hashSpec d.raw.abs)
+    (hcd : ∀ r ∈ c.raw.abs, hashSpec r ∈ boundarySet d.boundary →
+      hashSpec r ∈ digests hashSpec d.raw.abs)
+    (hdc : ∀ r ∈ d.raw.abs, hashSpec r ∈ boundarySet c.boundary →
+      hashSpec r ∈ digests hashSpec c.raw.abs) :
+    c.raw.abs = d.raw.abs ∨ CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
+  sorry
+
+theorem RelStore.abs_accept (c : RelStore) (r : Rec) : AcceptRelMeans c r (c.accept r) :=
+  sorry
+
+theorem RelStore.abs_merge {c d e : RelStore} (h : c.merge d = .ok e) :
+    e.raw.abs = c.raw.abs ∪ d.raw.abs ∧
+      inView hashSpec e.raw.abs (boundarySet e.boundary) =
+        inView hashSpec c.raw.abs (boundarySet c.boundary) ∪
+          inView hashSpec d.raw.abs (boundarySet d.boundary) :=
+  sorry
+
+theorem RelStore.open_iff {g : GroupId} {B : Boundary} {u : Array Rec} {c : RelStore} :
+    RelStore.load g B u = .ok c ↔
+      B.size < maxRecords ∧ WellSized u ∧ AcceptBuiltRel hashSpec (boundarySet B) (specOf u) ∧
+        ¬ CollisionIn hashSpec (specOf u) ∧ (∀ r ∈ u, r.group = g) ∧ c.raw.abs = specOf u ∧
+        c.group = g ∧ c.boundary = B :=
+  sorry
+
+theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
+    {s : RelStore.Salvaged} (h : RelStore.salvage g B u = .ok s) :
+    ¬ CollisionIn hashSpec (specOf u) ∧
+      s.store.raw.abs = buildRetryRel hashSpec (boundarySet B) (specOf u) ∧ s.store.group = g ∧
+      s.store.boundary = B ∧
+      (∀ d, d ∈ s.dropped ↔
+        d ∈ digests hashSpec (specOf u \ buildRetryRel hashSpec (boundarySet B) (specOf u))) ∧
+      StrictlySorted s.dropped :=
+  sorry
+
+theorem RelStore.encode_open (c : RelStore) (auds : AudTable) :
+    openChat c.group (encodeChat (.relative c) auds) =
+      .ok (.relative c, storedAudiences (.relative c) auds) :=
+  sorry
+
+theorem RelStore.confirmed (c d : RelStore) (hs : Array Digest) (hd : ∀ h ∈ hs, d.has h = true) :
+    (∀ x, Reach hashSpec c.raw.abs hs.toList.toFinset x →
+      Reach hashSpec d.raw.abs hs.toList.toFinset x ∨
+        ∃ b ∈ d.boundaryDigests, Reach hashSpec d.raw.abs hs.toList.toFinset b ∧
+          Reach hashSpec c.raw.abs {b} x) ∨
+      CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
+  sorry
+
+theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
+    (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
+    (classifyRaw c.raw facts)[d]? = some st ↔
+      ∃ r, c.get d = some r ∧
+        Crdt.Merkle.status hashSpec c.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
+  sorry
+
+theorem RelStore.agree_rel (c : RelStore) {F : SpecStore} {B : Finset Digest}
+    (hh : headsRel hashSpec F B = headsRel hashSpec c.raw.abs (boundarySet c.boundary))
+    (hFB : ∀ r ∈ F, hashSpec r ∈ boundarySet c.boundary →
+      hashSpec r ∈ digests hashSpec c.raw.abs) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec c.raw.abs ∧ ∀ r ∈ F, hashSpec r = d → r ∈ c.raw.abs) ∨
+        (d ∈ boundarySet c.boundary ∧ d ∉ digests hashSpec c.raw.abs ∧
+          ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (c.raw.abs ∪ F) :=
+  sorry
+
+theorem RelStore.serve_content (c : RelStore) {me : Serve.Me} {held : Serve.HeldMap}
+    {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
+    toSpec r ∈ c.raw.abs ∧ openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
+  sorry
+
+theorem RelStore.serve_content_complete (c : RelStore) {me : Serve.Me}
+    {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
+    (hr : toSpec r ∈ c.raw.abs) (hop : (held.getD (hashRecord r) {}).opening = some op)
+    (hs : Serve.serveOpening me q (hashRecord r) r op = true)
+    (hmode : (q.wanted = none ∧
+        ¬ Reach hashSpec c.raw.abs (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
       ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
     Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
       Serve.serve c.raw me held q :=

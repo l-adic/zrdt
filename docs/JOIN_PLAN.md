@@ -562,18 +562,37 @@ an empty responder boundary they say what the unprimed ones say.
 - **`Breaker2.relative_responder_not_closed`** (round 1). Serving only stored records from a
   relative responder gives a view that is not closed; `relative_responder_closed'` shows the
   primed boundary closes it.
-- **Bridge `serve_abs`** (to prove, with `walk_spec`). The records and boundary in `serve`'s
+- **Bridge `serve_abs`** (proved: `Crdt/Merkle/ServeAbs.lean` for a closed responder,
+  `Crdt/Merkle/ServeAbsRel.lean` for a relative one). The records and boundary in `serve`'s
   catch-up reply are `ServedF` and `ServedB'` for `vis r := entitled q r ∧ ¬ reachable from since`
   and `BS` = the responder's boundary. Records whose audience the responder does not hold are
   covered: they are boundary digests when linked by a served record or heads.
 
 ### 7.3 Advertised theorems
 
-- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form) and
-  `Serve.serve_content`.
-- The 11 existing advertised theorems are restated for a store with a boundary. With an empty
-  boundary they say exactly what they say today. The Comparator challenge is updated to match,
-  and Comparator is run only as the final step.
+- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form),
+  `CheckedStore.serve_content` and `CheckedStore.serve_content_complete`.
+- The existing advertised theorems are restated for a store with a boundary (`Api.lean` Part 5,
+  the same names under `RelStore`: `fetched`, `no_collision`, `agree`, `abs_accept`, `abs_merge`,
+  `open_iff`, `salvage_spec`, `encode_open`, `confirmed`, `classify_spec`). `encode_injective` is
+  about one record, so no boundary enters, and it holds as stated. With an empty boundary each
+  says what it says today (examples in Part 5). Two hypotheses are new, each with a checked
+  counterexample: `agree` needs that neither store holds a record whose digest the other has only
+  as a boundary digest (`below_boundary_not_vouched`); `fetched`, `agree` and `classify_spec`
+  need no cycle (`Acyclic`), because a promoted record can close a cycle without a collision
+  (`promoted_cycle`, `promoted_cycle_not_tight`, `Crdt/Merkle/RelSpec.lean`; for SHA-256 this
+  needs a record whose digest was written into a record its own digest depends on).
+  `BuiltRel.acyclic_of_unpromoted` gives it when no record was promoted. `confirmed` holds up to
+  the sender's boundary. `CLASSIFY` on a relative store is `classifyRaw`; `RelStore.classify_spec`
+  rests on `Crdt/Merkle/ClassifyRel.lean`, which proves it for any raw store whose records sit
+  under their digests and have no cycle.
+- The three statements new for joining also hold for a responder with a boundary (a former
+  newcomer re-serves): `RelStore.agree_rel` (its own boundary as `BS`), `RelStore.serve_content`
+  and `RelStore.serve_content_complete` (examples on Bob's relative store and on a store holding
+  Alice's message over the boundary digest of `a1`). The bridge `serve_abs` for a relative
+  responder is `Serve.Rel.serve_abs` (`Crdt/Merkle/ServeAbsRel.lean`).
+- The Comparator challenge and `comparator.json` list all of these; Comparator is run only as the
+  final step.
 
 ### 7.4 Deniability
 
@@ -1009,8 +1028,10 @@ member's client would need a new wire field.
    makes Signal deliver live to that account, and zrdt follows. The `ATTESTED` gate (§10.3) is the
    fix; it costs liveness.
 5. **The relative store re-proofs** (`BuiltRel`, relative accept order, the boundary in `zrdtS3`,
-   `linkable_sub`, the 11 advertised theorems) are the critical path of stage 3 and are not
-   started. Stages 1 and 2 do not need them.
+   `linkable_sub`, the 11 advertised theorems) are done: `core/Zrdt/RelStore.lean`,
+   `Crdt/Merkle/RelSpec.lean`, `RelRefine.lean`, `ClassifyRel.lean`, `ServeAbsRel.lean`, and
+   `Api.lean` Part 5 (§7.3). Check the two new hypotheses (no cycle; no record below the other
+   store's boundary) against the counterexamples that force them.
 6. **New host code in the trusted base:** the seal module, `sendZrdtServed`, the §4.4 checks, the
    quote rule at `uploadMessageQuote`. Each needs a test (§8.3, §10.3), including a harness test
    that swaps the requester's key and answers 409 between `SERVE` and the send. Not yet checked:
