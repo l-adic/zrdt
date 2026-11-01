@@ -1,7 +1,8 @@
 # JOIN_PLAN v2: adding members to a zrdt chat
 
-Status: design, v2 of 2026-11-01. Not implemented. **Nothing here changes the demo build.** v1
-(Martin's draft, commit `af76d2f`) is summarised in §11, with the reasons it changed.
+Status: design, v2 of 2026-11-01, **revised after review round 1** (three breakers, same day; the
+note is in §11 and §12.1). Not implemented. **Nothing here changes the demo build.** v1 (Martin's
+draft, commit `af76d2f`) is summarised in §11, with the reasons it changed.
 
 ## 0. For a reviewer starting cold
 
@@ -15,47 +16,60 @@ honest or at least attributable; open groups with strangers are out of scope.
 **What this document decides.** How a member added to a group with history gets a verified
 store; what he may learn about the older history; and how every zrdt path that moves content
 (resend, catch-up, restore) keeps Signal's own rule: **the content of a message goes only to the
-accounts its author sent it to.**
+accounts its author's client addressed when it froze the message, and only to the holder of the
+identity key it addressed them under.** The addressed accounts are a subset of the accounts
+Signal sends the message to at enqueue.
 
-**The design in five lines.**
-1. The author writes its **audience** (the members it sends the message to, each with a hash of
-   that member's identity key) into the message, as a new `DataMessage` field 201. `COMMIT`
-   already covers every field except 15 and 200, so the record format does not change.
+**The design in six lines.**
+1. The author writes its **audience** into the message, as a new `DataMessage` field 201: each
+   member with a hash (tag) of the identity key the author holds for it. Members Signal does not
+   send to (blocked, seen as unregistered, no key) get the zero tag. `COMMIT` already covers every
+   field except 15 and 200, so the record format does not change.
 2. One Lean function, `SERVE`, decides every reply a member sends about its store. It releases
-   content only if the content's **own committed audience** names the requester, with the
-   identity key the requester uses now.
-3. A newcomer gets the records sent to him, with content; the structure of records written after
-   those; and bare digests for the older records they link to. His heads equal the responder's
-   (proved), so compare codes still work.
-4. zrdt reads no group revision and no join revision. A lying server cannot widen anyone's
-   audience after the author froze it.
-5. zrdt adds no signature and no MAC. Copies are authenticated by Signal's own deniable channels.
+   content only if the content's **own committed audience** seats the requester: his ACI with a
+   non-zero tag of the identity key the responder holds for him.
+3. The host **seals** each reply to exactly that key, the way sealed sender v1 seals its sender
+   layer to the recipient's identity key (libsignal's own `agree`, HKDF and AES-GCM-SIV). If Signal
+   later re-targets the session to a swapped key, the new key cannot read the content.
+4. A newcomer gets the records sent to him, with content; the structure of records written after
+   those; and bare digests for the older records they link to. Any responder, including a former
+   newcomer, serves a view with exactly its own heads (proved), so compare codes still work.
+5. zrdt reads no group revision and no join revision. Access follows the author's own membership
+   view at enqueue and freeze, as Signal's live delivery does, and nothing else the server says.
+6. zrdt adds no signature and no MAC. The seal authenticates nothing. Copies are authenticated by
+   Signal's own deniable channels. Two Signal-flavoured additions were dropped in round 1 because
+   they would leave evidence: keeping sender-key messages (Phase 3) and broadcast tags (E1).
 
 **Read, in this order:**
 1. `PLAN_HUMANS.md` §2–§5: the model, the definitions, the theorems, how proofs reach the code.
 2. `review-2026-11-01/AMENDMENTS.md`: A4 (record and commitment), A7 (scope, hooks; the demo
    group is static), A8 (provenance, disown, resend), A9 (restore), A12 (claims, trusted base).
-3. This document. §11 says what changed from v1 and why.
-4. Reference scratch Lean, not built, no `sorry`: `docs/join-v2/Serve.lean` and `ServeTest.lean`
-   (the responder against the real `CheckedStore`, `openingMatches`, `walk`), `Rel.lean` (the
-   newcomer's view, Mathlib-free), `Dvs.lean` (optional MAC tags, §10a).
+3. This document. §11 says what changed from v1 and in round 1, and why.
+4. Reference scratch Lean, not built by any target, no `sorry`, re-checked with `lake env lean`
+   after round 1: `docs/join-v2/Serve.lean` and `ServeTest.lean` (the responder over the real
+   record, commitment and `walk`, with key tags and a responder boundary), `Rel.lean` (the
+   newcomer's view against an absolute or a relative responder, Mathlib-free). `Dvs.lean` is kept
+   only as HMAC/HKDF over the shipped SHA-256; its tag scheme is not adopted (§10a).
 
 **Verdicts on the three hypotheses the review tested.**
-- **H1, designated-verifier tags as access control: refuted as stated.** A responder cannot
-  check a tag made for someone else (only the author and that member hold the key), and a tag
-  list in field 200 is not bound by the digest. What access control needs is an authenticated
-  recipient list bound into the commitment: field 201.
-- **H2, a blinded boundary keyed by revision: not needed.** Agreement relative to a boundary
-  holds with no condition on the boundary (`agree_rel`, §7). Boundary entries are bare digests.
-  A hash-checked boundary stays an option (§12.2).
+- **H1, designated-verifier tags as access control: refuted.** A responder cannot check a tag made
+  for someone else (only the author and that member hold the key). A tag list in field 200 is not
+  bound by the digest. And (round 1) a tag list broadcast to the group is not deniable: every
+  holder keeps `tag_X`, which only the author or X can compute, so a judge with one holder's device
+  and X's key has a two-witness proof (§10a). Access control needs an authenticated recipient list
+  bound into the commitment (field 201) and delivery bound to the checked key (the seal).
+- **H2, a blinded boundary keyed by revision: not needed, and no help.** Agreement relative to a
+  boundary holds with no condition on the boundary (`agree_rel`, §7). A hash check on
+  `(revision, inner)` proves nothing exists: anyone can hash a made-up `inner`. Boundary digests are
+  vouched by the member that served them, and contained (§6.2).
 - **H3, a server-supplied join revision makes an honest responder leak: confirmed.** v2 reads no
-  revision anywhere.
+  revision anywhere. All three round-1 breakers re-tested it against v2; it fails.
 
 **A leak in the build today.** The fork's `ts/zrdt/resend.preload.ts:334-336` (Mac mini,
 `@762d31740`) passes `requesterWasMemberAtSend: () => conversation.hasMember(requesterAci)`, so any
 member relays an opening to any current member, a newcomer included. It is latent because the
 demo group is static (A7). `SERVE` replaces it (Phase 1, §10). **Do not allow membership changes
-in zrdt groups before Phase 1 ships.**
+in zrdt groups before Phase 1 ships, and before every fork member runs it (§3.3).**
 
 ## 1. Requirements and threat model
 
@@ -68,38 +82,45 @@ in zrdt groups before Phase 1 ships.**
   falls short, and say which gap it closes.
 
 **What R1 means here.** The content of a message (its opening, or its plaintext) reaches an
-account only if the message's author sent it to that account. A newcomer may learn:
+account only if the author's client seated that account (non-zero tag) when it froze the message,
+and only the holder of the identity key it seated. A newcomer may learn:
 - opaque digests of older messages that newer ones link to directly;
 - the author and links (never the content) of a message he was not sent, if it was written after
-  a message he was sent. This happens only in honest races (§6.4).
+  a message he was sent. This happens whenever an author's view of the membership lags the add:
+  honest races cause it, and the server can prolong it (§6.4). Metadata only.
 
-**What stays true from before:** same heads give the same history (`agree`); a store with a hole
-is never accepted (`fetched`); provenance, disown and `CLASSIFY` work as in A8.
+**What stays true from before:** same heads give the same history (`agree`); a closed store never
+has a hole, and a relative store's only holes are its boundary digests, each vouched by a named
+member (`fetched`, §6.2); provenance, disown and `CLASSIFY` work as in A8.
 
 **Threat model.** The server and the network are the adversary. Members are honest or at least
-attributable. **Non-goals:** denial of service (the server can always drop or delay); a member who
+attributable. Identity keys are trust-on-first-use: a server that substitutes a key on first
+contact impersonates that member in Signal itself. zrdt inherits that and must not amplify it.
+**Non-goals:** denial of service (the server can always drop or delay); a member who
 deliberately pastes, quotes or forwards old content; open groups with strangers.
 
 ## 2. What Signal already does, and where it stops
 
 Checked against Signal-Desktop v8.33.0 and libsignal v0.105.4 (the version Desktop pins), with
-scratch scripts against `@signalapp/libsignal-client` 0.105.4 on the Mac mini. Desktop paths are
-relative to `ts/` (`protos/` sits at the top of the tree); libsignal paths say so.
+scratch scripts against `@signalapp/libsignal-client` 0.105.4 on the Mac mini; round-1 rows were
+checked against the same Desktop tree. Desktop paths are relative to `ts/` (`protos/` sits at the
+top of the tree); libsignal paths say so.
 
 | Signal fact | Status | Where |
 |---|---|---|
-| A newcomer cannot decrypt group messages sent before he joined: sender-key chains only ratchet forward, and his distribution message starts at the current iteration. | verified, tested | libsignal `group_cipher.rs:85-97, 228-287`; test: pre-join messages fail with "old counter" |
-| A removed member loses the author's chain at the author's next send. | verified | `util/sendToGroup.preload.ts:440-452` |
-| Signal's own retry re-sends only to accounts the author originally addressed, within 24 h. | verified | `util/handleRetry.preload.ts:196-202`; `sql/Server.node.ts:1688-1704` |
+| A newcomer cannot decrypt group messages sent before he joined. The primary barrier is sealed sender v2's per-recipient key encapsulation and the pairwise sessions that carry sender keys: he has no slice of an earlier message. Second layer: sender-key chains only ratchet forward, and his distribution message starts at the current iteration. | verified, tested | libsignal `sealed_sender.rs` (SSv2), `group_cipher.rs:85-97, 228-287`; test: pre-join messages fail with "old counter" |
+| A removed member loses the author's chain at the author's next normal group send, in the author's (server-supplied) view of the members. Partial sends skip this; only calling messages use them. | verified | `util/sendToGroup.preload.ts:430-452`; `jobs/helpers/sendCallingMessage.preload.ts:65,108` |
+| Signal's own retry re-sends only to accounts the author originally addressed, within 24 h, to whatever identity key is current then. | verified | `util/handleRetry.preload.ts:196-202`; `sql/Server.node.ts:1688-1704` |
 | New members get no history. History moves only between one account's devices (link & sync, backups). | verified | no history field in protos; `backups/index.preload.ts` |
-| Live messages are authenticated deniably: sealed-sender MACs from identity-key agreement (v1 static keys, v2 per-recipient tags), and sender-key signatures under a fresh key bound to the author only by a pairwise message. | verified | libsignal `sealed_sender.rs:780-805, 1126-1156`; `protocol.rs:524-565` |
+| Live messages are authenticated deniably to outsiders: sealed-sender MACs from identity-key agreement (v1 static keys, v2 per-recipient tags), and sender-key signatures under a fresh key bound to the author only by a pairwise message. Inside the group, any holder of the author's chain can verify a sender-key signature; Desktop keeps the message only in flight. | verified | libsignal `sealed_sender.rs:780-805, 1126-1156`; `protocol.rs:524-565`; `textsecure/MessageReceiver.preload.ts:1744-1773` |
 | A sealed-sender certificate is a server signature over identity only, not content. | verified | libsignal `sealed_sender.rs:197-340` |
-| A sender addresses the members at compose time, intersected with the members at send time. Blocked and unregistered members are not addressed. | verified | `models/conversations.preload.ts:4450-4463`; `jobs/helpers/sendNormalMessage.preload.ts:526-596` |
+| Identity keys are trust-on-first-use. Desktop accepts a changed key on receive at once, and trusts it for sending 5 s later. On 409/410 a send re-fetches bundles and re-encrypts the same plaintext to the key now current. | verified | `SignalProtocolStore.preload.ts:82, 1960-1967, 2208-2214`; `textsecure/OutgoingMessage.preload.ts:680-706` |
+| A sender addresses the members at compose time, intersected with the members at send time. Blocked and unregistered members are not addressed, at every attempt. A server marks a member unregistered for 6 h by listing it in `uuids404`. | verified | `models/conversations.preload.ts:4450-4463`; `jobs/helpers/sendNormalMessage.preload.ts:526-596`; `util/getConversationMembers.dom.ts:34-40`; `util/sendToGroup.preload.ts:570-575`; `util/isConversationUnregistered.dom.ts:9,32` |
 | The revision on a message is read separately from its recipients (after an `await`), so it is only a proxy for "who was addressed". | verified | `conversations.preload.ts:4451` vs `4555` |
 | "A receiver catches up to a higher revision before processing" is best effort. A failed or short fetch lets it process at an older revision. | partly true | `messages/handleDataMessage.preload.ts:264-295`; `groups.preload.ts:4278-4282` |
-| A join revision (`joinedAtVersion`) is a plaintext value the server asserts. Log changes are not signature-checked; member ciphertexts are deterministic. A server can place a real add at an earlier revision for a client that was offline. | verified (H3) | `protos/Groups.proto:34`; `groups.preload.ts:4180-4330, 1064-1067, 6099-6236` |
+| A join revision (`joinedAtVersion`) is a plaintext value the server asserts. Log changes are not signature-checked; member ciphertexts are deterministic. A server can place a real add at an earlier revision for a client that was offline, or hide a removal and re-add. | verified (H3) | `protos/Groups.proto:34`; `groups.preload.ts:4180-4330, 1064-1067, 3738-3778, 6099-6236` |
 | Invited and requesting members are never addressed; they become members at promotion. | verified | `util/getConversationMembers.dom.ts:21-29`; `groups.preload.ts:5608-5612` |
-| Stock edits (of messages under 24 h old) go to the current members, so a newcomer receives the edited text. Quotes carry the quoted text. | verified | `util/sendEditedMessage.preload.ts:135-139`; `SignalService.proto` `Quote.text = 3` |
+| Stock edits (of messages under 24 h old) go to the current members, so a newcomer receives the edited text. Quotes carry the quoted text, body ranges and thumbnails. The wire quote is rebuilt from the message's `quote` attribute on every attempt, for sends and edits alike; `makeQuote` runs earlier, when Reply is clicked. | verified | `util/sendEditedMessage.preload.ts:109-139`; `jobs/helpers/sendNormalMessage.preload.ts:151, 700, 844-990`; `state/ducks/composer.preload.ts:949`; `SignalService.proto` `Quote.text = 3` |
 
 **Where Signal stops.**
 1. **zrdt's own content paths have no rule.** Relay, catch-up and restore are zrdt's. The
@@ -109,8 +130,11 @@ relative to `ts/` (`protos/` sits at the top of the tree); libsignal paths say s
    revisions cannot decide access (H3).
 4. **Signal gives a newcomer nothing to resolve links into older history with.** That is right
    for content, but zrdt needs it for links.
+5. **Signal binds no reply to the identity key that was checked.** A send goes to whatever key is
+   current when it is encrypted, re-fetched on 409/410. A rule that checks a key must also bind its
+   content to that key.
 
-v2 reuses everything in the table and adds something only for these four gaps (§9).
+v2 reuses everything in the table and adds something only for these five gaps (§9).
 
 ## 3. The record and the audience
 
@@ -127,64 +151,87 @@ and the TypeScript stub are untouched.
 zrdtAudience (field 201, bytes) = n entries, 1 ≤ n ≤ 256, strictly increasing by aci
 entry   = aci(16) ‖ keyTag(16)
 keyTag  = first 16 bytes of SHA-256("zrdtK1" ‖ identity public key, 33 bytes serialized)
-          or 16 zero bytes if the author had no key for that member
+          or 16 zero bytes: a member Signal does not send this message to (blocked, seen as
+          unregistered), or one the author has no key for
 ```
 
 - **Who is in it.** The raw `conversation.membersV2[].aci` read at enqueue, in the same
-  synchronous block that sets the recipients (`models/conversations.preload.ts:4450-4463`), intersected
-  with `membersV2` at freeze (this drops members removed while the message was queued). Plus the
-  author.
-  - `getConversationMembers` is not used: it drops blocked and unregistered members, and then the
-    audience would reveal the author's block list to the other addressees. Whether blocked members
-    belong in the audience is a decision for kejace (§12.1).
+  synchronous block that sets the recipients (`models/conversations.preload.ts:4450-4463`),
+  intersected with `membersV2` at freeze (this drops members removed while the message was
+  queued). Plus the author, with the tag of its own identity key.
   - Invited and requesting members are not in `membersV2`, so they are never in the audience.
-- **The invariant the fork keeps:** the accounts a message is actually sent to are a subset of
-  its audience. At every attempt, Desktop sends to the `sendStateByConversationId` keys
-  intersected with the current members, and those keys are a subset of `membersV2` at enqueue.
+- **Who is seated (non-zero tag).** Exactly the members in Desktop's own recipient set at enqueue
+  (`getRecipients`: not blocked, not unregistered) for which the author holds a key, plus the
+  author. Blocked and seen-as-unregistered members stay in the list with the zero tag: Signal
+  sends them nothing, so zrdt gives them nothing, and since a zero tag also means "no key" the list
+  does not reveal the author's block list. (This settles a question v2 left to kejace.)
+- **The invariants the fork keeps,** pinned by a TypeScript test: seats ⊆ recipients at enqueue ∪
+  {author}; the accounts a message is actually sent to, at every attempt, ⊆ audience.
 - **The key tag.** The hash of the identity key the author holds for that member when it freezes
-  the message. `SERVE` releases content only to a requester whose current identity key has the
-  same tag. This stops a server that swaps a member's identity key from collecting that member's
-  whole history through relays (§8.1). Stock Signal gives such a server only future messages and
-  24 h of retries. The tag is a hash of a public key, so it is not a signature.
+  the message. `SERVE` releases content only to a requester whose current identity key, in the
+  responder's view, has the same tag, and the host seals the reply to that key (§4.3). Together
+  they give content only to the holder of the key the author addressed: a server that swaps a
+  member's key after the author froze cannot collect relayed history, not even by re-targeting a
+  reply in flight. The tag is a hash of a public key, so it is not a signature.
 - **Why it is bound.** Field 201 is not 15 or 200, so it stays in the committed bytes. The opening
   contains it, `openingMatches` binds it to `record.commit`, and the commit binds it to the
   digest. Changing the audience of a real opening breaks the match (`audience_bound`, §7).
 - **Who sees it.** Only holders of the opening, which are the addressees. It travels inside
-  Signal's encryption. Stock clients ignore unknown field 201.
+  Signal's encryption. Stock clients ignore unknown field 201. The tags show addressees which
+  members got the zero tag, and that a member's key changed: public-key hashes, metadata only.
 - **The cap.** A group with more than 256 members omits the field. Its messages then have no zrdt
-  content path at all, only Signal's own. The value is a decision for kejace (§12.1).
+  content path at all, only Signal's own. The value is a decision for kejace (§12.2).
 
 ### 3.3 Store blob, protocol version, migration
 
-- **Store blob `zrdtS3`** = the `zrdtS2` layout plus two sections: the boundary digests (§6) and
-  the audience table (digest → entries, filled only from openings `zrdtd` itself checked). Bounds
-  as in A4. `zrdtS2` blobs still open, with an empty boundary and an empty audience table.
+- **Store blob `zrdtS3`** = the `zrdtS2` layout plus two sections: the boundary digests with the
+  ACI that vouched for each (§6.2), and the audience table (digest → entries, filled only from
+  openings `zrdtd` itself checked). Bounds as in A4. `zrdtS2` blobs still open, with an empty
+  boundary and an empty audience table.
 - **Protocol 3.** `ZrdtMeta.version = 3`. The frame protocol moves to 3 because `ACCEPT` gains an
   optional opening and new ops appear (§10).
+- **Backfill.** When Phase 1 starts, and after every upgrade, the client re-`ACCEPT`s every stored
+  `zrdtOpening` with its opening, so the audience table also covers openings received while an
+  older build ran.
 - **Records without field 201** (written before the upgrade, by an older client, or in a group
-  over the cap) have an **unknown audience**. No zrdt path sends their content to anyone; only
-  Signal's own live delivery and 24 h retry do. Their structure is still served (§5).
-- **Mixed versions.** An as-built responder still runs the leaky stub. Upgrade every member before
-  allowing membership changes.
+  over the cap) have an **unknown audience**. Their structure is served (§5). Their content goes
+  out only from the author's own daemon, sealed, to accounts in that message's
+  `sendStateByConversationId` keys: Desktop's own record of whom Signal sent it to. At Phase 1
+  start the author copies those keys into a `zrdtSentTo` attribute for every outgoing zrdt message,
+  before any later edit overwrites them (`sendEditedMessage.preload.ts:187`), each with the tag of
+  the identity key it holds then, plus itself. `SERVE` uses that list only for the responder's own
+  `live`, undisowned records that carry no field 201 (`serve_content`'s second case, §7.1). No
+  other member relays such content. This keeps A8's author path for the existing history;
+  non-author relays of it are a decision for kejace (§12.2).
+- **Mixed versions.** Protocol-3 clients send requests as a new `ZrdtServeRequest` (Content 204)
+  that as-built responders ignore, so an honest newcomer never triggers the as-built leak. A
+  protocol-3 responder answers a legacy `ZrdtResendRequest` (Content 200) with structure only: the
+  sender cannot open a sealed reply. A protocol-3 receiver drops any legacy `ZrdtResend` opening
+  whose own field 201 does not seat it. The fork's add-member UI refuses while any member's latest
+  `ZrdtMeta.version` is below 3. Residual: a member on a stock client can still add someone; an
+  un-upgraded fork responder then leaks to a newcomer who sends the legacy request on purpose.
 
 ## 4. What each party sends, stores and checks
 
 ### 4.1 The author, sending
 
-1. **At enqueue:** snapshot the raw `membersV2` ACIs into a new message attribute
-   `zrdtAudience`. It survives retries and restarts.
+1. **At enqueue:** snapshot the raw `membersV2` ACIs and the `getRecipients` set into a new message
+   attribute `zrdtAudience`. It survives retries and restarts.
 2. **At freeze** (inside `conversation.queueJob` in `sendNormalMessage`, A7):
    - intersect the snapshot with `membersV2` now, and add the author;
-   - load each member's identity key (`loadIdentityKey`); for any missing key, call
-     `getKeysForServiceId` first (`textsecure/getKeysForServiceId.preload.ts:41`); if that fails,
-     pass no key and the tag is zero;
-   - call `AUDIENCE` with the (aci, key) pairs. `zrdtd` returns the field-201 bytes (the host never
-     hashes, A4);
+   - for each member in the enqueue recipient set, load its identity key (`loadIdentityKey`); for a
+     missing key, call `getKeysForServiceId` first (`textsecure/getKeysForServiceId.preload.ts:41`).
+     On a transient failure, do not freeze: the job fails and retries, as Signal's own send to that
+     member would. Only a 404 (unregistered) gives the zero tag;
+   - call `AUDIENCE` with (aci, key or none) pairs, none for members outside the enqueue recipient
+     set. `zrdtd` returns the field-201 bytes (the host never hashes, A4);
    - add field 201 to the `DataMessage`, then `COMMIT`, then `ACCEPT` with the opening, then
      persist `message.zrdt` as in A7.
 3. **Every attempt** sends the frozen bytes. Recipients stay inside the audience.
 
-The author stores its opening in `zrdtOpening` (A4), as today.
+The author stores its opening in `zrdtOpening` (A4), as today. A member whose key legitimately
+changes between freeze and delivery forfeits zrdt relays of that message (Signal's own retry
+still reaches the new key).
 
 ### 4.2 Every member, receiving live
 
@@ -192,104 +239,162 @@ The author stores its opening in `zrdtOpening` (A4), as today.
   it holds exactly one well-formed field 201, records the audience in its table. The audience is
   kept after the content is erased: it is membership metadata the holder already knew.
 - A missing or malformed field 201 never rejects a record. It only means "audience unknown".
-- Phase 3: keep the original sender-key message bytes (`zrdt_skm`, captured in
-  `MessageReceiver.#decryptSealedSender`, `textsecure/MessageReceiver.preload.ts:1744-1773`). They are
-  erased with the message (expiry, delete for everyone, view-once) and pruned after 14 days.
+- No sender-key message is kept (Phase 3 was dropped in round 1, §11).
 
 ### 4.3 A responder (any member, the author included)
 
-1. It receives a `ZrdtResendRequest{digests or catch-up, since}` (§10.1), 1:1 or through the group
-   (A8 routing).
+1. It receives a `ZrdtServeRequest{requestId, digests or catch-up, since}` (§10.1), 1:1 or
+   through the group (A8 routing).
 2. **Host check, defence in depth:** the requester is a current member in this client's view. If
    the server falsifies this, the worst result is content the requester was already sent.
-3. The host calls `ADDRESSED` to learn which openings to load, then `SERVE` with the requester's
-   ACI (the Signal-authenticated sender of the request), the identity key Desktop holds for the
-   requester, the request's `since`, and the openings and sender-key messages it holds.
-4. It sends `SERVE`'s bytes verbatim, 1:1, to that same ACI, as `ZrdtServed`.
-   **Nothing else carries an opening.** The only constructor of a `ZrdtServed` with content takes a
-   `SERVE` reply, and a lint rule forbids building one elsewhere.
+3. The host calls `ADDRESSED` to learn which openings to load, then `SERVE` with: the requester's
+   ACI (the Signal-authenticated sender of the request); the identity key Desktop holds for the
+   requester now; `since` = the request's `since` joined with this responder's own `since` for that
+   account (§6.5); the wanted digests or catch-up; the export flag (§4.5); this device's own ACI,
+   its `live` digests and its disown set (A8 host state); and the openings it holds.
+4. **Seal and send.** `SERVE`'s reply starts with a header: the requester's ACI, the tag of the key
+   `SERVE` checked, and the request id. The only send path for it, `sendZrdtServed(reply, key)`,
+   checks that the key's tag equals the header's, takes the destination ACI from the header, seals
+   the entries to the key, and sends them 1:1:
+   ```
+   e      ← PrivateKey.generate()                       (fresh per reply)
+   k      = HKDF-SHA256(ikm = e.agree(K), salt = e_pub ‖ K,
+                        info = "zrdt-seal-v1" ‖ group ‖ requester aci ‖ request id)
+   sealed = AES-256-GCM-SIV(k, nonce, entries, aad = header ‖ e_pub)
+   ```
+   This is the construction sealed sender v1 uses for its sender layer (ephemeral key agreement
+   with the recipient's identity key), with libsignal's own primitives (`PrivateKey.agree`, HKDF,
+   `Aes256GcmSiv`). The requester opens it with `agree(his identity private key, e_pub)`, on any
+   device of his account. It gives confidentiality only: there is no authenticator and nothing
+   anyone can show later, so R2 is untouched. If Signal re-targets the session to another key (a
+   key accepted on receive, trusted for sending 5 s later, a 409/410 re-fetch), that key's holder
+   gets bytes it cannot open. A host bug that sends to the wrong account does the same.
+   Forward secrecy of a reply redirected that way rests on the requester's identity key, as for
+   sealed sender v1; against the passive server, the Signal session's ratchet still applies.
+5. **Nothing else carries an opening.** The only constructor of a `ZrdtServed` takes a `SERVE`
+   reply, and a lint rule forbids building one elsewhere. **A zrdt request never triggers the
+   sendLog re-send** (it encrypts to whatever key is current). Signal's own
+   `DecryptionErrorMessage` retry stays as stock, with its own 24 h exposure.
 
 ### 4.4 The requester, receiving a reply
 
-`ACCEPT_VIEW` takes the reply's entries:
-- **Addressed record with opening:** `zrdtd` checks the digest and `openingMatches`, accepts the
-  record and records its audience. Provenance is `live` if the reply came from the record's author,
-  otherwise `relayed(by)` until the author confirms it (A8). In Phase 3, if a sender-key message is
-  attached, the host first runs `groupDecrypt` on it under the author's address; on success the
-  copy is `live`. Side-effect fields are never applied (A8).
-- **After** (structure only): accepted as A8's structure-only relay. Shown as "a message from A
-  that was not sent to you".
-- **Boundary digest:** added to the boundary if not held.
+`ACCEPT_VIEW` takes a reply only if all of these hold, and the host drops it otherwise:
+- it opens under this account's identity key, and its header names this account's ACI;
+- its request id is one this device sent and has not completed (other devices of the account
+  receive the reply too, and drop it);
+- the responder's identity key has not changed since the request was sent (Desktop's identity
+  record and `keychange` events).
 
-A record is accepted when each link resolves to a held record or a boundary digest (§6.2).
+Then, per entry:
+- **Addressed record with opening:** `zrdtd` checks the digest and `openingMatches`, accepts the
+  record and records its audience. Provenance is `live` if the entry is marked **author copy** and
+  the reply came from the record's author; otherwise `relayed(by responder)` until the author
+  confirms it (A8), even when the responder is the author. Side-effect fields are never applied
+  (A8).
+- **After** (structure only): accepted as A8's structure-only relay. Shown as "content not
+  available from <responder>", never as "not sent to you": a responder that lacks the audience
+  cannot tell.
+- **Boundary digest:** added only to a relative store (§6.2), with the responder as voucher. A
+  closed store ignores boundary entries.
+
+A record is accepted when each link resolves to a held record or a boundary digest (§6.2). The gap
+marker for a wanted digest stays open until content arrives or the author itself has been asked.
 
 ### 4.5 Exports (A9, revised)
 
-- **To your own account:** everything (records, boundary, audiences, openings). This is the
+- **A9's exclusions hold for every export.** `SERVE`'s export flag refuses an opening whose
+  committed `DataMessage` has field 5 (`expireTimer`) non-zero or field 14 (`isViewOnce`) set
+  (`serve_export`, §7); deleted-for-everyone openings are already erased. `ACCEPT_VIEW` in import
+  mode refuses them too.
+- **To your own account:** everything else (records, boundary, audiences, openings). This is the
   analogue of Signal's link & sync.
-- **To another account X:** exactly `SERVE`'s reply for X, using X's identity key, with an empty
-  `since`. X imports it with `ACCEPT_VIEW`; records start `imported` (A9).
-- Sender-key messages are never exported; they are bound to a device.
+- **To another account X:** exactly `SERVE`'s reply for X, with X's identity key, the export flag,
+  and an empty `since`, sealed to that key. X imports it with `ACCEPT_VIEW`; records start
+  `imported` (A9); boundary digests are vouched by the giver and contained like any other (§6.2).
+- **Relays of disappearing messages** keep the message's timer, which starts when the receiver
+  reads it, as for a late live delivery. Optional: refuse relays of a disappearing message older
+  than its timer, measured from `sent_at`.
 
 ## 5. Serving: one rule, in Lean
 
-`serve c q held` answers requester `q = (aci, identity key, since)` from store `c`.
+`serve c me held q` answers requester `q = (aci, identity key, since, wanted, export)` from a
+responder with store `c`, own state `me` (its ACI, `live` digests, disown set, its own boundary,
+empty for a closed store, and `zrdtSentTo` for its own pre-upgrade records) and the openings
+`held`.
 
 - **`seats aud q`**: the audience `aud` has an entry with `q.aci` and the tag of `q`'s key, and
-  that tag is not zero.
+  that tag is not zero. **There is no author shortcut:** the author is seated by its own entry,
+  under its own key.
 - **`entitled q r`**: the audience of `r` seats `q`. The audience comes from a matching opening if
-  the host passed one, otherwise from `zrdtd`'s table.
-- **`vis`**: the records `q` is entitled to that are not reachable from `q.since` (§6.5).
+  the host passed one, otherwise from `zrdtd`'s table. For the responder's own `live`, undisowned
+  record with no field 201, and only then, it is the recorded `zrdtSentTo` list (§3.3).
+- **`since`**: the requester's `since` joined with the responder's own `since` for that account
+  (§6.5). Joining only shrinks what is shown.
+- **`vis`**: the records `q` is entitled to that are not reachable from `since`.
 - **`up`**: every stored record that reaches a `vis` record. It is computed by walking links
   backwards from the `vis` records (the existing `walk` and `linkedBy`).
 
-Each stored record `r` with digest `d` gives at most one entry:
+Each stored record `r` with digest `d`, and each digest `d` of the responder's own boundary, gives
+at most one entry:
 
 | Entry | When | Carries |
 |---|---|---|
-| `addressed r o s` | `r` is in `vis` | the record; the opening `o` only if it matches `r.commit` **and its own committed audience seats `q`**; the sender-key message `s` only together with such an opening |
-| `after r` | `r` is not in `vis` but is in `up` | the record (structure), never content |
-| `boundary d known` | `r` is not in `up`, and `d` is linked by an `up` record or is a head | the digest only. `known` says whether the audience is known (it excludes `q`) or unknown |
+| `addressed r o ac` | catch-up: `r` is in `vis`. Per-digest: `r` is wanted and `q` is entitled to it, whatever `since` says (`since` shapes structure, never content) | the record; the opening `o` only if it matches `r.commit`, **its own committed audience seats `q`** (or it has none and it is the responder's own `live`, undisowned record whose `zrdtSentTo` seats `q`), and, for an export, it neither disappears nor is view-once; `ac` (author copy) only if the responder wrote `r`, holds it `live`, and has not disowned it |
+| `after r` | `r` is not addressed but is in `up` | the record (structure), never content |
+| `boundary d` | `d` is a stored record that is neither, or a digest of the responder's own boundary; and `d` is linked by an `up` record or is a head (per-digest: any wanted digest) | the digest only. No `known` bit on the wire: it would tell the requester whether the responder itself was addressed |
 | nothing | otherwise | |
 
-- A **per-digest request** (gap repair, A8) uses the same classification, restricted to the
-  digests asked for. A boundary entry carries no links, so a requester cannot crawl older history.
-- **Channels for content, in order of preference.** Each one is Signal's or is gated by `SERVE`:
+- A **per-digest request** (gap repair, A8) gives an entry for each wanted digest only. A boundary
+  entry carries no links, so a requester cannot crawl older history.
+- **Channels for content, in order of preference.** Each one is Signal's or is gated by `SERVE`
+  and sealed:
   1. Signal's live delivery.
-  2. Signal's own retry: the author's sendLog re-send, within 24 h, to original addressees only.
-  3. Phase 3: a forwarded original sender-key message, attached by `SERVE` next to an addressed
-     opening. libsignal verifies the author's signature, and it decrypts only on a device that
-     holds the chain and missed that message.
-  4. The author's own `SERVE` reply. It arrives 1:1 from the author, so provenance is `live`. This
-     extends Signal's 24 h rule using the audience in the author's own opening, with the key-tag
-     check.
-  5. Another member's `SERVE` reply. Provenance is `relayed(by)` until the author confirms (A8).
+  2. Signal's own retry: `DecryptionErrorMessage` → sendLog re-send, within 24 h, to original
+     addressees only, under the key current then. Stock; zrdt never triggers it.
+  3. The author's own `SERVE` reply. Entries marked author copy arrive `live`. This extends
+     Signal's 24 h rule using the audience in the author's own opening, with the key check and the
+     seal.
+  4. Another member's `SERVE` reply. Provenance is `relayed(by)` until the author confirms (A8).
 - **Strict mode** (optional, per group, off by default): a `SERVE` flag that releases content only
-  from the author's own daemon. Non-authors then send structure only.
+  in author-copy entries. Everyone else then sends structure only.
 
 ## 6. A newcomer's store
 
 ### 6.1 Starting
 
-- Desktop starts when its own ACI appears in `membersV2`. A server lie here causes at most a
-  useless request (denial of service).
-- It sends `ZrdtResendRequest{catch-up, since}` 1:1 to the adder, who is the sender of the
+- Desktop starts catch-up whenever this device has no zrdt store for a group whose `membersV2`
+  includes its own ACI, not only on the transition into `membersV2`. A server lie here causes at
+  most a useless request (denial of service).
+- It sends `ZrdtServeRequest{requestId, catch-up, since}` 1:1 to the adder, who is the sender of the
   Signal-authenticated group-update message that added it (for an invite it accepted itself, any
   member). After a timeout it asks two more members.
 - Live records that arrive meanwhile wait in `zrdt_pending` (A7).
 
 ### 6.2 The relative store
 
-- `RawStore` gains a **boundary**: a set of digests, disjoint from the store's keys.
+- `RawStore` gains a **boundary**: a set of digests, disjoint from the store's keys, each with the
+  ACI that vouched for it.
 - **Accept, relative.** A record is accepted when each link is a held record or a boundary
   digest. Everything else about `accept` is unchanged.
 - **Heads** are the held digests and boundary digests that no held record links to.
 - **Promotion.** If a later reply delivers a full record for a boundary digest, and its links
   resolve, the record replaces the digest.
-- **A boundary digest is member-vouched.** The newcomer cannot check it, because he has no
-  preimage. A member who lies can hide a record from him (incompleteness, which is attributable to
-  that member and never a leak). Boundary digests are accepted only from `SERVE` replies that came
-  1:1 from a current member.
+- **Only a store created by catch-up is relative.** A closed store (a genesis member's, or one
+  restored from a closed own-account export) never takes a boundary digest: `ACCEPT_VIEW` gives it
+  full records only. So `fetched` stays exact for every closed store.
+- **Where boundary digests come from.** Only from replies that pass §4.4: solicited, sealed to this
+  account, from a responder whose key has not changed since the request. The responder's ACI is
+  stored as the voucher. A newcomer cannot check a digest (he has no preimage); a member who lies
+  can hide a record from him (incompleteness, attributable to that member, never a leak). An
+  import's boundary digests are vouched by the giver.
+- **Containment: a relative store's own records link only what a live record vouches for.** In a
+  relative store, `COMMIT` links only the heads that are held records with provenance `live` (its
+  own included) or author copy. Boundary digests and relayed or structure-only heads are left for
+  others to link; compare codes still use all heads. Reason: a digest nobody holds a preimage for
+  (a phantom), once linked by the holder, would leave every later record of his unresolvable at
+  every member. Under this rule a phantom can reach his records only through a record its author
+  sent live or as author copy, which is attributable to that author. A closed store keeps A7's
+  rule (links = heads): every link it holds resolves.
 
 ### 6.3 What he learns
 
@@ -297,39 +402,56 @@ Each stored record `r` with digest `d` gives at most one entry:
 - `after` structures (§6.4);
 - opaque digests for the older records those link to directly, and for older heads.
 
-The digests are pseudorandom, because the commitment is salted. No former member's ACI is shown.
-The count of boundary digests is visible; Signal already reveals a similar count through the
-iteration in a newcomer's sender-key distribution message.
+The digests are pseudorandom, because the commitment is salted. No former member's ACI is shown,
+including in quotes (§8.3). The count of boundary digests is visible; Signal already reveals a
+similar count through the iteration in a newcomer's sender-key distribution message.
 
-### 6.4 Honest races: `after` entries
+### 6.4 `after` entries
 
 A member whose client had not yet applied the add can write a message that links a message sent
 to the newcomer but is not itself sent to him. That message reaches him as an `after` entry:
 author and links, no content. It is needed to keep the newcomer's heads equal to the responder's.
-Nothing rejects the writer: there is no revision-order check.
+Nothing rejects the writer: there is no revision-order check. Honest races cause this; a server
+that delays the add in one author's view, which catch-up being best effort allows, prolongs it.
+Metadata only.
 
 ### 6.5 Removal and re-add
 
-- **Removal.** Signal resets the author's sender key at its next send. A removed member is not in
-  later audiences, and responders answer current members only.
-- **Re-add.** Desktop archives the old store (it stays readable in the UI), saves its heads as
-  `since`, and opens a new relative store. Every request it sends carries `since`. `SERVE` leaves
-  out records reachable from `since`, so the messages written while he was away come back as
+- **Removal.** Signal resets the author's sender key at its next normal group send, in the author's
+  view. A removed member is not in later audiences, and responders answer current members only.
+- **Re-add.** Desktop archives the old store (it stays readable in the UI) and opens a new relative
+  store. A catch-up request carries `since` = the old heads ∪ its pending digests ∪ digests it
+  knows are referenced but missing; a per-digest request carries the accepted heads. `SERVE` leaves
+  out of `vis` what `since` reaches, so the messages written while he was away come back as
   digests, not as `after` structures. Content stays per message: he gets content from both
-  intervals that he was sent, and none from the gap.
-- `since` rests on the requester's own client. A client that omits it learns the authors and
-  links, never the content, of the messages written while it was out (§12.6).
+  intervals that he was sent, and none from the gap. A per-digest repair of a message he was sent
+  and missed returns its content whatever `since` says.
+- **Responders contribute `since`.** Each responder records, per account, its own heads when it saw
+  that account removed in a Signal-authenticated group update (sent by the remover through Signal).
+  `SERVE` joins them with the request's `since`. Joining only shrinks `vis`, so it is always safe.
+  It covers a requester whose client never saw the removal (the server can hide it, since log
+  changes are unsigned), a device of his with no archive, and a request with no `since`.
+- **Other devices.** Replies are sealed to the account's identity key, so every device of the
+  account can open them; only the requesting device accepts (request id). The account's effective
+  `since` is the smallest of its devices', which responder `since` corrects.
+- **Residual.** If the server hides the removal from every responder as well, gap structure
+  (authors, links) can reach him. Metadata, never content.
 
 ### 6.6 Other devices of the same account
 
-Entitlement is per account. The identity key is per account (a linked Desktop receives it at
-provisioning), so a device linked later gets what its account was sent. This matches link & sync.
-That device still cannot decrypt old sender-key messages.
+Entitlement is per account, and the seal is to the account's identity key, which a linked Desktop
+receives at provisioning. So any device of the account, including one linked later or one whose
+history the user deleted, can pull what its account was sent from other members, at any time,
+for as long as they keep it. This is broader than link & sync (a one-time transfer chosen on the
+primary), though it stays inside R1: content goes only to the account it was sent to. Whether to
+narrow it is a decision for kejace (§12.2). That device still cannot decrypt old sender-key
+messages.
 
 ### 6.7 Compare codes
 
-By `served_heads` (§7), a newcomer who has caught up holds exactly the responder's heads. Compare
-codes between old and new members match.
+By `served_heads'` (§7), a member who has caught up from any responder, absolute or relative,
+holds exactly that responder's heads. `agree_rel` then compares his view with any closed store,
+and `agree_rel'` with a relative one. Compare codes between old and new members match.
 
 ## 7. What gets proved
 
@@ -339,45 +461,73 @@ the ones that stop a leak caused by a bug. **Spec theorems** are about the abstr
 
 ### 7.1 Running code: `core/Zrdt/Serve.lean` (Mathlib-free)
 
-The scratch `docs/join-v2/Serve.lean` proves the first three for an audience of plain ACIs. v2
-restates them with key tags.
+The scratch `docs/join-v2/Serve.lean` (round 1) proves the following with key tags, no author
+shortcut, per-digest mode, the export flag, author copies, the author-only path for pre-upgrade
+records, and a responder with its own boundary. It takes the responder's `RawStore`, so that a
+relative store can be modelled; Lane B takes the relative `CheckedStore`. Axioms: `propext`,
+`Classical.choice`, `Quot.sound`.
 
 - **`serve_content`** (proved in scratch). Every opening in a reply opens a stored record, and its
-  own committed audience seats the requester. Every sender-key message travels with such an
-  opening.
+  own committed audience seats the requester's ACI with the tag of the key passed to `SERVE`. The
+  only other case is the author's own pre-upgrade record: no field 201, the responder wrote it,
+  holds it `live`, has not disowned it, and its recorded `zrdtSentTo` seats the requester.
   ```lean
-  theorem serve_content (h : Entry.addressed r o s ∈ serve c q held) :
-      (∃ d, c.get d = some r) ∧ (s.isSome → o.isSome) ∧
-      ∀ op, o = some op → openingMatches r.group r.author r.commit op = true ∧
-        ∃ aud, audienceOf op = some aud ∧ seats aud q = true
+  theorem serve_content (he : Entry.addressed r o ac ∈ serve c me held q) :
+      ∃ d : Digest, c.map[d]? = some r ∧
+        ∀ op, o = some op → openingMatches r.group r.author r.commit op = true ∧
+          ((∃ aud, audienceOf op = some aud ∧ seats aud q.aci q.key = true) ∨
+            (audienceOf op = none ∧ authorCopy me d r = true ∧
+              ∃ aud, me.sentTo[d]? = some aud ∧ seats aud q.aci q.key = true))
   ```
-  It does not mention `zrdtd`'s audience table, `since`, or any host flag, so no stale cache, host
-  bug or server input can widen it.
-- **`serve_content_exact`** (to prove). With an empty `since`, the content in a reply is exactly
-  the reference set: the held openings that match their stored record and whose own audience
-  seats the requester, each with its held sender-key message. With any `since`, it is a subset.
-  This is the noninterference statement: content does not depend on the audience table, the
-  structure entries, or anything the server can influence.
+  It does not mention `zrdtd`'s audience table, `since`, or any host flag, so no stale cache or
+  host bug can widen it. The responder's own provenance and `zrdtSentTo` enter only in the second
+  case, which no member but the author can satisfy for a record in the author's name.
+- **`serve_content_complete`** (proved in scratch). The converse: every held opening that
+  `serveOpening` accepts (it opens its stored record, its audience as above seats `q`, and it passes
+  the export check) is in the reply
+  (in a catch-up when `since` does not reach it, in a per-digest repair when wanted). With
+  `serve_content`, this is **`serve_content_exact`**: the content of a reply is exactly that set.
+  It depends on the store, the held openings and `q`, and on nothing else: not the audience table,
+  not the structure entries, and the responder's provenance and `zrdtSentTo` only for its own
+  pre-upgrade records. **`q.key` is server-influenceable** (TOFU), so the
+  statement alone does not stop a key swap; the seal does (§4.3), and the key check of
+  `run_serve_content` ties the seal to the same key.
+- **`serve_authorCopy`** (proved in scratch). An entry marked author copy is a stored record the
+  responder wrote, holds `live`, and has not disowned.
+- **`serve_export`** (proved in scratch). In an export, no opening is ephemeral (field 5 or 14).
 - **`serve_after`** (proved in scratch). An `after` entry is a stored record in the backward walk
   from the `vis` records. With `mem_reachersOf` (`ClassifyFast.lean`), it reaches a record sent
-  to the requester.
-- **`serve_boundary`** (proved in scratch). A `known` boundary digest is a stored record whose
-  audience is known and does not seat the requester, and which is outside that walk, so it
-  reaches nothing sent to him. This is the "no hidden hole" statement for known audiences.
+  to the requester that `since` does not reach.
+- **`serve_boundary`** (proved in scratch). A boundary digest is a stored record outside that walk,
+  and if the requester is entitled to it, the request is a catch-up whose `since` reaches it; or it
+  is a digest of the responder's own boundary. This is the "no hidden hole" statement.
 - **`audience_bound`** (to prove). Two openings that both match one commit have the same
   audience, or SHA-256 has a collision. Proof: `openingMatches_spec`, `splitOpening_eq`, and
   injectivity of the fixed-size prefix.
 - **`run_serve_content`** (to prove, like `acceptRecord_accepted`, `Proto.lean:752`). The same as
-  `serve_content`, for the frame op `SERVE` that the daemon runs.
+  `serve_content` for the frame op `SERVE` that the daemon runs, plus: the reply header carries
+  `q.aci` and `keyTag q.key`, and the request id. The send wrapper takes the destination and the
+  seal key from it.
 - **`acceptRel` and the relative store** (to prove). `rawAcceptRel_built`, `acceptView_built`,
-  `acceptAll_sound` relative to the boundary, and `encode_reopens` for `zrdtS3`. With an empty
-  boundary they are today's theorems.
-- **Tests (`#guard`).** From `docs/join-v2/ServeTest.lean`: a pre-join record goes to Bob as a
-  boundary digest only; Carol's stale-view record goes as `after`; its author gets the content; an
-  opening whose audience was rewritten to add Bob fails `openingMatches` and is never served. New:
-  a requester with a changed identity key gets no content; a re-added member with `since` gets the
-  gap as digests; **H3 regression:** v1's rule (serve when `revision ≥ joinRev`) releases Carol's
-  revision-8 opening when the server says Bob joined at 5, and `serve` does not.
+  `acceptAll_sound` relative to the boundary, `encode_reopens` for `zrdtS3`, and `linkable_sub`:
+  the links `HEADS` returns for a relative store's `COMMIT` are heads that are held records in the
+  host's `live` set (§6.2). With an empty boundary they are today's theorems.
+- **Tests (`#guard`, checked in `docs/join-v2/ServeTest.lean`).** A pre-join record goes to Bob as a
+  boundary digest only; Carol's stale-view record goes as `after`; its author gets the content
+  under her own key; an opening whose audience was rewritten to add Bob fails `openingMatches` and
+  is never served. Round 1: a requester with a changed key gets no content; an author with a
+  changed key gets none of its own records (no author shortcut); a blocked member with the zero
+  tag gets nothing; only the responder's own live records are author copies, and a disowned
+  forgery in its name is not; a pre-upgrade record goes from its author to the accounts in its
+  `zrdtSentTo` (under the recorded key), and from no one else, nor from the author once it is not
+  `live`; an export refuses a disappearing message that a relay carries; a
+  re-added member with `since` gets the gap as digests and without it as `after`; a per-digest
+  repair returns content whatever `since` says, and a gap record only as a digest; five crawl
+  shapes of `since` and `wanted` never return the pre-join record's content or structure; the
+  **H3 regression** (v1's rule `revision ≥ joinRev` releases Carol's revision-8 record when the
+  server says Bob joined at 5, and `serve` does not); a second-generation newcomer served by a
+  former newcomer gets a closed view with the responder's heads, which the pre-round-1 `serve`
+  did not give.
 - **Satisfiable and rejecting.** A named example instantiates each main theorem on that store,
   with every hypothesis discharged. A named example proves that a reply giving Bob the pre-join
   opening violates `serve_content`'s conclusion.
@@ -385,28 +535,39 @@ restates them with key tags.
 ### 7.2 Spec: `Crdt/Merkle/Rel.lean`
 
 `docs/join-v2/Rel.lean` proves these Mathlib-free over abstract records and digests. They are to
-be ported onto the spec's `Record` and `Store`.
+be ported onto the spec's `Record` and `Store`. Lane A ports the primed (relative) versions; with
+an empty responder boundary they say what the unprimed ones say.
 
 - **`agree_rel`.** If a view (full records `F`, boundary `B`) has the same heads as a closed
   store `S`, every full record reachable from the view's heads is in `S`, or two records collide.
   **It needs no condition on `B`.** This is why v1's revision check and H2's two-level hash are
   not needed.
-- **`served_heads`.** The view a responder serves for any predicate `vis` (full records: those
-  reaching a `vis` record; boundary: the other records linked by them, or heads) has exactly the
-  responder's heads. No collision hypothesis.
-- **`served_closed`**, **`served_tight`.** The served view is closed relative to its boundary,
-  and tight when the store is.
-- **`served_boundary`.** A boundary digest is the digest of a record that reaches no `vis`
-  record.
-- **`newcomer_agree`.** A tight view with the served heads holds only records of the responder's
-  store, or two records collide.
-- **Bridge `serve_abs`** (to prove, with `walk_spec`). When every stored record's audience is
-  known, the records and boundary in `serve`'s reply are `ServedF` and `ServedB` for
-  `vis r := entitled q r ∧ ¬ reachable from q.since`.
+- **`agree_rel'`** (round 1). The same against a relative store `(S, BS)` closed relative to
+  `BS`: every reachable digest is a store digest whose view records are all in `S`, or a digest
+  only in `BS` that the view holds no record for, or two records collide. Hypothesis: the view
+  holds no full record for a digest the responder has only as boundary (true of every served view).
+- **`served_heads`, `served_heads'`.** The view a responder serves for any predicate `vis` (full
+  records: those reaching a `vis` record; boundary: the other digests of its view linked by them,
+  or heads) has exactly the responder's heads. No collision hypothesis. The primed version serves
+  the responder's own boundary digests too (`ServedB'`).
+- **`served_closed`, `served_closed'`; `served_tight`, `served_tight'`.** The served view is closed
+  relative to its boundary, and tight when the store is.
+- **`served_boundary`, `served_boundary'`.** A boundary digest is in the responder's view, and
+  every responder record with that digest reaches no `vis` record.
+- **`newcomer_agree`, `newcomer_agree'`.** A tight view with the served heads holds only records of
+  the responder's store, or two records collide.
+- **`Breaker2.relative_responder_not_closed`** (round 1). Serving only stored records from a
+  relative responder gives a view that is not closed; `relative_responder_closed'` shows the
+  primed boundary closes it.
+- **Bridge `serve_abs`** (to prove, with `walk_spec`). The records and boundary in `serve`'s
+  catch-up reply are `ServedF` and `ServedB'` for `vis r := entitled q r ∧ ¬ reachable from since`
+  and `BS` = the responder's boundary. Records with an unknown audience are covered: they are
+  boundary digests when linked by a served record or heads.
 
 ### 7.3 Advertised theorems
 
-- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` and `Serve.serve_content`.
+- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form) and
+  `Serve.serve_content`.
 - The 11 existing advertised theorems are restated for a store with a boundary. With an empty
   boundary they say exactly what they say today. The Comparator challenge is updated to match,
   and Comparator is run only as the final step.
@@ -415,9 +576,15 @@ be ported onto the spec's `Record` and `Store`.
 
 No theorem is needed. `COMMIT`, `encode`, `AUDIENCE` and `SERVE` take no secret key: the key tag
 hashes a public key. Anyone who holds the content, the nonce, the links and the public keys
-computes the same bytes. Deniability of live messages, sender-key messages and pairwise messages
-is libsignal's, in the trusted base. If the optional MAC tags of §10a are adopted, `tag_symmetric`
-states that the designated reader computes the same tag.
+computes the same bytes. The seal uses a fresh ephemeral key and the requester's public key and
+authenticates nothing. Deniability of live messages and pairwise messages is libsignal's, in the
+trusted base.
+
+**One limit, stated (round 1).** A compare or checkpoint code is the set of heads; through the
+commits it pins every message's content. Reading one aloud on a recorded channel ties the speaker
+to that transcript, much as a signature would. Compare codes inside Signal, where the channel is
+deniable. Short SAS-style codes, keyed by nonces exchanged in-band and deleted afterwards, would
+remove the limit (later option, §10.3).
 
 ## 8. Why no pre-join data reaches a newcomer
 
@@ -425,38 +592,57 @@ states that the designated reader computes the same tag.
 
 | Attack | Why it fails |
 |---|---|
-| Replay old group envelopes to the newcomer. | Signal: his sender-key state starts at the current iteration; earlier messages fail with "old counter". |
+| Replay old group envelopes to the newcomer. | Signal: sealed sender v2 gives him no per-recipient slice of an earlier message; pairwise sessions carry no earlier sender key; his sender-key state starts at the current iteration ("old counter"). |
 | Send a retry request in his name for old timestamps. | Signal: the sendLog has no row for him (`handleRetry.preload.ts:196-202`). |
 | H3: tell an offline responder that Bob joined at revision 5 when he joined at 9; Carol wrote at revision 8. | `SERVE` reads no revision. Carol's opening commits an audience without Bob, so he gets a boundary digest. |
-| Forge a zrdt request in a member's name. | Requests are 1:1 Signal messages; the requester ACI is Signal-authenticated. |
-| Swap a member's identity key and request his history. | The key tag in each audience is for the key the author held. Content goes only to a requester whose current key has that tag. |
-| Show a responder that a removed member is still a member. | He gets only content he was already sent. Residual: `after` structures of later records that build on his (§12.5). |
-| Show an author an early promotion of an invited or requesting account. | Signal itself then delivers that message live to him. zrdt never adds anyone to what Signal sent. Optional later fix: §10.3. |
+| Forge a zrdt request in a member's name. | Requests are Signal messages, authenticated to the identity key the responder currently trusts (TOFU; accepted on receive, trusted for sending after 5 s). A swapped key is the next row. |
+| Swap a member's identity key and request his history. | The tag in each audience is for the key the author held. `SERVE` seats only a requester whose current key has that tag, and the reply is sealed to that key, so a session Signal re-targets later (5 s trust, 409/410 re-fetch) carries bytes the swapped key cannot open. Residual, Signal's own: a key swapped before the author froze the message; Signal itself sent that message to it. |
+| Swap a member's key and send a newcomer an unsolicited reply with phantom digests or fake `after` records. | `ACCEPT_VIEW` takes only solicited replies sealed to the newcomer, from a responder whose key has not changed since the request. A relative store's own records never link a boundary digest or a relayed head (§6.2), so a phantom cannot stall his later records. Closed stores never take boundary digests. Residual, Signal's own: a key substituted on first contact impersonates that member, in Signal too. |
+| Show a responder that a removed member is still a member. | He gets only content he was already sent. Gap structure only if the server also hides the removal from that responder (§6.5). |
+| Hide a removal and re-add from the member's own client. | Responders join their own `since` (§6.5). |
+| Show an author an early promotion of an invited or requesting account. | Signal itself then delivers that message live to him. Access follows the author's own membership view at enqueue and freeze, exactly as Signal's live delivery does. Optional later fix: the `ATTESTED` gate (§10.3). |
+| Mark the newcomer unregistered at an author (`uuids404`). | He gets the zero tag: no zrdt content, as no Signal delivery. The quote rule checks seats, so no quote reaches him either (§8.3). Denial of service. |
+| Fail an author's key fetch at freeze. | Freeze waits and retries, as the send does; the zero tag only for a 404. |
 | Drop or delay anything. | Denial of service, a non-goal. Gaps show (A12). |
 
 ### 8.2 Against a buggy responder
 
-Whatever the host passes to `SERVE` (any opening, any cached audience, any `since`, any classification
-it expected), `serve_content` holds: an opening leaves only if it opens a stored record and its own
-committed audience seats the requester's ACI and key. A wrong opening fails `openingMatches`. A stale
-cache affects structure entries only. What remains a host duty:
-- pass the Signal-authenticated requester ACI and that requester's current identity key, and send
-  the reply to that same ACI;
-- send no opening outside a `SERVE` reply (one constructor, plus a lint rule);
+Whatever the host passes to `SERVE` (any opening, any cached audience, any `since`, any provenance
+or classification it expected), `serve_content` holds: an opening leaves only if it opens a stored
+record and its own committed audience seats the requester's ACI and key (or, for the author's own
+pre-upgrade record, its recorded `zrdtSentTo` does). A wrong opening fails `openingMatches`. A
+stale cache affects structure entries only. What remains a host duty:
+- pass the Signal-authenticated requester ACI and the identity key Desktop holds for him; the send
+  wrapper takes the destination and the seal key from the reply header, so a wrong destination
+  receives bytes it cannot open;
+- send no opening outside a sealed `SERVE` reply (one constructor, plus a lint rule), and never
+  re-send the sendLog on a zrdt request;
+- pass this device's true `live` set, disown set and `zrdtSentTo` lists (they decide author
+  copies and the pre-upgrade author path);
 - on the author's side, build the audience from the enqueue snapshot and the freeze-time members,
-  never from the members at a later send. A TypeScript test pins "recipients ⊆ audience ⊆
-  `membersV2` at enqueue ∪ {author}".
+  never from the members at a later send. A TypeScript test pins "seats ⊆ recipients at enqueue ∪
+  {author}" and "recipients at every attempt ⊆ audience ⊆ `membersV2` at enqueue ∪ {author}".
 
 ### 8.3 Signal paths the fork closes
 
-- **Edits.** An edit of message `r` goes to `r`'s audience intersected with the current recipients,
+- **Edits.** An edit of message `r` goes to `r`'s seats intersected with the current recipients,
   not to `conversation.getRecipients()` (`sendEditedMessage.preload.ts:135-139`). For a message with
-  an unknown audience, the fork uses the original `sendStateByConversationId` keys, read before
-  line 187 overwrites them.
-- **Quotes.** If some current recipient is not in the quoted message's audience, or the audience is
-  unknown, the quote is sent with its id and author only: no text, body ranges or attachments.
-  Receivers who hold the original fill these in from their own copy
-  (`messages/copyQuote.preload.ts:47-150`). A newcomer sees "original not found".
+  an unknown audience, the fork uses `zrdtSentTo` (§3.3).
+- **Quotes.** The rule runs in one place: on the return value of `uploadMessageQuote` in
+  `sendNormalMessage` (`jobs/helpers/sendNormalMessage.preload.ts:844-990`), on every attempt. That
+  function builds the wire quote for sends, edits and manual retries alike. `makeQuote`, which runs
+  when Reply is clicked or a draft is restored, is left alone, and so is the local `quote`
+  attribute (the author's own UI).
+  - For a quote of `p` inside message `n`: keep the text, body ranges and thumbnails only if every
+    account that can receive `n`'s content (this attempt's recipients, and `n`'s seats in field
+    201) is seated in `p`'s committed audience, by ACI. An unknown audience for `p` means strip.
+  - A stripped quote carries no text, body ranges, attachments, id or author. It carries `p`'s
+    record digest in a new `Quote` field 201 instead, so the newcomer learns neither the
+    pre-join timestamp nor a former member's ACI. Fork receivers that hold `p` refill the quote
+    from their own copy (`messages/copyQuote.preload.ts:47-150`); a newcomer sees "original not
+    found"; stock clients see a quote without an original.
+  - TypeScript tests: a reply drafted before an add and sent after it; an edit of a message whose
+    quote was stripped; a blocked member and a member seen as unregistered among the recipients.
 - **Not closed:** members on stock clients (Android, iOS, stock Desktop) in the same group still
   send edits and quotes the stock way. A member can paste old text on purpose.
 
@@ -471,32 +657,36 @@ as "shared history". Signal's own Forward already covers most of this need.
 
 | Property | From | Mechanism |
 |---|---|---|
-| A newcomer cannot read older group ciphertext | Signal | sender-key forward ratchet |
-| Retries go only to original addressees | Signal | sendLog by recipient (24 h) |
+| A newcomer cannot read older group ciphertext | Signal | sealed sender v2's per-recipient encapsulation and pairwise sessions; the sender-key forward ratchet |
+| Retries go only to original addressees | Signal | sendLog by recipient (24 h), to the key current then |
 | No history for new members | Signal | none exists |
-| Live messages authenticated, deniably | Signal | sealed-sender MACs, sender-key signatures |
-| History between one account's devices | Signal precedent | link & sync; zrdt own-account export |
-| zrdt relays, catch-up and exports send content only to addressees | **zrdt** | field 201 + `SERVE` (closes gap 1) |
-| A swapped identity key cannot collect relayed history | **zrdt** | key tag in field 201 (closes a gap zrdt itself would open) |
+| Live messages authenticated, deniably to outsiders | Signal | sealed-sender MACs; sender-key signatures (verifiable inside the group by every chain holder, kept only in flight) |
+| History between one account's devices | Signal precedent | link & sync; zrdt own-account export. zrdt's re-serving to any device of the account is broader (§6.6) |
+| zrdt relays, catch-up and exports send content only to seated accounts | **zrdt** | field 201 + `SERVE` (closes gap 1) |
+| That content is readable only under the key the author addressed | **zrdt, from Signal's primitives** | key tag + the seal: sealed sender v1's ephemeral-key layer with libsignal `agree`, HKDF, AES-GCM-SIV (closes gap 5) |
 | Edits and quotes carry no older content to newcomers | **fork rule** | §8.3 (closes gap 2) |
-| Access never depends on a server-asserted membership fact | **zrdt** | no revision read; the author's frozen audience (closes gap 3) |
-| Older links resolve without content; heads still compare | **zrdt** | relative store, boundary digests, `served_heads` (closes gap 4) |
-| A relayed copy authenticated as the author's | Signal, Phase 3 | forwarded sender-key message; otherwise A8 confirmation |
+| Access follows the author's own membership view at enqueue and freeze, as Signal's live delivery does, and no other server-asserted fact | **zrdt** | no revision read; the author's frozen audience; responder `since` only shrinks (closes gap 3) |
+| Older links resolve without content; heads still compare, across generations | **zrdt** | relative store, boundary digests vouched by named members and never linked by the holder, `served_heads'` (closes gap 4) |
+| A relayed copy shown as the author's | **Signal channel + zrdt rule** | the author's own sealed `SERVE` reply, author copy only for its own live, undisowned records; otherwise A8 confirmation |
 
 **Trusted** (beyond A12: the Lean compiler and runtime, the frame codec and protobuf scan, the
 TypeScript client, SHA-256 collision resistance):
-- **libsignal:** the forward ratchet; sender-key signatures and `groupDecrypt` checking them; the
-  deniability of sealed-sender MACs and of the uncertified sender-key signing key.
+- **libsignal:** sealed sender v2 and pairwise sessions; the forward ratchet; the deniability of
+  sealed-sender MACs; `PrivateKey.agree`, HKDF and AES-256-GCM-SIV, used by the seal.
 - **Signal's server, for one thing:** the member list an author's client sees when it composes and
-  freezes a message. Signal already trusts the server for exactly this. The server is not trusted
-  for revisions, join revisions, the change log, or anyone's join point.
-- **Identity keys:** Signal's trust-on-first-use and safety numbers. The key tag inherits them.
-- **New small parsers:** reading field 201 (`audienceOf`, `parseAddressees`) joins the unproved
-  protobuf scan.
-- **Host duties:** §8.2; the audience snapshot; `since` on the requester side; passing only
-  member `SERVE` replies to `ACCEPT_VIEW`; erasing sender-key messages with their message; not
-  applying side-effect fields of late copies; the edit and quote rules.
-- **Members:** honest or attributable. Boundary digests are member-vouched (§6.2).
+  freezes a message, including who it shows as unregistered. Signal already trusts the server for
+  exactly this. The server is not trusted for revisions, join revisions, the change log, or
+  anyone's join point.
+- **Identity keys:** Signal's trust-on-first-use and safety numbers. The key tag and the seal
+  inherit them: a key substituted before the author froze a message, or on first contact, is
+  Signal's exposure; after the check zrdt adds none.
+- **New small host code:** reading field 201 (`audienceOf`, `parseAddressees`) joins the unproved
+  protobuf scan; the seal module and `sendZrdtServed`, with a test vector; the solicited-reply
+  check.
+- **Host duties:** §8.2; the audience snapshot; `since` on both sides; passing only replies that
+  pass §4.4 to `ACCEPT_VIEW`; not applying side-effect fields of late copies; the edit and quote
+  rules; `zrdtSentTo` at Phase 1 start.
+- **Members:** honest or attributable. Boundary digests are vouched by named members (§6.2).
 
 ## 10. Wire, frame ops, staging
 
@@ -504,13 +694,18 @@ TypeScript client, SHA-256 collision resistance):
 
 ```proto
 message DataMessage { ...; optional bytes zrdtAudience = 201; }      // §3.2; inside the commitment
-message ZrdtResendRequest { bytes groupId = 1; repeated bytes digests = 2;
-                            repeated bytes since = 3; optional bool catchup = 4; }
-message ZrdtServed { bytes groupId = 1; bytes entries = 2; }           // SERVE's reply, verbatim
-message Content { oneof content { ...; ZrdtServed zrdtServed = 203; } }
+message Quote { ...; optional bytes zrdtRef = 201; }                 // §8.3; a stripped quote's target digest
+message ZrdtServeRequest { bytes groupId = 1; bytes requestId = 2;   // 16 random bytes
+                           repeated bytes digests = 3; repeated bytes since = 4;
+                           optional bool catchup = 5; }
+message ZrdtServed { bytes groupId = 1; bytes header = 2;            // requester aci ‖ key tag ‖ request id
+                     bytes ephemeralKey = 3; bytes sealed = 4; }     // SERVE's entries, sealed (§4.3)
+message Content { oneof content { ...; ZrdtServed zrdtServed = 203;
+                                       ZrdtServeRequest zrdtServeRequest = 204; } }
 ```
 
-`ZrdtResend` (Content 201) is no longer sent; it is still parsed. `ZrdtNotFound` (202) stays.
+`ZrdtResendRequest` (Content 200) and `ZrdtResend` (201) are no longer sent; both are still parsed,
+under the rules in §3.3. `ZrdtNotFound` (202) stays.
 
 ### 10.2 Frame ops (protocol 3)
 
@@ -518,31 +713,35 @@ message Content { oneof content { ...; ZrdtServed zrdtServed = 203; } }
 |---|---|---|---|
 | `0x07` | `ACCEPT` (changed) | as before ‖ `u8` (1: an opening follows) | as before; records the audience of a matching opening |
 | `0x11` | `AUDIENCE` | `u32` n ‖ n × (aci ‖ `u8` hasKey ‖ key(33)) | field-201 bytes; `TOO_LARGE` over 256 |
-| `0x12` | `SERVE` | chat ‖ own aci ‖ requester aci ‖ key(33) ‖ since (`digests`) ‖ `u8` all ‖ wanted (`digests`) ‖ `u8` strict ‖ held items (digest, opening?, author device and sender-key message?) | entries |
+| `0x12` | `SERVE` | chat ‖ own aci ‖ requester aci ‖ key(33) ‖ request id(16) ‖ since (`digests`) ‖ `u8` mode (catch-up, per-digest) ‖ wanted (`digests`) ‖ `u8` export ‖ `u8` strict ‖ live (`digests`) ‖ disown (`digests`) ‖ held items (digest, opening?, sent-to entries?) | header (requester aci ‖ key tag ‖ request id) ‖ entries |
 | `0x13` | `ADDRESSED` | chat ‖ aci ‖ key(33) | digests whose stored audience seats them |
-| `0x14` | `ACCEPT_VIEW` | chat ‖ entries | one result per entry |
+| `0x14` | `ACCEPT_VIEW` | chat ‖ voucher aci ‖ `u8` import ‖ entries | one result per entry |
+| `0x15` | `LINKABLE` | chat ‖ live (`digests`) | for a relative store, the heads that are held records in the live set (the `COMMIT` links, §6.2); for a closed store, `HEADS` |
 
 `OPEN`, `MERGE`, `SALVAGE` and `ENCODE` read and write `zrdtS3`. `HEADS` covers held records and
 boundary digests. Entry encoding: a kind byte, then the record bytes (addressed, after) or the
-digest and a `known` byte (boundary); an addressed entry adds an optional opening and an optional
-(author device, sender-key message).
+digest (boundary); an addressed entry adds an optional opening and an author-copy byte.
 
 ### 10.3 Staging
 
 - **Today (demo day):** nothing. The leak is latent in a static group.
-- **Phase 1, the content gate.** Field 201, `AUDIENCE`, `ACCEPT` with opening, `SERVE`,
-  `ADDRESSED`; `resend.preload.ts` calls `SERVE` and the stub is deleted; the edit and quote rules;
-  exports through `SERVE`. Needs no store change. A Phase-1 requester ignores boundary entries, so
-  a newcomer's pre-join links stay pending, as today. Membership changes no longer leak.
-- **Phase 2, the newcomer.** The relative store, `zrdtS3`, `ACCEPT_VIEW`, catch-up on self-add,
-  archive and `since` on re-add, the boundary row in the UI.
-- **Phase 3, Signal-native relays.** Sender-key message capture and forwarding. Defence in depth:
-  it covers only devices that hold the chain and missed the message, within libsignal's limits
-  (2000 skipped keys, 5 chain states, a 25,000-iteration jump), and not pairwise-fallback sends.
-- **Later, optional:** MAC tags (§10a); sharing by choice (§8.4); strict mode; an `ATTESTED`
-  gate, where the adder writes the add into a zrdt record on Signal's own group-update message and
-  authors address only members whose add they hold. That gate would close the early-promotion
-  residual of §8.1 at a cost in liveness.
+- **Phase 1, the content gate.** Field 201 with zero tags, `AUDIENCE`, `ACCEPT` with opening and the
+  backfill, `SERVE`, `ADDRESSED`; the seal and `sendZrdtServed`; request ids and the §4.4 checks;
+  `ZrdtServeRequest` (Content 204) and structure-only answers to legacy requests;
+  `resend.preload.ts` calls `SERVE`, the stub and the zrdt-triggered sendLog re-send are deleted;
+  `zrdtSentTo` for unknown-audience history; the edit and quote rules; exports through `SERVE` with
+  the export flag; the add-member gate. Needs no store change. A Phase-1 requester ignores boundary
+  entries, so a newcomer's pre-join links stay pending, as today. Membership changes no longer leak
+  once every fork member runs Phase 1.
+- **Phase 2, the newcomer.** The relative store, `zrdtS3`, `ACCEPT_VIEW`, `LINKABLE`, catch-up for
+  any device without a store, archive and `since` on re-add, responder `since` from
+  Signal-authenticated removals, the boundary row and the "content not available" labels in the UI.
+- **Phase 3: dropped in round 1** (§11).
+- **Later, optional:** sharing by choice (§8.4); strict mode; short SAS-style compare codes (§7.4);
+  narrowing re-serving to newcomers and gap repair (§6.6); an `ATTESTED` gate, where an author seats
+  only members whose add, promotion or approval it saw in a Signal-authenticated group-update
+  message from the actor, or performed itself. That gate would close the early-promotion residual of
+  §8.1 at a cost in liveness.
 
 ## 10a. Designated-verifier signatures: a signature that can't be used against you
 
@@ -550,42 +749,36 @@ digest and a `known` byte (boundary); an addressed entry adds an optional openin
 who received it that you sent it, and nobody else. Anything zrdt adds must keep that. In one line:
 if you need a signature from me, you can check it, and you can't use it against me.
 
-**v2 adds no signature, no MAC and no new key.** Every authentication is Signal's:
+**v2 adds no signature and no MAC.** Its one new use of a key is the seal (§4.3): a fresh
+ephemeral key per reply, agreed with the requester's public identity key, for confidentiality
+only. It authenticates nothing, so it can be used against no one. Every authentication is Signal's:
 
 | What is authenticated | How | Why it is deniable |
 |---|---|---|
 | A live message and its links | sealed-sender v1 static-key MAC, v2 per-recipient tag | both are MACs from identity-key agreement; the recipient could compute them |
-| A forwarded original (Phase 3) | the sender-key signature, checked by `groupDecrypt` | the signing key is fresh and uncertified; it reaches members only in a pairwise message. Forwarding creates no new artifact |
-| The author's own re-send | a 1:1 Signal message | pairwise, designated-verifier |
+| The author's own re-send (author copy) | a 1:1 Signal message from the author, carrying a sealed `SERVE` reply | pairwise, designated-verifier; the seal adds no authenticator |
 | A relayed copy | not authenticated by itself; `relayed(by)` until the author's own live messages confirm it (A8) | it proves nothing to anyone |
 
 The record, the commit and the key tags are hashes that anyone holding the inputs recomputes. They
-are no evidence of authorship. Two things would break deniability, and v2 does neither:
-signatures under identity keys, and treating the server-signed sealed-sender certificate as bound
-to content.
+are no evidence of authorship. Four things would break deniability, and v2 does none of them:
+signatures under identity keys; treating the server-signed sealed-sender certificate as bound to
+content; **keeping sender-key messages beyond flight** (any holder of the author's chain can verify
+them, and their plaintext includes field 200, so one kept message commits the author to the hashes
+of what she had seen); and **broadcasting per-member tags** (below).
 
-**If a gap ever needs tags: the MAC form (optional extension E1).** The gap is a copy that must be
-shown as the author's when no forwarded sender-key message works and the author is not online:
-pairwise-fallback sends, devices linked later, evicted keys, imports. The construction copies
-sealed-sender v2's per-recipient tag, with zrdt's own label:
-
-```
-K_AX  = HKDF-SHA256(ikm = X25519(a, X_pub), salt = group, info = "zrdt-dv-v1" ‖ A_aci ‖ X_aci)
-tag_X = HMAC-SHA256(K_AX, "zrdt-dv1" ‖ group ‖ A_aci ‖ X_aci ‖ digest)
-```
-
-- Desktop computes `X25519(a, X_pub)` with libsignal's `PrivateKey.agree` on its identity key pair
-  (`signalProtocolStore.getIdentityKeyPair`) and passes only `K_AX` to `zrdtd`. The raw agreement
-  never leaves one audited module, because sealed-sender v1 also uses it.
-- The author computes one tag per audience member and carries the list in field 200, outside the
-  digest (the tag is over the digest). Holders keep the list and attach `tag_X` when they relay to
-  X. X checks it and stores the result with the record, so a later key change does not orphan it.
-- **Deniable:** X derives the same `K_AX` from `(x, A_pub)`, so X could have made any tag that
-  passes his check. `reader_can_forge` in `docs/join-v2/Dvs.lean` proves the witness form; HMAC and
-  HKDF there match RFC 4231 and RFC 5869 vectors over the shipped SHA-256. Unforgeability by anyone
-  else is the PRF and Diffie–Hellman assumption, in the trusted base beside SHA-256.
-- **Never for access control.** A responder cannot check a tag made for someone else (H1).
-- Cost: 48 bytes per member per message (ACI plus tag), in field 200.
+**Why no tag scheme (E1, dropped in round 1).** v2 had kept, as an optional extension, sealed
+sender v2's per-recipient tag with zrdt's own label: the author computes
+`tag_X = HMAC(HKDF(X25519(a, X_pub)), … digest)` for every audience member and broadcasts the list
+in field 200. That is not deniable. Every holder Y of the list keeps `tag_X`, a value only the
+author or X can compute; a judge with Y's device and X's identity key (seized, or from X
+cooperating) checks it and concludes that Y's copy came from the author or X, and Y received it in
+the author's message. `reader_can_forge` (`docs/join-v2/Dvs.lean`) proves only that X could have
+made the tag; it does not account for an independent holder. Sealed sender v2 avoids this because
+the server splits the message and each recipient receives only its own tag. A tag sent only to X,
+1:1, adds nothing over the pairwise channel. So no tag construction is kept. (Lesser issues, now
+moot: the key bound ACIs but not identity keys, nothing rejected a non-contributory agreement, and
+`Dvs.lean`'s `pairKey` did not match the text.) `Dvs.lean` stays only as HMAC and HKDF over the
+shipped SHA-256, checked against RFC 4231 and RFC 5869 vectors.
 
 **The OR-proof form (not adopted, kept for reference).** A Schnorr OR-proof ("Alice or Carol knows
 the key") is publicly checkable, so anyone who sees it learns that Alice and Carol were talking:
@@ -632,8 +825,49 @@ theorem carol_forges (H : G → G → F) (c : F) (A : G) (rC eA sA : F) :
 
 ## 11. Design history: what was tried and why it changed
 
-- **v2 (this document, 2026-11-01): the author's audience, committed.** Chosen after a review that
-  checked v1's Signal facts against source and compared four designs (below).
+- **Review round 1 (2026-11-01, three breakers: 1, the malicious server; 2, R1, R2 and
+  completeness; 3, the Signal facts and R2).** v2's core held: field 201 is bound by the commitment, `SERVE` gates
+  content on the opening's own audience, H3 has nothing to work with, and every crawl attempt by a
+  newcomer failed. What broke, and what changed (the full list is §12.1):
+  - **The key check was a time-of-check/time-of-use race** (all three breakers). Desktop trusts a
+    changed key on receive at once and for sending after 5 s, and re-encrypts on 409/410, so a
+    server could have `SERVE` check the real key while the reply was encrypted to its own. Fix:
+    seal the reply to the checked key with sealed sender v1's ephemeral-key layer (§4.3), and drop
+    the zrdt-triggered sendLog re-send.
+  - **Phantom boundary digests** from a key-swapped "member" could stall a newcomer's records at
+    every member, and spread as holes. Fix: solicited, sealed replies from an unchanged key only;
+    closed stores never take boundary digests; a relative store links only live or author-copy
+    heads (§6.2).
+  - **Second-generation newcomers could not catch up** from a former newcomer (proved by breaker 2).
+    Fix: `SERVE` and `Rel.lean` take the responder's own boundary (`served_heads'`,
+    `served_closed'`, `agree_rel'`, all proved).
+  - **The author's own reply was always `live`,** so a forgery the author had accepted and
+    disowned (A8) reached a newcomer as confirmed. Fix: author copy only for the responder's own
+    live, undisowned records (`serve_authorCopy`).
+  - **The quote rule ran at Reply-click time** and checked the wrong set, and blocked or
+    seen-as-unregistered members were seated, so relays reached accounts Signal skips. Fix: the
+    quote rule at `uploadMessageQuote` against seats; the zero tag for members Signal does not send
+    to; stripped quotes point by digest (§8.3, §3.2).
+  - **Exports dropped A9's exclusions.** Fix: the export flag (`serve_export`).
+  - **Phase 3 (forwarding kept sender-key messages) dropped.** A kept sender-key message is a
+    signature any chain holder can verify, which fails R2; a genuine one paired with a made-up
+    record could launder forged content as `live`; and it consumed message keys. The author's own
+    sealed reply gives `live` provenance without it.
+  - **E1 (broadcast designated-verifier tags) dropped:** a broadcast tag list is a two-witness proof
+    (§10a). This also refutes H1's "deniably".
+  - **Overstated claims corrected:** the primary pre-join barrier is SSv2's per-recipient
+    encapsulation; removal rotation is view-relative; "Signal-authenticated" means TOFU; per-account
+    re-serving is broader than link & sync; sender-key signatures are not deniable inside the
+    group; "zrdt never adds anyone to what Signal sent" and "access never depends on a
+    server-asserted membership fact" were replaced by "access follows the author's own view at
+    enqueue and freeze".
+  - **Completeness fixes:** responder `since` (removal hidden from the requester); catch-up for any
+    device without a store; per-digest content regardless of `since`; author-only relays of
+    unknown-audience history from `zrdtSentTo`; the audience-table backfill; no freeze on a
+    transient key-fetch failure; "content not available from X" instead of "not sent to you";
+    a new request Content number and an add-member gate for mixed versions.
+- **v2 (2026-11-01): the author's audience, committed.** Chosen after a review that checked v1's
+  Signal facts against source and compared four designs (below).
 - **v1: the revision cut (Martin's draft, `af76d2f`).** Each record carried the sender's
   `groupV2.revision` (`zrdt3`); `joinRev(Bob)` came from the group's change log; a record was
   "post-join" if its revision was at least `joinRev`; `accept` checked that links never point to a
@@ -651,7 +885,7 @@ theorem carol_forges (H : G → G → F) (c : F) (A : G) (rC eA sA : F) :
 
   **Kept from v1:** the boundary (now opaque digests), catch-up (now `SERVE`), "content only by
   the author's choice" (now the author's committed audience, plus optional sharing), the §10a
-  principle and its proofs, and the review brief.
+  principle, and the review brief.
 - **Alternatives weighed in the v2 review** (four designs; three judges scored them 8–8.5, 4.5–7,
   4–6 and 4–7):
   - **Addressed-only audience in field 201.** Chosen: no format change, no new cryptography,
@@ -666,11 +900,13 @@ theorem carol_forges (H : G → G → F) (c : F) (A : G) (rC eA sA : F) :
     linked later; cross-account restore was dropped; the reset rule changes Signal's sender-key
     policy; the author's "addressed" flag read `sendStateByConversationId`, which edits overwrite
     (`sendEditedMessage.preload.ts:187`); and a format change to carry a label the server controls.
+    (Round 1 adds: the hash check would not have stopped phantom digests, and forwarded sender-key
+    messages fail R2.)
   - **Addressee slots:** per-member designated-verifier MACs hashed into the record, so a
     requester proves he was addressed and a newcomer can prove he was not. Not chosen: new
     cryptography on every message, 16 bytes per member in every record, a store refactor to
     leaf-or-full nodes, and a newcomer who sees the whole older message graph. Its MAC
-    construction is kept as E1 (§10a).
+    construction was kept as E1 until round 1 showed broadcast tags are not deniable.
   - **Attested membership:** the adder writes the add into a zrdt record carried on Signal's
     group-update message, and a member is entitled to records that causally follow his add. Not
     chosen: a server that withholds a removal record, or fakes a promotion to one member, makes
@@ -692,41 +928,75 @@ theorem carol_forges (H : G → G → F) (c : F) (A : G) (rC eA sA : F) :
 
 ## 12. Review brief
 
-The reviewer should try to break the design, then harden it. Known weak or unproven points:
+The reviewer should try to break the design, then harden it.
 
-1. **Decisions for kejace.**
-   - Blocked members in the audience. Including them (the default) hides block lists from the
-     other addressees, but lets a blocked member receive the author's messages through relays,
-     which stock Signal would not send him. Excluding them reveals the block list. Padded
-     designated-verifier slots (§11) would do both, at a high cost.
-   - The cap of 256 members. Above it there is no zrdt content path.
-   - Strict mode (author-only content) as the default, or off.
-2. **Boundary digests are member-vouched.** A newcomer cannot check them (§6.2). A two-level
-   record hash would let him, at the cost of a format change. Decide whether incompleteness
-   attributable to a member is acceptable.
-3. **Unknown audiences.** Records without field 201 have no zrdt content path. A newcomer gets
-   them as `known = false` boundary digests. `serve_boundary`'s "no hidden hole" covers only
-   known audiences.
-4. **The key tag.** A member who reinstalls without restoring his identity key loses relayed
-   history, as in Signal. A member the author had no key for gets a zero tag and only Signal's own
-   paths. Check that Desktop's stored key for the requester is the key that authenticated the
-   request.
-5. **Removed member plus a lying server.** If a responder is made to believe a removed member is
-   still a member, `SERVE` can give him `after` structures (authors and links, never content) of
-   later records that build on records he was sent.
-6. **`since` rests on the requester's client** (§6.5). Is metadata about the gap, never content,
-   an acceptable cost of a dishonest re-added member?
-7. **The author's member view is the server's.** An early promotion faked in one author's view
+### 12.1 Review round 1: dispositions
+
+| Attack (breaker) | Severity | Disposition |
+|---|---|---|
+| Key check vs. later encryption (TOCTOU) after a key swap (1, 2, 3) | major | fixed: seal to the checked key (§4.3); `serve_content_exact` reworded |
+| Phantom boundary digests from a key-swapped "member" (1) | major | fixed: §4.4 checks; closed stores take no boundary; linkable heads (§6.2) |
+| Second-generation newcomers cannot catch up (1, 2) | major | fixed: responder boundary in `SERVE` and `Rel.lean`, proved |
+| Phase 3 launders forged content as `live` (1, 3) | major | moot: Phase 3 dropped |
+| Author's own reply always `live` (2) | major | fixed: `serve_authorCopy` |
+| Quote rule at Reply-click time; quotes vs. blocked/unregistered (2, 3) | major | fixed: §8.3 at `uploadMessageQuote`, against seats |
+| Blocked and unregistered members seated (2, 3) | major | fixed: zero tag (§3.2) |
+| Exports drop A9's exclusions (2) | major | fixed: export flag, `serve_export` |
+| Phase 3 retained signatures fail R2 (3) | major | fixed: Phase 3 dropped; claims corrected |
+| E1 broadcast tags not deniable (3) | major | fixed: E1 dropped (§10a) |
+| Early promotion; overstated "never adds"/"never depends" claims (1) | minor | reworded (§8.1, §9); Signal-inherited; `ATTESTED` later |
+| Server hides removal and re-add; `since` gaps; device without archive (1, 2) | minor | fixed: responder `since`, wider requester `since`, catch-up without a store (§6.5) |
+| Zero or stale tags from transient failures (1) | minor | fixed: no freeze on transient failure (§4.1) |
+| Author shortcut in scratch; zrdt-triggered sendLog path (1, 3) | minor | fixed: shortcut removed (scratch re-proved); sendLog path removed |
+| Overstated Signal facts (1, 2, 3) | minor | corrected (§2, §9) |
+| Legacy history loses relays; false "not sent to you"; table not backfilled (1, 2) | minor | fixed: `zrdtSentTo` author path, labels, backfill (§3.3, §4.4); non-author legacy relays to kejace |
+| Export file injects boundary digests (1) | minor | fixed: vouched by the giver, contained (§6.2) |
+| Per-account re-serving broader than link & sync (2) | minor | reworded (§6.6); narrowing to kejace |
+| Host sends a reply to the wrong account; `known` bit; tags as metadata (2) | minor | fixed: header-derived destination and seal; `known` dropped; tags documented |
+| Stripped quotes leak pre-join timestamp and author (3) | minor | fixed: quote by digest (§8.3) |
+| Spoken compare codes bind content (3) | minor | limit stated (§7.4); SAS codes later |
+| Mixed versions still leak (3) | minor | fixed: Content 204, receiver drop rule, add-member gate; residual stated (§3.3) |
+| R2 residual of kept sender-key blobs (1); H3, field-201 rewrite, envelope replay, forged request, crawls, partial sends (1, 2, 3) | none | fail as written; kept as regression guards (§7.1) |
+
+### 12.2 Decisions for kejace
+
+- The cap of 256 members. Above it there is no zrdt content path.
+- Strict mode (author-only content) as the default, or off.
+- Unknown-audience (pre-upgrade) history: author-only content relays from `zrdtSentTo` (the
+  default), or also non-author relays in groups whose membership never changed since zrdt genesis.
+  The second restores "relayed by Bob" for the existing history, resting on each responder's own
+  membership view; it leaks if anyone was ever added in violation of §0.
+- Per-account re-serving (§6.6): keep it (the default), or serve catch-up content from other
+  accounts only to newcomers and gap repair, leaving full history to own-account export.
+
+### 12.3 Known weak or unproven points
+
+1. **Boundary digests are member-vouched.** A newcomer cannot check them (§6.2), and a hash check
+   would not help (H2). The containment rule keeps a phantom out of his own records unless a live
+   or author-copy record links it. Decide whether incompleteness attributable to a member is
+   acceptable.
+2. **Unknown audiences.** Records without field 201 have only the author path (§3.3). A newcomer
+   gets them as boundary digests.
+3. **The key tag and the seal rest on TOFU.** A key substituted before the author froze a message,
+   or on first contact with a newcomer, is Signal's exposure. A member who reinstalls without
+   restoring his identity key loses relayed history, as in Signal. Check that the key passed to
+   `SERVE` is the one Desktop holds for the requester, and that `sendZrdtServed` seals to it.
+4. **Removed member plus a server that lies to responders too** can give him gap structure
+   (authors and links, never content), §6.5.
+5. **The author's member view is the server's.** An early promotion faked in one author's view
    makes Signal deliver live to that account, and zrdt follows. The `ATTESTED` gate (§10.3) is the
    fix; it costs liveness.
-8. **The relative store re-proofs** (`BuiltRel`, relative accept order, `zrdtS3`, the 11
-   advertised theorems) are the critical path and are not started. Phase 1 does not need them.
-9. **Phase 3 is fragile.** Sender-key messages must be decrypted outside the envelope pipeline,
-   in the right queue; a consumed key turns the late original into a silently dropped duplicate
-   (`textsecure/MessageReceiver.preload.ts:2019-2023`). It must never be the only path.
-10. **The theorems in §7.** Check each statement against the code it names; check that
-    `serve_content_exact` really excludes every server-influenced input; check that the bridge
-    covers `since`.
+6. **The relative store re-proofs** (`BuiltRel`, relative accept order, `zrdtS3`, `linkable_sub`,
+   the 11 advertised theorems) are the critical path and are not started. Phase 1 does not need
+   them.
+7. **New host code in the trusted base:** the seal module, `sendZrdtServed`, the §4.4 checks, the
+   quote rule at `uploadMessageQuote`. Each needs a test (§8.3, §10.3), including a harness test
+   that swaps the requester's key and answers 409 between `SERVE` and the send. Not yet checked:
+   that `@signalapp/libsignal-client` 0.105.4 exposes HKDF and `Aes256GcmSiv` to Node (confirm on
+   the Mac mini; otherwise Desktop's own `Crypto.node.ts` primitives serve).
+8. **The theorems in §7.** Check each statement against the code it names; check that the bridge
+   covers `since` and the responder boundary; check that `run_serve_content` ties the header's
+   key tag to the key the wrapper seals to.
 
 Deliverable: a written verdict with the facts that decide it, and the smallest set of edits to this
 document that makes it sound.

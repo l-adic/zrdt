@@ -1,5 +1,9 @@
--- Reference copy from the JOIN_PLAN v2 review (2026-11-01). Not built by any lake target.
--- Optional extension E1 (§10a): HMAC/HKDF over the shipped SHA-256, deniability witness. No sorry.
+-- Reference copy from the JOIN_PLAN v2 review (2026-11-01). Not built by any lake target. No sorry.
+-- NOT ADOPTED (review round 1, JOIN_PLAN §10a): a tag list broadcast to the group is not deniable;
+-- every holder keeps tag_X, which only the author or X can compute (a two-witness proof), and
+-- `reader_can_forge` below does not account for an independent holder. Kept only for HMAC and
+-- HKDF over the shipped SHA-256 (RFC 4231 / RFC 5869 vectors). `pairKey` also differs from the
+-- construction v2 had written in §10a.
 import Zrdt.Commit
 
 /-!
