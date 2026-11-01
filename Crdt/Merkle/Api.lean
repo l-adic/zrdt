@@ -106,8 +106,7 @@ statement says (examples in Part 5):
   `confirmed` holds only up to the sender's boundary (`reach_transfer`). `open_iff` and
   `salvage_spec` are about the store-level `load` and `salvage` (the relative branch of
   `ChatStore.openStore` and `ChatStore.salvageChat`); `encode_open` is about the `zrdtS3` blob
-  (`ChatStore.encodeChat`, `openChat`), under the hypothesis of `ChatStore.encode_reopens` that
-  each recorded audience reads back.
+  (`ChatStore.encodeChat`, `openChat`).
 * `open_iff` and `salvage_spec` are about `decodeBlob` as it is, so they do not depend on how it
   frames records (lane T5: a count of `2^24` or more is refused, records in any order, repeats
   allowed). `classify_spec` is stated with the spec's `status`, which names one holder, the
@@ -128,8 +127,7 @@ For `classify_spec` also: `liveOf` (`Classify.lean`), `Status.toSpec` and the or
 (`RelSpec.lean`); `Acyclic` (`ClassifyFast.lean`); `inView`, `headsRel` (`Rel.lean`); `Tight`
 (`Defs.lean`); and the code they read: `RelStore` and its `accept`, `merge`, `load`, `salvage`,
 `boundaryDigests` (`core/Zrdt/RelStore.lean`), `classifyRaw` (`core/Zrdt/Provenance.lean`),
-`openChat`, `encodeChat`, `storedAudiences`, `parseAudience`, `writeAudience`
-(`core/Zrdt/ChatStore.lean`, `core/Zrdt/Serve.lean`).
+`openChat`, `encodeChat`, `storedAudiences` and what they call (`core/Zrdt/ChatStore.lean`).
 -/
 
 namespace Zrdt
@@ -700,14 +698,11 @@ theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
   RelStore.salvage_model h
 
 /-- **A relative store's blob opens as exactly that store** (records, heads, boundary and
-vouchers), with the audiences of its stored records, when each audience reads back
-(`parseAudience` of `writeAudience`, the hypothesis of `ChatStore.encode_reopens`). -/
-theorem RelStore.encode_open (c : RelStore) (auds : AudTable)
-    (hp : ∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
-      Serve.parseAudience (Serve.writeAudience a) = some a) :
+vouchers), with the audiences it recorded for its stored records (`storedAudiences`). -/
+theorem RelStore.encode_open (c : RelStore) (auds : AudTable) :
     openChat c.group (encodeChat (.relative c) auds) =
       .ok (.relative c, storedAudiences (.relative c) auds) :=
-  ChatStore.encode_reopens (.relative c) auds hp
+  ChatStore.encode_reopens (.relative c) auds
 
 /-- **Confirmation, with boundaries.** A live message links the digests `hs`, and the sender's
 store `d` holds a record for each. Each digest the links reach in your store `c` is reached in
@@ -844,7 +839,7 @@ example (c : RelStore) : ∃ s, RelStore.salvage c.group c.boundary c.records = 
 open Serve.Rel.Examples in
 example : openChat bobRel.group (encodeChat (.relative bobRel) ∅) =
     .ok (.relative bobRel, storedAudiences (.relative bobRel) ∅) :=
-  RelStore.encode_open _ _ (by simp)
+  RelStore.encode_open _ _
 
 -- `confirmed` on two closed stores (the empty boundary): a message linking `a1`.
 example : (∀ x, Reach hashSpec (abs Examples.s1) (#[hashRecord Examples.a1].toList.toFinset) x →

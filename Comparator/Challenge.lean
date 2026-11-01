@@ -159,9 +159,7 @@ theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
       StrictlySorted s.dropped :=
   sorry
 
-theorem RelStore.encode_open (c : RelStore) (auds : AudTable)
-    (hp : ∀ (d : Digest) (a : Array Serve.Seat), auds[d]? = some a →
-      Serve.parseAudience (Serve.writeAudience a) = some a) :
+theorem RelStore.encode_open (c : RelStore) (auds : AudTable) :
     openChat c.group (encodeChat (.relative c) auds) =
       .ok (.relative c, storedAudiences (.relative c) auds) :=
   sorry
