@@ -141,10 +141,12 @@ type Parts = { group: Bytes; commit: Bytes; links: Array<Digest>; author: Bytes 
 type Refused = { kind: 'malformed' | 'tooLarge' | 'wrongChat' } | { kind: 'collision'; digest: Digest };
 type Opened = { kind: 'ok' } | Refused | { kind: 'unverifiable'; unverifiable: Array<Digest>; missing: Array<Digest> };
 type Salvaged = { kind: 'ok'; dropped: Array<Digest>; missing: Array<Digest> } | Refused;
-type Accepted = { kind: 'accepted'; digest: Digest } | { kind: 'missing'; digests: Array<Digest> }
+type Accepted = { kind: 'accepted'; digest: Digest; record: Bytes }   // protocol 2: the record's bytes
+  | { kind: 'missing'; digests: Array<Digest> }
   | { kind: 'collision'; digest: Digest } | { kind: 'wrongChat' } | { kind: 'tooLarge' };
+type AcceptedRecord = Accepted | { kind: 'malformed' } | { kind: 'badOpening' };      // ACCEPT_RECORD
 type Provenance = { kind: 'live' } | { kind: 'relayed'; by: Bytes } | { kind: 'imported' };
-type Status = { kind: 'confirmedByAuthor' } | { kind: 'heldBy'; aci: Bytes }
+type Status = { kind: 'confirmedByAuthor' } | { kind: 'heldBy'; aci: Bytes }   // one ACI: the smallest holder
   | { kind: 'unconfirmed' } | { kind: 'notConfirmedByAuthor' };
 
 export interface ZrdtBackend {
@@ -153,9 +155,11 @@ export interface ZrdtBackend {
   create(chat: ChatKey, group: Bytes): Promise<void>;                          // NEW
   open(chat: ChatKey, group: Bytes, input: Bytes | Array<Bytes>): Promise<Opened>;       // OPEN
   salvage(chat: ChatKey, group: Bytes, input: Bytes | Array<Bytes>): Promise<Salvaged>;  // SALVAGE
-  commit(group: Bytes, author: Bytes, nonce: Bytes, dataMessage: Bytes): Promise<Bytes>; // COMMIT
+  commit(group: Bytes, author: Bytes, nonce: Bytes, dataMessage: Bytes)
+    : Promise<{ commit: Digest; opening: Bytes }>;                              // COMMIT (protocol 2)
   hash(r: Parts): Promise<Digest>;                                             // HASH
   accept(chat: ChatKey, r: Parts): Promise<Accepted>;                          // ACCEPT
+  acceptRecord(chat: ChatKey, record: Bytes, opening?: Bytes): Promise<AcceptedRecord>; // ACCEPT_RECORD
   heads(chat: ChatKey): Promise<Array<Digest>>;                                // HEADS
   has(chat: ChatKey, d: Digest): Promise<boolean>;                             // HAS
   get(chat: ChatKey, d: Digest): Promise<Parts | undefined>;                   // GET
@@ -234,7 +238,9 @@ re-encoded.
 already removed. It is the message content. It is not in the store; Desktop keeps it as an
 erasable message attribute (§6). Because field 15 is never in an opening, no stored attribute,
 relay or dump carries the group master key. When an opening is re-entered into Desktop, the host
-supplies the group context from the conversation itself. **[amendment]**
+supplies the group context from the conversation itself. **[amendment]** With protocol 2,
+`COMMIT` returns the opening together with the commitment, so the host never strips fields or
+concatenates bytes itself. **[amendment]**
 
 The digest (`ACCEPT`'s reply; SHA-256 over the record encoding) is **never sent**. Each receiver
 recomputes it. If the sender and receiver hash different bytes, the message simply fails to link
@@ -284,10 +290,12 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
   rendered (Desktop, Android, iOS and the mock phones; review §6).
 
 **[amendment]** `ZrdtResend` carries the record and, if the responder still holds it, its opening.
-The receiver checks `HASH(record) == digest` and `COMMIT(opening) == record.commit` (that is,
-`COMMIT` over the record's group and author and the opening's nonce and bytes). Signal
-authenticates the responder, not the author, and the hash only proves this is the record someone
-linked. So a relayed message is shown as "relayed by X" until its author confirms it (§5, §7).
+The record bytes are the ones `ACCEPT` returned (protocol 2), so the responder never re-encodes a
+record. The receiver passes both to `ACCEPT_RECORD` (`0x10`): `zrdtd` replies `MALFORMED` if the
+bytes are not exactly a record's encoding, `BAD_OPENING` if the opening's commitment (under the
+record's group and author) is not the record's commit or the opening holds field 15 or 200, and
+otherwise accepts the record as `ACCEPT` does. The returned digest names the gap it fills. Signal authenticates the responder, not the author, and the hash only proves this is
+the record someone linked. So a relayed message is shown as "relayed by X" until its author confirms it (§5, §7).
 
 Protos are compiled by `pnpm run generate` into `ts/protobuf/` **(verified placeholder dir)**;
 confirm the exact `generate:phase-0` script in `package.json` on checkout.
@@ -372,10 +380,11 @@ Touchpoints **(paths verified; line numbers from the review)**: **[amendment]**
 
 **Per incoming in-scope group message, in `MessageReceiver`:** **[amendment]**
 
-1. `commit = COMMIT(group, sender ACI, ZrdtMeta.nonce, DataMessage bytes)`, then
-   `ACCEPT(chat, {group, commit, links, author = sender ACI})`. The record is `live`.
-2. `ACCEPTED{digest}`: write the `zrdt_records` row; set `zrdtDigest` and `zrdtOpening` on the
-   message (§6); record the message's `disown` digests in `zrdt_provenance`; drain the pending
+1. `COMMIT(group, sender ACI, ZrdtMeta.nonce, DataMessage bytes)` returns the commitment and
+   the opening; then `ACCEPT(chat, {group, commit, links, author = sender ACI})`. The record is
+   `live`. **[amendment]** (protocol 2)
+2. `ACCEPTED{digest, record bytes}`: write the `zrdt_records` row with those bytes; set
+   `zrdtDigest`, and `zrdtOpening` to the opening `COMMIT` returned, on the message (§6); record the message's `disown` digests in `zrdt_provenance`; drain the pending
    buffer (retry every pending record whose links are now present); re-run `CLASSIFY`.
 3. `MISSING{digests}`: write the record to `zrdt_pending` and insert a `zrdt-gap` row above the
    message (§6). After `ZRDT_RESEND_DELAY_MS` (3–5 s in the demo), send
@@ -408,9 +417,11 @@ Touchpoints **(paths verified; line numbers from the review)**: **[amendment]**
    Send one `ZrdtNotFound{groupId, digests}` for the digests we lack. Replies are always 1:1;
    never broadcast a reply. A new request type is needed because `onRetryRequest` is only reached
    from `decryptionErrorMessage`, which names `(sentAt, senderDevice)`, not a digest.
-7. **On `ZrdtResend` (a relay):** check `HASH(record) == the requested digest` and
-   `COMMIT(opening) == record.commit`, then `ACCEPT` (it may itself report `MISSING`; go to
-   step 3). Provenance is `relayed(by responder)`, or `live` if the responder is the record's
+7. **On `ZrdtResend` (a relay):** `ACCEPT_RECORD(chat, record, opening)` **[amendment]**
+   (protocol 2). It may report `MISSING` (go to step 3; the relay waits in `zrdt_pending` with
+   its opening, which is checked again when it drains). On `BAD_OPENING`, call it again without
+   the opening and keep the record as structure only. `MALFORMED`: drop and log. The returned
+   digest names the gap row it fills. Provenance is `relayed(by responder)`, or `live` if the responder is the record's
    author. Re-enter Desktop at `handleDataMessage` with the opened DataMessage, through the scope
    predicate, with a flag that skips the zrdt step, and save it with the gap row's `received_at`.
    Show it as "relayed by Bob". An opening has no field 200 (`ZrdtMeta`, including `disown`), so a
@@ -426,6 +437,11 @@ Touchpoints **(paths verified; line numbers from the review)**: **[amendment]**
    (step 6). That copy arrives `live`, so the message is confirmed by its author at once. Limits:
    the sendLog serves only within 24 h. It is pruned per recipient on delivery receipts, but a
    member who never acknowledged the message keeps its entry, which is the case that matters.
+   **Wave 2 finding** **[amendment]**: on one machine the fast path is so quick that "relayed by
+   Bob" is replaced by "confirmed by Alice" before anyone (or `demo/smoke.ts`) sees it; the
+   status records `wasRelayed: true` with provenance `live`. Beat 2 needs the relayed label on
+   screen for a moment; wave 3 fixes this in the fork (TODO: hold the fast path for the demo
+   delay, or show "relayed by Bob, confirmed by Alice").
 10. **Upgrade, never drop.** If the author's live copy arrives later (fast path or a delayed
     original), it upgrades the provenance of the same digest to `live`. Desktop's
     `(sent_at, sourceServiceId)` dedupe (`handleDataMessage.preload.ts:124-145`) must never silently
