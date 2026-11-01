@@ -19,7 +19,8 @@ fails elaboration on ANY drift — a new axiom, `sorry` (`sorryAx`), or
 This module is a `defaultTarget`, so a plain `lake build` elaborates it and the
 gate cannot silently fail to run. Scope: the CvRDT merge algebra core and the
 G-Counter convergence headlines (from crdt-lean), and, for zrdt, exactly the
-`Api.lean` statements of docs/PLAN.md §3.2 plus `Zrdt.encode_injective`.
+`Api.lean` statements of docs/PLAN.md §3.2 and docs/JOIN_PLAN.md §7.3 plus
+`Zrdt.encode_injective`, and the proof obligations listed below.
 Extending the gate to the OR-Set / Sequence modules is a follow-up.
 -/
 
@@ -243,6 +244,18 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.encode_injective' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.encode_injective
 
+-- Added for joining (docs/JOIN_PLAN.md §7.3): `agree_rel` for a view with a boundary, and the
+-- content statements of `SERVE`, in `Api.lean` and `comparator.json` with the others.
+
+/-- info: 'Zrdt.CheckedStore.agree_rel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.agree_rel
+
+/-- info: 'Zrdt.CheckedStore.serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.serve_content
+
+/-- info: 'Zrdt.CheckedStore.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.serve_content_complete
+
 -- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
 -- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
 -- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
@@ -278,8 +291,32 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.Proto.commit_openingMatches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.commit_openingMatches
 
--- SERVE (docs/JOIN_PLAN.md §5, §7.1; `core/Zrdt/Serve.lean`, `core/Zrdt/Proto.lean`). Not
--- advertised yet: JOIN_PLAN §7.3 adds `serve_content` to `Api.lean` with the relative store.
+-- Join spec obligations, NOT advertised (docs/JOIN_PLAN.md §7.2, `Crdt/Merkle/Rel.lean`): a
+-- newcomer's relative store, with a boundary of opaque digests, served by a closed or a relative
+-- responder. They are proof obligations for the join work; `comparator.json` does not list them.
+
+/-- info: 'Crdt.Merkle.served_heads'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_heads'
+
+/-- info: 'Crdt.Merkle.served_closed'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_closed'
+
+/-- info: 'Crdt.Merkle.served_tight'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_tight'
+
+/-- info: 'Crdt.Merkle.served_boundary'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.served_boundary'
+
+/-- info: 'Crdt.Merkle.agree_rel'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.agree_rel'
+
+/-- info: 'Crdt.Merkle.newcomer_agree'' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Crdt.Merkle.newcomer_agree'
+
+-- SERVE (docs/JOIN_PLAN.md §5, §7.1; `core/Zrdt/Serve.lean`, `core/Zrdt/Proto.lean`). The
+-- running-code statements, NOT advertised under these names: `Api.lean` advertises
+-- `serve_content` and `serve_content_complete` as `CheckedStore.serve_content` and
+-- `CheckedStore.serve_content_complete`, stated over `abs c` (pinned above).
 
 /-- info: 'Zrdt.Serve.serveOpening_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Serve.serveOpening_spec
@@ -382,6 +419,34 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.Proto.run_newRelative' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Proto.run_newRelative
+
+-- The bridge from `SERVE` to the spec, NOT advertised (docs/JOIN_PLAN.md §7.2,
+-- `Crdt/Merkle/ServeAbs.lean`): the catch-up reply is the spec's served view, so a newcomer
+-- gets the responder's heads, a closed and tight view, and boundary digests that hide nothing.
+
+/-- info: 'Zrdt.Serve.serve_abs' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_abs
+
+/-- info: 'Zrdt.Serve.serve_heads' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_heads
+
+/-- info: 'Zrdt.Serve.serve_closed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_closed
+
+/-- info: 'Zrdt.Serve.serve_tight' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_tight
+
+/-- info: 'Zrdt.Serve.serve_boundary_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_boundary_spec
+
+/-- info: 'Zrdt.Serve.serve_after_reaches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Serve.serve_after_reaches
+
+/-- info: 'Zrdt.CheckedStore.closedRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.closedRel
+
+/-- info: 'Zrdt.CheckedStore.tightRel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.tightRel
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
