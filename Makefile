@@ -41,8 +41,8 @@ run: ## Check it: axiom gate, the 133 test vectors and a 1000-record round trip 
 	@$(need_lake)
 	@$(need_python)
 	@echo "[1/3] axiom gate: the 11 advertised theorems use only propext, Classical.choice, Quot.sound"
-	@lake -q exe axiom_check
-	@cd core && lake -q build zrdtd
+	@lake -q --log-level=error exe axiom_check
+	@cd core && lake -q --log-level=error build zrdtd
 	@echo "[2/3] test vectors: zrdtd, compiled from the verified Lean code, gives every expected reply"
 	@python3 vectors/zrdtd_client.py vectors $(ZRDTD) vectors/vectors.json
 	@echo "[3/3] smoke: 1000 chained records through zrdtd, then saved and opened again"
@@ -71,7 +71,7 @@ vectors: ## Regenerate vectors/vectors.json from core/Zrdt/Vectors.lean (printed
 	mv vectors/vectors.json.tmp vectors/vectors.json
 
 closure: ## Check the linked zrdtd: only Init, Std, zrdt-core (and runtime libuv) initializers, no lean_initialize; silent if OK
-	@cd core && lake -q build zrdtd
+	@cd core && lake -q --log-level=error build zrdtd
 	@bad=$$(nm $(ZRDTD) | awk '{print $$NF}' | sed 's/^_//' \
 	  | grep -E '^((runtime_|meta_)?initialize_[A-Za-z]|lean_initialize$$)|[Mm]athlib' \
 	  | grep -vE '^(runtime_|meta_)?initialize_(Init|Std|zrdt_x2dcore)(_|$$)|^initialize_libuv$$' \

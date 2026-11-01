@@ -185,7 +185,8 @@ make install && make run
 Prerequisites: [elan](https://github.com/leanprover/elan) (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`;
 it installs the Lean toolchain named in `lean-toolchain`), python3, git and curl. `make install`
 fetches the Mathlib build cache, runs `lake build` (proofs and axiom gate) and builds `zrdtd`;
-about 5 minutes with the cache. `make run` runs the axiom gate, replays the 133 test vectors
+about 10 minutes on a 32-core machine from a fresh clone, most of it compiling Mathlib's C code
+for the `axiom_check` executable (the cache has the proofs, not the native objects). `make run` runs the axiom gate, replays the 133 test vectors
 against `zrdtd` and round-trips a 1000-record chat through it. The GUI demo (Signal Desktop with
 zrdt) is in `l-adic/signal-desktop-zrdt`: `make install && make run` there.
 
