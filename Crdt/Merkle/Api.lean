@@ -81,6 +81,14 @@ statement says (examples in Part 5):
 * `encode_injective` is about the encoding of one record: no store, so no boundary, enters, and
   it holds for records of a relative store as stated.
 
+The statements added for joining, for a responder with a boundary (a former newcomer re-serves):
+
+* `RelStore.agree_rel`: `CheckedStore.agree_rel` with the store's own boundary as `BS`; a view
+  with the store's heads holds only its records under every digest its heads reach.
+* `RelStore.serve_content`, `RelStore.serve_content_complete`: as for a closed store; `SERVE`
+  reads only the stored records, the held openings and the request, so the boundary changes
+  nothing in which openings go.
+
 **Differences from the text of PLAN §3.2** (the same statements, made precise):
 
 * `u.map toSpec` (an array) is written `specOf u`, the set of the records of `u` (`Refine.lean`).
@@ -728,6 +736,57 @@ theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
         Crdt.Merkle.status hashSpec c.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
   RelStore.classify_model c hac facts d st
 
+/-- **Same heads, same history, against a store with a boundary** (JOIN_PLAN §6.7, §7.2). The
+statement of `CheckedStore.agree_rel` for a responder that is a former newcomer: take a view
+(records `F`, boundary digests `B`) with the same heads as the store `c` seen with its own
+boundary, holding no record whose digest `c` has only as a boundary digest. Then each digest
+reachable from the view's heads is the digest of a record of `c`, and every record of the view
+with that digest is in `c`; or a boundary digest of `c` only, for which the view holds no record.
+Or two records, across `c` and the view, have the same digest. Nothing is assumed about `B`. -/
+theorem RelStore.agree_rel (c : RelStore) {F : SpecStore} {B : Finset Digest}
+    (hh : headsRel hashSpec F B = headsRel hashSpec c.raw.abs (boundarySet c.boundary))
+    (hFB : ∀ r ∈ F, hashSpec r ∈ boundarySet c.boundary →
+      hashSpec r ∈ digests hashSpec c.raw.abs) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec c.raw.abs ∧ ∀ r ∈ F, hashSpec r = d → r ∈ c.raw.abs) ∨
+        (d ∈ boundarySet c.boundary ∧ d ∉ digests hashSpec c.raw.abs ∧
+          ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (c.raw.abs ∪ F) :=
+  agree_rel' hashSpec c.built.closedRel hh hFB
+
+/-- **Content goes only where its author sent it, from a store with a boundary** (JOIN_PLAN §7.1;
+a former newcomer re-serves). Every opening in `SERVE`'s reply to `q` from the relative store `c`
+opens a record of `c`, and that opening's own committed audience seats `q`'s account under the
+tag of `q`'s identity key. -/
+theorem RelStore.serve_content (c : RelStore) {me : Serve.Me} {held : Serve.HeldMap}
+    {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
+    toSpec r ∈ c.raw.abs ∧ openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true := by
+  obtain ⟨d, hget, h⟩ := Serve.serve_content he
+  exact ⟨((c.get_eq_some_iff).mp hget).1, h op rfl⟩
+
+/-- **Content that may go, goes, from a store with a boundary** (the converse of
+`RelStore.serve_content`). Take a record `r` of the relative store `c` and an opening the
+responder holds for it that `serveOpening` accepts. If the request is a catch-up whose `since`
+does not reach `r`, or a per-digest request that asks for `r`, then the reply carries `r` with
+that opening, marked author copy exactly when it is one. -/
+theorem RelStore.serve_content_complete (c : RelStore) {me : Serve.Me}
+    {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
+    (hr : toSpec r ∈ c.raw.abs) (hop : (held.getD (hashRecord r) {}).opening = some op)
+    (hs : Serve.serveOpening me q (hashRecord r) r op = true)
+    (hmode : (q.wanted = none ∧
+        ¬ Reach hashSpec c.raw.abs (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
+      ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
+    Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
+      Serve.serve c.raw me held q := by
+  have hget : c.raw.map[hashRecord r]? = some r := (c.get_eq_some_iff).mpr ⟨hr, rfl⟩
+  rcases hmode with ⟨hq, hn⟩ | ⟨ws, hq, hw⟩
+  · refine Serve.serve_content_complete hget hop hs (by simp [hq]) (.inr ?_)
+    rw [Bool.eq_false_iff, ne_eq, Std.ExtTreeSet.contains_iff_mem, Serve.Rel.mem_sinceReach]
+    exact fun h => hn h.2
+  · exact Serve.serve_content_complete hget hop hs (by simp [hq, hw]) (.inl (by simp [hq]))
+
 /-! ### Part 5 examples
 
 Each statement on a concrete store with every hypothesis discharged: Bob's relative store
@@ -861,5 +920,111 @@ example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
 -- `CLASSIFY` on a relative store runs `classifyRaw`.
 example (c : RelStore) (facts : Array Fact) :
     ChatStore.classify (.relative c) facts = classifyRaw c.raw facts := rfl
+
+/-- Carol's catch-up from Bob, a former newcomer: the reply of `SERVE` for Carol, under her key,
+from Bob's relative store, with his `boundaryDigests` as his boundary (as `zrdtd` passes it). -/
+def Examples.carolReply : List Serve.Entry :=
+  Serve.serve Serve.Rel.Examples.bobRel.raw Serve.Rel.Examples.meBob Serve.Examples.held
+    (Serve.Examples.rq Examples.carol Serve.Examples.keyCarol)
+
+example : Examples.carolReply = Serve.serve Serve.Rel.Examples.bobRel.raw
+    Serve.Rel.Examples.meBob Serve.Examples.held
+    (Serve.Examples.rq Examples.carol Serve.Examples.keyCarol) := rfl
+
+-- `RelStore.agree_rel` on Carol's view after that catch-up, against Bob's relative store (its
+-- boundary is not empty): `serve_heads_code` and `replyRecords_subset` discharge the hypotheses.
+open Serve.Rel.Examples in
+example : ∀ d, Reach hashSpec (Serve.replyRecords Examples.carolReply)
+      (headsRel hashSpec (Serve.replyRecords Examples.carolReply)
+        (Serve.replyBoundary Examples.carolReply)) d →
+    (d ∈ digests hashSpec bobRel.raw.abs ∧
+        ∀ r ∈ Serve.replyRecords Examples.carolReply, hashSpec r = d → r ∈ bobRel.raw.abs) ∨
+      (d ∈ boundarySet bobRel.boundary ∧ d ∉ digests hashSpec bobRel.raw.abs ∧
+        ∀ r ∈ Serve.replyRecords Examples.carolReply, hashSpec r ≠ d) ∨
+      CollisionIn hashSpec (bobRel.raw.abs ∪ Serve.replyRecords Examples.carolReply) :=
+  bobRel.agree_rel ((Serve.Rel.serve_heads_code _ _ _ _ rfl rfl).trans bobRel.heads_toFinset)
+    fun r hr _ => (mem_digests hashSpec).mpr ⟨r, Serve.Rel.replyRecords_subset _ _ _ _ hr, rfl⟩
+
+-- With the empty boundary, `RelStore.agree_rel` is `CheckedStore.agree_rel` with `BS = ∅`.
+example (c : CheckedStore) {F : SpecStore} {B : Finset Digest}
+    (hh : headsRel hashSpec F B = headsRel hashSpec (abs c) ∅)
+    (hFB : ∀ r ∈ F, hashSpec r ∈ (∅ : Finset Digest) → hashSpec r ∈ digests hashSpec (abs c)) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r = d → r ∈ abs c) ∨
+        (d ∈ (∅ : Finset Digest) ∧ d ∉ digests hashSpec (abs c) ∧ ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (abs c ∪ F) := by
+  have hb : boundarySet (RelStore.ofChecked c).boundary = ∅ := boundarySet_empty
+  have ha : (RelStore.ofChecked c).raw.abs = abs c := rfl
+  have := RelStore.agree_rel (RelStore.ofChecked c) (F := F) (B := B)
+  rw [hb, ha] at this
+  exact this hh hFB
+
+/-- Alice's message to herself, in a store with a boundary: accepted over the boundary digest of
+`a1` (`Examples.bnd`), as a newcomer's store would hold it. -/
+def Examples.selfRel : RelStore :=
+  ((RelStore.emptyWith Examples.group Examples.bnd (by decide)).accept
+    Serve.Examples.selfMsg.1).2
+
+/-- Its boundary is not empty: it is `a1`'s digest. -/
+theorem Examples.selfRel_boundary : Examples.selfRel.boundary = Examples.bnd := rfl
+
+example : Examples.selfRel.boundary ≠ ∅ := by
+  rw [Examples.selfRel_boundary]
+  intro h
+  have : hashRecord Examples.a1 ∈ Examples.bnd := by simp [Examples.bnd]
+  rw [h] at this
+  simp at this
+
+/-- The store holds Alice's message under its digest. -/
+theorem Examples.selfRel_get :
+    Examples.selfRel.get Serve.Examples.selfDigest = some Serve.Examples.selfMsg.1 := by
+  have hl : Serve.Examples.selfMsg.1.links = #[] := by decide +kernel
+  have hok : (rawAcceptRel (RelStore.emptyWith Examples.group Examples.bnd (by decide)).raw
+      Examples.bnd Serve.Examples.selfMsg.1).1 = .accepted Serve.Examples.selfDigest :=
+    rawAcceptRel_of_ok (by decide +kernel) (by simp [Rec.WellSized, hl, maxLinks])
+      (by simp [hl]) (by simp [RelStore.emptyWith]) (by simp [RelStore.emptyWith, maxRecords])
+  have h := rawAcceptRel_accepted
+    (c' := (rawAcceptRel (RelStore.emptyWith Examples.group Examples.bnd (by decide)).raw
+      Examples.bnd Serve.Examples.selfMsg.1).2) (Prod.ext hok rfl)
+  show (rawAcceptRel (RelStore.emptyWith Examples.group Examples.bnd (by decide)).raw
+      Examples.bnd Serve.Examples.selfMsg.1).2.map[Serve.Examples.selfDigest]? =
+    some Serve.Examples.selfMsg.1
+  rw [h.2.2.1]
+  exact Std.ExtTreeMap.getElem?_insert_self
+
+/-- **`RelStore.serve_content_complete`, satisfied.** Alice's catch-up from her store with a
+boundary carries her message with its opening, as an author copy. -/
+theorem Examples.selfRel_served : Serve.Entry.addressed Serve.Examples.selfMsg.1
+    (some Serve.Examples.selfMsg.2) true ∈
+    Serve.serve Examples.selfRel.raw Serve.Examples.selfMe Serve.Examples.selfHeld
+      (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice) := by
+  have hac : Serve.authorCopy Serve.Examples.selfMe (hashRecord Serve.Examples.selfMsg.1)
+      Serve.Examples.selfMsg.1 = true := by
+    have hauth : Serve.Examples.selfMsg.1.author = Examples.alice := by decide +kernel
+    simp [Serve.authorCopy, Serve.Examples.selfMe, Serve.Examples.selfDigest, hauth]
+  have := Examples.selfRel.serve_content_complete (held := Serve.Examples.selfHeld)
+    ((Examples.selfRel.get_eq_some_iff).mp Examples.selfRel_get).1
+    (by simp [Serve.Examples.selfHeld, Serve.Examples.selfDigest])
+    (Serve.Examples.selfMsg_serveOpening false false)
+    (.inl ⟨rfl, by simpa [Serve.Examples.rq] using Examples.not_reach_empty _ _⟩)
+  rwa [hac] at this
+
+-- `RelStore.serve_content` applied to that reply.
+example : toSpec Serve.Examples.selfMsg.1 ∈ Examples.selfRel.raw.abs ∧
+    openingMatches Serve.Examples.selfMsg.1.group Serve.Examples.selfMsg.1.author
+      Serve.Examples.selfMsg.1.commit Serve.Examples.selfMsg.2 = true ∧
+    ∃ aud, Serve.audienceOf Serve.Examples.selfMsg.2 = some aud ∧
+      Serve.seats aud (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice).aci
+        (Serve.Examples.rq Examples.alice Serve.Examples.keyAlice).key = true :=
+  Examples.selfRel.serve_content Examples.selfRel_served
+
+-- `RelStore.serve_content` rejects a reply from that store that gives Carol the opening of Alice's
+-- message to herself: its committed audience seats only Alice.
+example : ¬ ∃ aud, Serve.audienceOf Serve.Examples.selfMsg.2 = some aud ∧
+    Serve.seats aud Examples.carol Serve.Examples.keyCarol = true := by
+  rintro ⟨aud, ha, hs⟩
+  have hno : (Serve.audienceOf Serve.Examples.selfMsg.2).any
+      (Serve.seats · Examples.carol Serve.Examples.keyCarol) = false := by decide +kernel
+  simp [ha, hs] at hno
 
 end Zrdt

@@ -290,6 +290,17 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.RelStore.classify_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.RelStore.classify_spec
 
+-- The statements added for joining, for a responder with a boundary (Part 5 of `Api.lean`).
+
+/-- info: 'Zrdt.RelStore.agree_rel' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.agree_rel
+
+/-- info: 'Zrdt.RelStore.serve_content' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.serve_content
+
+/-- info: 'Zrdt.RelStore.serve_content_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.RelStore.serve_content_complete
+
 -- Proof obligations, NOT advertised. These are the spec theorems the advertised statements
 -- above stand on (`Crdt/Merkle/Chat.lean`), and facts about the shipped code's commitment
 -- checks (`core/Zrdt/Proto.lean`, `core/Zrdt/Commit.lean`). They are pinned so that a `sorry` or a new
@@ -628,6 +639,15 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 /-- info: 'Zrdt.Serve.Rel.Examples.reply_boundary' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.Serve.Rel.Examples.reply_boundary
+
+-- `RelStore.serve_content_complete` with its hypotheses met on a store with a non-empty boundary
+-- (Part 5 of `Api.lean`).
+
+/-- info: 'Zrdt.Examples.selfRel_served' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Examples.selfRel_served
+
+/-- info: 'Zrdt.Examples.selfRel_get' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Examples.selfRel_get
 
 
 def main : IO Unit :=

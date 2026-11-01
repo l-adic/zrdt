@@ -583,8 +583,16 @@ an empty responder boundary they say what the unprimed ones say.
   (`promoted_cycle`, `promoted_cycle_not_tight`, `Crdt/Merkle/RelSpec.lean`; for SHA-256 this
   needs a record whose digest was written into a record its own digest depends on).
   `BuiltRel.acyclic_of_unpromoted` gives it when no record was promoted. `confirmed` holds up to
-  the sender's boundary. The Comparator challenge and `comparator.json` list them; Comparator is
-  run only as the final step.
+  the sender's boundary. `CLASSIFY` on a relative store is `classifyRaw`; `RelStore.classify_spec`
+  rests on `Crdt/Merkle/ClassifyRel.lean`, which proves it for any raw store whose records sit
+  under their digests and have no cycle.
+- The three statements new for joining also hold for a responder with a boundary (a former
+  newcomer re-serves): `RelStore.agree_rel` (its own boundary as `BS`), `RelStore.serve_content`
+  and `RelStore.serve_content_complete` (examples on Bob's relative store and on a store holding
+  Alice's message over the boundary digest of `a1`). The bridge `serve_abs` for a relative
+  responder is `Serve.Rel.serve_abs` (`Crdt/Merkle/ServeAbsRel.lean`).
+- The Comparator challenge and `comparator.json` list all of these; Comparator is run only as the
+  final step.
 
 ### 7.4 Deniability
 
@@ -1020,8 +1028,10 @@ member's client would need a new wire field.
    makes Signal deliver live to that account, and zrdt follows. The `ATTESTED` gate (§10.3) is the
    fix; it costs liveness.
 5. **The relative store re-proofs** (`BuiltRel`, relative accept order, the boundary in `zrdtS3`,
-   `linkable_sub`, the 11 advertised theorems) are the critical path of stage 3 and are not
-   started. Stages 1 and 2 do not need them.
+   `linkable_sub`, the 11 advertised theorems) are done: `core/Zrdt/RelStore.lean`,
+   `Crdt/Merkle/RelSpec.lean`, `RelRefine.lean`, `ClassifyRel.lean`, `ServeAbsRel.lean`, and
+   `Api.lean` Part 5 (§7.3). Check the two new hypotheses (no cycle; no record below the other
+   store's boundary) against the counterexamples that force them.
 6. **New host code in the trusted base:** the seal module, `sendZrdtServed`, the §4.4 checks, the
    quote rule at `uploadMessageQuote`. Each needs a test (§8.3, §10.3), including a harness test
    that swaps the requester's key and answers 409 between `SERVE` and the send. Not yet checked:

@@ -179,4 +179,33 @@ theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
         Crdt.Merkle.status hashSpec c.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
   sorry
 
+theorem RelStore.agree_rel (c : RelStore) {F : SpecStore} {B : Finset Digest}
+    (hh : headsRel hashSpec F B = headsRel hashSpec c.raw.abs (boundarySet c.boundary))
+    (hFB : ∀ r ∈ F, hashSpec r ∈ boundarySet c.boundary →
+      hashSpec r ∈ digests hashSpec c.raw.abs) :
+    ∀ d, Reach hashSpec F (headsRel hashSpec F B) d →
+      (d ∈ digests hashSpec c.raw.abs ∧ ∀ r ∈ F, hashSpec r = d → r ∈ c.raw.abs) ∨
+        (d ∈ boundarySet c.boundary ∧ d ∉ digests hashSpec c.raw.abs ∧
+          ∀ r ∈ F, hashSpec r ≠ d) ∨
+        CollisionIn hashSpec (c.raw.abs ∪ F) :=
+  sorry
+
+theorem RelStore.serve_content (c : RelStore) {me : Serve.Me} {held : Serve.HeldMap}
+    {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
+    (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
+    toSpec r ∈ c.raw.abs ∧ openingMatches r.group r.author r.commit op = true ∧
+      ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
+  sorry
+
+theorem RelStore.serve_content_complete (c : RelStore) {me : Serve.Me}
+    {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
+    (hr : toSpec r ∈ c.raw.abs) (hop : (held.getD (hashRecord r) {}).opening = some op)
+    (hs : Serve.serveOpening me q (hashRecord r) r op = true)
+    (hmode : (q.wanted = none ∧
+        ¬ Reach hashSpec c.raw.abs (q.since ++ q.ownSince).toList.toFinset (hashRecord r)) ∨
+      ∃ ws, q.wanted = some ws ∧ hashRecord r ∈ ws) :
+    Serve.Entry.addressed r (some op) (Serve.authorCopy me (hashRecord r) r) ∈
+      Serve.serve c.raw me held q :=
+  sorry
+
 end Zrdt

@@ -25,7 +25,10 @@
     "Zrdt.RelStore.salvage_spec",
     "Zrdt.RelStore.encode_open",
     "Zrdt.RelStore.confirmed",
-    "Zrdt.RelStore.classify_spec"
+    "Zrdt.RelStore.classify_spec",
+    "Zrdt.RelStore.agree_rel",
+    "Zrdt.RelStore.serve_content",
+    "Zrdt.RelStore.serve_content_complete"
   ],
   "definition_names": [],
   "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"]
