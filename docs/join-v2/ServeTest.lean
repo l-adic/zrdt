@@ -1,3 +1,7 @@
+-- PORTED (2026-11-01, branch join-core): these tests (as `#guard`s and kernel-checked examples) now live in core/Zrdt/Serve.lean
+-- (frame ops in core/Zrdt/Proto.lean, protocol 3), greenfield: field 201 is required, so the
+-- zrdtSentTo path and the legacy tests below are gone there. This file is kept only as the
+-- review-round-1 reference; do not build on it.
 -- Reference copy from the JOIN_PLAN v2 review, revised after review round 1 (2026-11-01). Not
 -- built by any lake target. Checked with `lake env lean` against core/ at a079b3e, placed under
 -- core/Scratch/. No sorry.
