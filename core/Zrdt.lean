@@ -1,3 +1,12 @@
+import Zrdt.Digest
+import Zrdt.Sha256
+import Zrdt.Record
+import Zrdt.Encode
+import Zrdt.Store
+import Zrdt.Provenance
+import Zrdt.Commit
+import Zrdt.Proto
+
 /-!
 # Zrdt: the shipped code (no Mathlib)
 
