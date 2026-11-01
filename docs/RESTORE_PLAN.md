@@ -102,7 +102,9 @@ their `disown` lists): **[amendment]**
   reached shortly, and fakes that only the dump holds: a member's message reaches a record only
   if that member holds it (`reach_implies_held`). A fake that some member links live is held by
   every member who accepted that message; `disown` handles it (below).
-- `heldBy(X)`: a live record of member X, who is not the author, reaches it.
+- `heldBy(X)`: a live record of member X, who is not the author, reaches it. If several members
+  do, `X` is the one with the smallest ACI in byte order, so every device names the same member.
+  **[amendment]** (lane T5)
 - `confirmedByAuthor`: `authorConfirmed r` holds, that is, some `live` record from `r.author`
   reaches r, and no `live` record from `r.author` lists r in `disown`. By `authorConfirmed_sound`,
   if the author's client is honest (it disowns every accepted record in its own name that it did
@@ -187,8 +189,9 @@ looks the same. **[amendment]**
   confirmation can be withdrawn by a later `disown`. **[amendment]**
 - **Resend by digest** (`ZrdtResendRequest` / `ZrdtResend` / `ZrdtNotFound`, `APP.md` §5) stays
   for small gaps. The request goes 1:1 to the referencing sender first, then to the group; replies
-  are 1:1. A relayed record is checked (`HASH` of its parts equals the digest, and
-  `COMMIT(opening) == record.commit`), stored as `relayed(by X)`, and shown "relayed by X" until
+  are 1:1. A relayed record is checked by `zrdtd` (`ACCEPT_RECORD`, protocol 2: the bytes are a
+  record, and the opening's commitment is the record's commit, else `BAD_OPENING`) **[amendment]**,
+  stored as `relayed(by X)`, and shown "relayed by X" until
   it is author-confirmed. It never applies side-effect fields such as the sender's `profileKey`
   (`handleDataMessage.preload.ts:687-711`). The author fast path (the author re-sends the original
   through Desktop's sendLog, `handleRetry.preload.ts:236-245`) arrives `live`. `ZrdtNotFound` is
@@ -382,7 +385,10 @@ holds), is not added and backs nothing: "latest" depends on arrival order, which
 controls. The foreign marker is `CLASSIFY`'s `notConfirmedByAuthor`, backed by `classify_spec` and
 `authorConfirmed_sound`. **[amendment]**
 
-**To prove or add** (phase A, `Chat.lean`): **[amendment]**
+**Status (2026-11-01):** all of the following are now proved in `Chat.lean`, and the code-level
+statements in `Api.lean` are proved and gated (`PLAN.md` §3.2, §10). **[amendment]**
+
+**To prove or add** (phase A, `Chat.lean`; done): **[amendment]**
 
 - `authorConfirmed_sound`. The definition: `authorConfirmed r` holds when some `live` record from
   `r.author` reaches r, and no `live` record from `r.author` lists r in `disown`. The statement in
