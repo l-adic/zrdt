@@ -10,6 +10,10 @@ name = "mathlib"
 scope = "leanprover-community"
 rev = "v4.35.0"
 
+[[require]]
+name = "zrdt-core"
+path = "core"
+
 [[lean_lib]]
 name = "Crdt"
 

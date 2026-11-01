@@ -1,0 +1,12 @@
+# zrdt-core: the code that ships. Init and Std only; no `require`, so it builds without Mathlib
+# (docs/PLAN.md §3.1, rule 12). The proofs about it live in the root package's `Crdt` library.
+name = "zrdt-core"
+version = "0.1.0"
+defaultTargets = ["Zrdt", "zrdtd"]
+
+[[lean_lib]]
+name = "Zrdt"
+
+[[lean_exe]]
+name = "zrdtd"
+root = "Zrdtd.Main"
