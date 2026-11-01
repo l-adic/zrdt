@@ -517,4 +517,216 @@ theorem byAuthor_entry (c : CheckedStore) (live : Std.ExtTreeMap Digest (Array D
     · rintro ⟨l, dis, hd, ⟨y, hy, ha⟩, he⟩; exact ⟨l, dis, y, hd, hy, ha, he⟩
     · rintro ⟨l, dis, y, hd, hy, ha, he⟩; exact ⟨l, dis, hd, ⟨y, hy, ha⟩, he⟩
 
+/-! ## The newest live records -/
+
+/-- What `reachSet` returns, as spec reachability from one of the start digests. -/
+theorem mem_reachSet_code (c : CheckedStore) (S : Array Digest) {x : Digest} :
+    x ∈ c.reachSet S ↔ x ∈ c.raw.map ∧ ∃ k ∈ S, Reach hashSpec (abs c) {k} x := by
+  rw [CheckedStore.reachSet_iff, mem_digests]
+  constructor
+  · rintro ⟨y, hy, rfl⟩
+    obtain ⟨hy, hR⟩ := (mem_reachSet hashSpec).mp hy
+    obtain ⟨k, hk, hR⟩ := (reach_iff_exists hashSpec).mp hR
+    exact ⟨c.mem_digests_abs.mp ((mem_digests hashSpec).mpr ⟨y, hy, rfl⟩), k,
+      Array.mem_toList_iff.mp (List.mem_toFinset.mp hk), hR⟩
+  · rintro ⟨hx, k, hk, hR⟩
+    obtain ⟨y, hy, rfl⟩ := (mem_digests hashSpec).mp (c.mem_digests_abs.mpr hx)
+    refine ⟨y, (mem_reachSet hashSpec).mpr ⟨hy, ?_⟩, rfl⟩
+    exact (reach_iff_exists hashSpec).mpr ⟨k, List.mem_toFinset.mpr (Array.mem_toList_iff.mpr hk), hR⟩
+
+/-- The live records of a list that no other of them reaches through a link (the `newest` of
+`authorViews`). -/
+def newestOf (c : CheckedStore) (ls : Array Digest) : Array Digest :=
+  ls.filter (!(c.reachSet (ls.flatMap fun l => ((c.get l).map (·.links)).getD #[])).contains ·)
+
+/-- `viewOf`'s third field is `reachersOfAll` of the newest records. -/
+theorem viewOf_reachesAllLive (c : CheckedStore) (p : Array Digest × DigestSet) :
+    (viewOf c p).reachesAllLive = reachersOfAll (linkedBy c) (newestOf c p.1) := rfl
+
+/-- A stored record reaches `l` if it reaches a link of the record stored under `l`. -/
+theorem reach_of_link (c : CheckedStore) {l k x : Digest} {y : Rec} (hy : c.get l = some y)
+    (hk : k ∈ y.links) (hR : Reach hashSpec (abs c) {k} x) : Reach hashSpec (abs c) {l} x := by
+  obtain ⟨hy', rfl⟩ := (c.get_eq_some_iff).mp hy
+  refine Reach.trans hashSpec ?_ hR
+  refine .link hy' ?_ (mem_toSpec_links.mpr hk)
+  rw [hashSpec_toSpec]
+  exact .head (Finset.mem_singleton_self _)
+
+/-- **Every record of the list is reached from a newest one**, since a store has no cycles. -/
+theorem exists_newest (c : CheckedStore) (ls : Array Digest) :
+    ∀ l ∈ ls, ∃ n ∈ newestOf c ls, Reach hashSpec (abs c) {n} l := by
+  classical
+  have hac : Acyclic hashSpec (abs c) := acyclic_of_acceptBuilt hashSpec c.acceptBuilt c.built.no_collision
+  -- The records that reach `l` through at least one link.
+  let A : Digest → Finset SpecRec := fun l =>
+    (abs c).filter fun x => ∃ k ∈ x.links, Reach hashSpec (abs c) {k} l
+  intro l hl
+  obtain ⟨n, hn⟩ : ∃ n, (A l).card = n := ⟨_, rfl⟩
+  induction n using Nat.strong_induction_on generalizing l with
+  | _ n ih =>
+    by_cases hb : (c.reachSet (ls.flatMap fun l => ((c.get l).map (·.links)).getD #[])).contains l
+    · rw [Std.ExtTreeSet.contains_iff_mem, mem_reachSet_code] at hb
+      obtain ⟨-, k, hk, hR⟩ := hb
+      obtain ⟨l', hl', hk'⟩ := Array.mem_flatMap.mp hk
+      cases hy : c.get l' with
+      | none => rw [hy] at hk'; simp at hk'
+      | some y =>
+        rw [hy] at hk'
+        simp only [Option.map_some, Option.getD_some] at hk'
+        have hRl : Reach hashSpec (abs c) {l'} l := reach_of_link c hy hk' hR
+        obtain ⟨hy', rfl⟩ := (c.get_eq_some_iff).mp hy
+        have hlt : (A (hashRecord y)).card < (A l).card := by
+          apply Finset.card_lt_card
+          rw [Finset.ssubset_iff_of_subset]
+          · refine ⟨toSpec y, Finset.mem_filter.mpr ⟨hy', k, mem_toSpec_links.mpr hk', hR⟩, ?_⟩
+            intro hmem
+            obtain ⟨-, k', hk'', hR'⟩ := Finset.mem_filter.mp hmem
+            exact hac _ hy' k' hk'' (by rw [hashSpec_toSpec]; exact hR')
+          · intro x hx
+            obtain ⟨hx, k', hk'', hR'⟩ := Finset.mem_filter.mp hx
+            exact Finset.mem_filter.mpr ⟨hx, k', hk'', Reach.trans hashSpec hR' hRl⟩
+        obtain ⟨m, hm, hRm⟩ := ih _ (hn ▸ hlt) _ hl' rfl
+        exact ⟨m, hm, Reach.trans hashSpec hRm hRl⟩
+    · refine ⟨l, Array.mem_filter.mpr ⟨hl, by simpa using Bool.eq_false_iff.mpr hb⟩,
+      .head (Finset.mem_singleton_self _)⟩
+
+/-- The newest records are records of the list. -/
+theorem mem_of_mem_newestOf {c : CheckedStore} {ls : Array Digest} {n : Digest}
+    (h : n ∈ newestOf c ls) : n ∈ ls :=
+  (Array.mem_filter.mp h).1
+
+/-- **What `viewOf` says reaches every live record**: for a non-empty list, `reachesAllLive` is
+`some s`, and a stored digest is in `s` exactly when it reaches every record of the list. -/
+theorem viewOf_reachesAllLive_spec (c : CheckedStore) (p : Array Digest × DigestSet)
+    (hne : ∃ l, l ∈ p.1) : ∃ s, (viewOf c p).reachesAllLive = some s ∧
+      ∀ x ∈ c.raw.map, x ∈ s ↔ ∀ l ∈ p.1, Reach hashSpec (abs c) {x} l := by
+  obtain ⟨hnone, hsome⟩ := reachersOfAll_spec (linkedBy c) (newestOf c p.1)
+  rw [viewOf_reachesAllLive]
+  cases hr : reachersOfAll (linkedBy c) (newestOf c p.1) with
+  | none =>
+    obtain ⟨l, hl⟩ := hne
+    obtain ⟨n, hn, -⟩ := exists_newest c p.1 l hl
+    rw [hnone.mp hr] at hn
+    simp at hn
+  | some s =>
+    refine ⟨s, rfl, fun x hx => ?_⟩
+    rw [hsome s hr x]
+    constructor
+    · intro h l hl
+      obtain ⟨n, hn, hRn⟩ := exists_newest c p.1 l hl
+      exact Reach.trans hashSpec ((mem_reachersOf c).mp (h n hn)).2 hRn
+    · intro h n hn
+      exact (mem_reachersOf c).mpr ⟨hx, h n (mem_of_mem_newestOf hn)⟩
+
+/-! ## The author views, in the words of the spec -/
+
+/-- Universal form of `exists_liveRecords`. -/
+theorem forall_liveRecords {c : CheckedStore} {facts : Array Fact} {a : Aci}
+    {Q : SpecRec → Prop} :
+    (∀ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a, Q y) ↔
+      ∀ l x dis, (liveFacts facts)[l]? = some dis → c.get l = some x → x.author = a →
+        Q (toSpec x) := by
+  have := (exists_liveRecords (c := c) (facts := facts) (a := a) (Q := fun y => ¬ Q y)).not
+  push Not at this
+  exact this
+
+/-- An author has no view exactly when they have no stored live record. -/
+theorem authorViews_none (c : CheckedStore) (facts : Array Fact) (a : Aci) :
+    (authorViews c (liveFacts facts))[a]? = none ↔
+      liveRecords hashSpec (abs c) (liveOf facts) a = ∅ := by
+  have E := byAuthor_entry c (liveFacts facts) a
+  rw [authorViews_eq, Std.ExtTreeMap.getElem?_map, Option.map_eq_none_iff,
+    Finset.eq_empty_iff_forall_notMem]
+  constructor
+  · intro h y hy
+    rw [h] at E
+    obtain ⟨l, x, dis, hl, hx, ha, -⟩ :=
+      (exists_liveRecords (Q := fun _ => True)).mp ⟨y, hy, trivial⟩
+    exact E.1 l ⟨dis, x, hl, hx, ha⟩
+  · intro h
+    cases hb : (List.foldl (authorStep c) ∅ (liveFacts facts).toList)[a]? with
+    | none => rfl
+    | some p =>
+      rw [hb] at E
+      obtain ⟨-, -, l, dis, x, hl, hx, ha⟩ := E
+      obtain ⟨y, hy, -⟩ := (exists_liveRecords (Q := fun _ => True)).mpr
+        ⟨l, x, dis, hl, hx, ha, trivial⟩
+      exact absurd hy (h y)
+
+/-- **An author's view, in the words of the spec.** For a stored digest `d`: the view reaches
+`d` exactly when one of the author's live records reaches it; it disowns `d` exactly when one of
+them disowns it; and its `reachesAllLive` is `some s`, where `d` is in `s` exactly when `d`
+reaches every live record of the author. -/
+theorem authorViews_some (c : CheckedStore) (facts : Array Fact) {a : Aci} {v : AuthorView}
+    (hv : (authorViews c (liveFacts facts))[a]? = some v) {d : Digest} (hd : d ∈ c.raw.map) :
+    (v.reach.contains d = true ↔ ∃ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a,
+      Reach hashSpec (abs c) {hashSpec y} d) ∧
+    (v.disowned.contains d = true ↔ ∃ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a,
+      (hashSpec y, d) ∈ (liveOf facts).disown) ∧
+    ∃ s, v.reachesAllLive = some s ∧ (s.contains d = true ↔
+      ∀ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a, Reach hashSpec (abs c) {d} (hashSpec y)) := by
+  have E := byAuthor_entry c (liveFacts facts) a
+  rw [authorViews_eq, Std.ExtTreeMap.getElem?_map] at hv
+  obtain ⟨p, hp, rfl⟩ := Option.map_eq_some_iff.mp hv
+  rw [hp] at E
+  obtain ⟨h1, h2, l0, hl0⟩ := E
+  have hget : ∀ l x, c.get l = some x → hashRecord x = l := fun l x hx =>
+    ((c.get_eq_some_iff).mp hx).2
+  refine ⟨?_, ?_, ?_⟩
+  · show (c.reachSet p.1).contains d = true ↔ _
+    rw [Std.ExtTreeSet.contains_iff_mem, mem_reachSet_code, exists_liveRecords]
+    constructor
+    · rintro ⟨-, k, hk, hR⟩
+      obtain ⟨dis, x, hl, hx, ha⟩ := (h1 k).mp hk
+      exact ⟨k, x, dis, hl, hx, ha, by rw [hashSpec_toSpec, hget k x hx]; exact hR⟩
+    · rintro ⟨l, x, dis, hl, hx, ha, hR⟩
+      rw [hashSpec_toSpec, hget l x hx] at hR
+      exact ⟨hd, l, (h1 l).mpr ⟨dis, x, hl, hx, ha⟩, hR⟩
+  · show p.2.contains d = true ↔ _
+    rw [Std.ExtTreeSet.contains_iff_mem, h2, exists_liveRecords]
+    constructor
+    · rintro ⟨l, dis, x, hl, hx, ha, he⟩
+      exact ⟨l, x, dis, hl, hx, ha, by
+        rw [hashSpec_toSpec, hget l x hx, ← mem_liveFacts_disown hl]; exact he⟩
+    · rintro ⟨l, x, dis, hl, hx, ha, he⟩
+      rw [hashSpec_toSpec, hget l x hx, ← mem_liveFacts_disown hl] at he
+      exact ⟨l, dis, x, hl, hx, ha, he⟩
+  · obtain ⟨s, hs, hspec⟩ := viewOf_reachesAllLive_spec c p ⟨l0, (h1 l0).mpr hl0⟩
+    refine ⟨s, hs, ?_⟩
+    rw [Std.ExtTreeSet.contains_iff_mem, hspec d hd, forall_liveRecords]
+    constructor
+    · intro h l x dis hl hx ha
+      rw [hashSpec_toSpec, hget l x hx]
+      exact h l ((h1 l).mpr ⟨dis, x, hl, hx, ha⟩)
+    · intro h l hl
+      obtain ⟨dis, x, hld, hx, ha⟩ := (h1 l).mp hl
+      have := h l x dis hld hx ha
+      rwa [hashSpec_toSpec, hget l x hx] at this
+
+/-- **The holders, read from the views**: `b` holds `r` exactly when `b` is not its author and
+`b`'s view reaches `r`'s digest. -/
+theorem mem_holders_iff (c : CheckedStore) (facts : Array Fact) {r : Rec} {d : Digest}
+    (hd : hashRecord r = d) (hdm : d ∈ c.raw.map) (b : Aci) :
+    b ∈ holders hashSpec (abs c) (liveOf facts) (toSpec r) ↔
+      b ≠ r.author ∧ ∃ w, (authorViews c (liveFacts facts))[b]? = some w ∧
+        w.reach.contains d = true := by
+  have hhr : hashSpec (toSpec r) = d := by rw [hashSpec_toSpec, hd]
+  rw [holders, Finset.mem_image, hhr]
+  constructor
+  · rintro ⟨x, hx, rfl⟩
+    obtain ⟨hx, hl, ha, hR⟩ := Finset.mem_filter.mp hx
+    have hxl : x ∈ liveRecords hashSpec (abs c) (liveOf facts) x.author :=
+      Finset.mem_filter.mpr ⟨hx, hl, rfl⟩
+    cases hw : (authorViews c (liveFacts facts))[x.author]? with
+    | none =>
+      rw [authorViews_none] at hw
+      rw [hw] at hxl
+      simp at hxl
+    | some w =>
+      exact ⟨ha, w, rfl, ((authorViews_some c facts hw hdm).1).mpr ⟨x, hxl, hR⟩⟩
+  · rintro ⟨hne, w, hw, hR⟩
+    obtain ⟨y, hy, hRy⟩ := ((authorViews_some c facts hw hdm).1).mp hR
+    obtain ⟨hy, hl, ha⟩ := Finset.mem_filter.mp hy
+    exact ⟨y, Finset.mem_filter.mpr ⟨hy, hl, ha ▸ hne, hRy⟩, ha⟩
+
 end Zrdt
