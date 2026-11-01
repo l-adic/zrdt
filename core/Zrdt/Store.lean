@@ -24,14 +24,29 @@ record with the same digest is stored), `wrongChat` or `tooLarge`. Adding a reco
 stored is `accepted` and changes nothing.
 
 **`acceptAll`** adds a batch of records in whatever order lets their links resolve (Kahn's
-algorithm). It returns the records it could not add. `open` (load a saved store), `salvage` (load
-the part that checks) and `merge` (add another store) are built on it.
+algorithm, then one more pass over what is left). It returns the records it could not add. `open`
+(load a saved store), `salvage` (load the part that checks) and `merge` (add another store) are
+built on it.
 
 **Observers:** `heads`, `has`, `get`, `reachSet` (the records reached by following links) and
 `encode` (the store blob, records sorted by digest).
 
 The maps are `Std.ExtTreeMap` and `Std.ExtTreeSet`: two maps with the same contents are equal
 (`=`), whatever order the records were added in.
+
+**Proved here** (no Mathlib; the statements about the spec model are in `Crdt`):
+
+- `rawAccept_built`: `accept` keeps a store correct.
+- `rawAccept_accepted`, `rawAccept_missing`, `rawAccept_collision`, `rawAccept_wrongChat`,
+  `rawAccept_tooLarge`: what each result means; any result but `accepted` leaves the store as it
+  was. `rawAccept_of_ok`: a record that passes every check is accepted.
+- `acceptAll_sound`: `acceptAll` keeps every stored record and adds only records of the batch;
+  every batch record not left over is stored. `acceptAll_stuck`: `accept` refuses every left-over
+  record in the final store.
+- `merge_ok`: a successful merge holds exactly the records of both stores. `openRecords_ok` and
+  `openRecords_complete`: `open` loads exactly the given records, and it succeeds whenever they
+  are within the limits, all of the chat, never two under one digest, and in some accept order.
+- `encode_reopens`: opening a store's blob gives back exactly that store.
 -/
 
 namespace Zrdt
@@ -1500,6 +1515,16 @@ example : ¬ AcceptOrder [a1, b1] := by
 -- `checkInput`.
 #guard checkInput group #[a1, b1] == none
 #guard checkInput otherGroup #[a1] == some .wrongChat
+
+-- The guarantees, on concrete inputs with every hypothesis discharged.
+example : CheckedStore.open all4.group all4.encode = .ok all4 := encode_reopens all4
+example : ∃ c, openRecords group #[a1] = .ok c :=
+  openRecords_complete (by decide) (by simp [a1]) (by simp)
+    ⟨[a1], .cons (by simp [a1]) .nil, by simp⟩
+example : ((empty group).accept a1).1 = .accepted (hashRecord a1) := by
+  rw [accept_fst]
+  exact rawAccept_of_ok rfl (by decide) (by simp [a1]) (by simp [empty])
+    (fun _ => by simp [empty, maxRecords])
 
 -- `Built` rejects bad stores: a record of another chat, and a head that is not stored.
 example : ¬ Built ⟨group, (∅ : RecMap).insert (dig 0) (Rec.make otherGroup (dig 1) #[] alice), ∅⟩ :=
