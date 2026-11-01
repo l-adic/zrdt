@@ -1,9 +1,13 @@
 # JOIN_PLAN v2: adding members to a zrdt chat
 
-Status: design, v2 of 2026-11-01, **revised after review round 1** (three breakers, same day; the
-note is in §11 and §12.1) and **after the user decisions** of the same day (greenfield, §12.2).
-Not implemented. **Nothing here changes the demo build.** v1 (Martin's draft, commit `af76d2f`)
-is summarised in §11, with the reasons it changed.
+Status: **built**, v2 of 2026-11-01, after review round 1 (§12.1), the user decisions (§12.2)
+and review round 2 (§12.3, a leak hunt on the built code). The code is on zrdt branch `join`
+(draft PR l-adic/zrdt#3) and on the fork's branch `join` (draft PR
+l-adic/signal-desktop-zrdt#7). `zrdtd` speaks frame protocol 4. Neither is merged to `main`.
+**Nothing here changes the demo build.** v1 (Martin's draft, commit `af76d2f`) is summarised in
+§11, with the reasons it changed. Where this document and a code header disagree on a byte
+layout, the code header is right: `core/Zrdt/Proto.lean` (frame ops), `core/Zrdt/ChatStore.lean`
+(`zrdtS3`).
 
 ## 0. For a reviewer starting cold
 
@@ -47,14 +51,18 @@ Signal sends the message to at enqueue.
 1. `PLAN_HUMANS.md` §2–§5: the model, the definitions, the theorems, how proofs reach the code.
 2. `review-2026-11-01/AMENDMENTS.md`: A4 (record and commitment), A7 (scope, hooks; the demo
    group is static), A8 (provenance, disown, resend), A9 (restore), A12 (claims, trusted base).
-3. This document. §11 says what changed from v1 and in round 1, and why.
-4. Reference scratch Lean, not built by any target, no `sorry`, re-checked with `lake env lean`
-   after round 1, and to be ported (§7): `docs/join-v2/Serve.lean` and `ServeTest.lean` (the
-   responder over the real record, commitment and `walk`, with key tags and a responder
-   boundary), `Rel.lean` (the newcomer's view against an absolute or a relative responder,
-   Mathlib-free). The scratch predates greenfield; the port drops its sent-to path (§7.1).
-   `Dvs.lean` is kept only as HMAC/HKDF over the shipped SHA-256; its tag scheme is not adopted
-   (§10a).
+3. This document. §11 says what changed from v1 and in round 1, and why; §12.3 what round 2
+   found in the built code.
+4. The code. In `core/` (Mathlib-free, shipped as `zrdtd`): `Zrdt/Serve.lean` (the rule),
+   `Zrdt/RelStore.lean` (the relative store), `Zrdt/ChatStore.lean` (closed or relative, and the
+   blob `zrdtS3`), `Zrdt/Proto.lean` (the frame ops; its header fixes every byte). In `Crdt/Merkle/`
+   (the spec, with Mathlib): `Rel.lean`, `RelSpec.lean`, `RelRefine.lean`, `ClassifyRel.lean`,
+   `ServeAbs.lean`, `ServeAbsRel.lean`, `ServeExamples.lean`, and `Api.lean` (the advertised
+   statements). `vectors/vectors.json` pins the bytes for the fork. §7 lists every theorem.
+5. The scratch Lean in `docs/join-v2/` is kept for reference only: `Serve.lean` and
+   `ServeTest.lean` were ported to `core/Zrdt/Serve.lean`, and `Rel.lean` to
+   `Crdt/Merkle/Rel.lean` (the port drops the scratch's sent-to path, greenfield). `Dvs.lean` is
+   kept only as HMAC/HKDF over the shipped SHA-256; its tag scheme is not adopted (§10a).
 
 **Verdicts on the three hypotheses the review tested.**
 - **H1, designated-verifier tags as access control: refuted.** A responder cannot check a tag made
@@ -70,12 +78,12 @@ Signal sends the message to at enqueue.
 - **H3, a server-supplied join revision makes an honest responder leak: confirmed.** v2 reads no
   revision anywhere. All three round-1 breakers re-tested it against v2; it fails.
 
-**A leak in the build today.** The fork's `ts/zrdt/resend.preload.ts:334-336` (Mac mini,
-`@762d31740`) passes `requesterWasMemberAtSend: () => conversation.hasMember(requesterAci)`, so any
-member relays an opening to any current member, a newcomer included. It is latent because the
-demo group is static (A7). `SERVE` replaces it (stages 1 and 2, §10.3). **Do not change
-membership in a group that runs the demo build.** JOIN is greenfield (§3.3): it replaces that
-build, and no group mixes the two.
+**A leak in the demo build.** The demo build's `ts/zrdt/resend.preload.ts:334-336` (fork branch
+`zrdt`, `@762d31740`) passes `requesterWasMemberAtSend: () => conversation.hasMember(requesterAci)`,
+so any member relays an opening to any current member, a newcomer included. It is latent because
+the demo group is static (A7). On `join`, `SERVE` replaces it. **Do not change membership in a
+group that runs the demo build.** JOIN is greenfield (§3.3): it replaces that build, and no group
+mixes the two.
 
 ## 1. Requirements and threat model
 
@@ -130,7 +138,7 @@ top of the tree); libsignal paths say so.
 
 **Where Signal stops.**
 1. **zrdt's own content paths have no rule.** Relay, catch-up and restore are zrdt's. The
-   as-built responder leaks (§0).
+   demo build's responder leaks (§0).
 2. **Two stock paths deliver older content to a newcomer:** edits and quotes.
 3. **Every membership fact a client holds was asserted by the server.** Revisions and join
    revisions cannot decide access (H3).
@@ -186,7 +194,8 @@ keyTag  = first 16 bytes of SHA-256("zrdtK1" ‖ identity public key, 33 bytes s
   Signal's encryption. Stock clients ignore unknown field 201. The tags show addressees which
   members got the zero tag, and that a member's key changed: public-key hashes, metadata only.
 - **Required.** Every record message carries exactly one well-formed field 201. `zrdtd` refuses
-  an opening without one (`NO_AUDIENCE`, §4.2), so every opening it accepts has an audience.
+  an opening without one (`NO_AUDIENCE`, §4.2), so every opening it accepts has an audience. And
+  `ACCEPT` requires the opening, so every live record has its audience recorded.
 - **The cap: 256 members** (user decision, §12.2). Over the cap `AUDIENCE` returns `TOO_LARGE`,
   and the client sends the message without zrdt fields: a stock Signal message, with no record
   and no zrdt content path.
@@ -194,15 +203,27 @@ keyTag  = first 16 bytes of SHA-256("zrdtK1" ‖ identity public key, 33 bytes s
 ### 3.3 Greenfield, store blob, protocol version
 
 - **Greenfield** (user decision, §12.2). There are no zrdt messages from before JOIN and no older
-  zrdt clients: every fork client runs protocol 3, and every record message carries field 201.
-  Nothing reads the demo build's `ZrdtResend` messages (Content 200, 201) or `zrdtS2` blobs, and
-  there is no migration, backfill or version gate. Stock Signal clients (members' phones, other
-  platforms) still take part in the group, without zrdt fields (§8.3).
-- **Store blob `zrdtS3`** = the `zrdtS2` layout plus two sections: the audience table (digest →
-  entries, filled only from openings `zrdtd` itself checked), and the boundary digests with the
-  ACI that vouched for each (§6.2; empty until stage 3). Bounds as in A4.
-- **Protocol 3.** `ZrdtMeta.version = 3`. The frame protocol moves to 3: `ACCEPT` takes the
-  opening, a status `NO_AUDIENCE` and new ops appear (§10).
+  zrdt clients: every fork client runs the same protocol, and every record message carries field
+  201. Nothing reads the demo build's `ZrdtResend` messages (Content 200, 201) or a top-level
+  `zrdtS2` blob, and there is no migration, backfill or version gate. Stock Signal clients
+  (members' phones, other platforms) still take part in the group, without zrdt fields (§8.3).
+- **Store blob `zrdtS3`** (`core/Zrdt/ChatStore.lean`; `OPEN`, `SALVAGE`, `MERGE`, `ENCODE`).
+  Numbers are big-endian:
+  ```
+  "zrdtS3" ‖ mode u8 (0 closed, 1 relative)
+    ‖ n u32 ‖ n × (digest(32) ‖ voucher aci(16))           the boundary, sorted by digest
+    ‖ m u32 ‖ m × (digest(32) ‖ len u32 ‖ field-201 value)  the audience table, sorted by digest
+    ‖ the records, as a zrdtS2 blob, to the end
+  ```
+  A closed blob has `n = 0`. The boundary lists every digest the store took as a boundary digest,
+  including those later promoted to a stored record (§6.2). The audience table holds only
+  audiences `zrdtd` recorded from openings it checked, only for stored records, and only
+  well-formed ones (every audience `zrdtd` records is). A blob reopens as exactly its store and
+  audiences (`ChatStore.encode_reopens`, §7.1). Bounds as in A4.
+- **Versions.** `ZrdtMeta.version = 3` on the wire. The `zrdtd` frame protocol is 4 (`VERSION`):
+  3 added the join ops (§10.2), and 4 made `ACCEPT` always take the opening and gave
+  `ACCEPT_VIEW` a mode and a pending list (round 2, §12.3). Host and `zrdtd` must match; the host
+  checks at start.
 
 ## 4. What each party sends, stores and checks
 
@@ -229,15 +250,22 @@ still reaches the new key).
 
 ### 4.2 Every member, receiving live
 
-- As A7, except that `ACCEPT` takes the opening. `zrdtd` checks it with `openingMatches`
-  (`BAD_OPENING`), then requires exactly one well-formed field 201 (`NO_AUDIENCE`). On either,
-  nothing changes and the host does not store the record; records that link it wait in
-  `zrdt_pending` and show a gap, as for a link to a made-up digest (A12). On success `zrdtd`
-  records the audience in its table. The audience is kept after the content is erased: it is
-  membership metadata the holder already knew.
-- `ACCEPT_RECORD` and `ACCEPT_VIEW` refuse an opening without field 201 in the same way. A record
-  that arrives without content (structure only, A8) cannot be checked for field 201; that is
-  harmless, because `SERVE` releases an opening only under its own audience (§5).
+- As A7, except that **`ACCEPT` always takes the opening** (lead decision, round 2): its request
+  is `chat ‖ parts ‖ opening`, with no flag. `zrdtd` checks, in order: `NO_CHAT`; the opening
+  matches the record (`openingMatches`, else `BAD_OPENING`); it holds exactly one well-formed field
+  201 (else `NO_AUDIENCE`); then `accept`'s own checks. On a refusal nothing changes
+  (`accept_refused`) and the host does not store the record; records that link it wait in
+  `zrdt_pending` and show a gap, as for a link to a made-up digest (A12). On `OK` the audience is
+  recorded under the record's digest (`accept_accepted`), so every record `ACCEPT` stores has its
+  audience. The audience is kept after the content is erased: it is membership metadata the holder
+  already knew.
+- A record that arrives **without content** (a relayed structure, an `after` entry, the doctor's
+  fakes in the demo) goes in with `ACCEPT_RECORD` (opening flag 0: stored as structure, no
+  audience recorded) or `ACCEPT_VIEW` (§4.4). An opening passed to either is checked as
+  `ACCEPT`'s. A structure-only record cannot be checked for field 201; that is harmless, because
+  `SERVE` releases an opening only under its own audience (§5).
+- A live record that waited in `zrdt_pending` is accepted later with its opening, so its audience
+  is recorded too.
 - No sender-key message is kept (the former Phase 3, dropped in round 1, §11).
 
 ### 4.3 A responder (any member, the author included)
@@ -285,32 +313,67 @@ still reaches the new key).
 - the responder's identity key has not changed since the request was sent (Desktop's identity
   record and `keychange` events).
 
-Then, per entry:
-- **Addressed record with opening:** `zrdtd` checks the digest and `openingMatches`, accepts the
-  record and records its audience. Provenance is `live` if the entry is marked **author copy** and
-  the reply came from the record's author; otherwise `relayed(by responder)` until the author
+The host then calls `ACCEPT_VIEW` with: the responder as voucher; the import flag (§4.5); the
+**mode of the request it sent** (0 catch-up, 1 per-digest); the reply's entries, unchanged; and
+**`pending`**: the records it holds pending whose missing links it asked for, a live one as an
+addressed entry with its opening, a relayed one as `after`. `zrdtd` gives one result per entry,
+reply entries first, then pending.
+
+Per entry:
+- **Addressed record with opening:** `zrdtd` checks the record bytes (`MALFORMED`) and the
+  opening (`BAD_OPENING`, `NO_AUDIENCE`; in import mode also `EPHEMERAL`), accepts the record and
+  records its audience. Provenance is host state: `live` if the entry is marked **author copy**
+  and the reply came from the record's author; otherwise `relayed(by responder)` until the author
   confirms it (A8), even when the responder is the author. Side-effect fields are never applied
   (A8).
 - **After** (structure only): accepted as A8's structure-only relay. Shown as "content not
   available from <responder>", never as "not sent to you": a responder that lacks the audience
   cannot tell.
-- **Boundary digest:** added only to a relative store (§6.2), with the responder as voucher. A
-  closed store ignores boundary entries.
+- **Boundary digest:** taken only by a relative store, with the responder as voucher (the first
+  voucher of a digest stays). A closed store takes none (result `IGNORED`). In per-digest mode the
+  digest is kept only if it is stored or a stored record links it, counting records accepted in
+  the same request; otherwise it is dropped again (`IGNORED`). The rule and its reason are in
+  §6.2.
 
-A record is accepted when each link resolves to a held record or a boundary digest (§6.2). The gap
-marker for a wanted digest stays open until content arrives or the author itself has been asked.
+Records are accepted as one batch, in whatever order lets their links resolve to a held record or
+a boundary digest (§6.2). A refused entry changes nothing. A record whose result is `MISSING`
+stays pending, and the host asks for the digests listed. The gap marker for a wanted digest stays
+open until content arrives or the author itself has been asked.
 
 ### 4.5 Exports (A9, revised)
+
+An export file is outside Signal's encryption, so its content is always sealed to the one account
+that may read it, exactly as a `SERVE` reply (§4.3). Both kinds are built in
+`ts/state/ducks/zrdt.preload.ts` (Settings → Internal).
 
 - **A9's exclusions hold for every export.** `SERVE`'s export flag refuses an opening whose
   committed `DataMessage` has field 5 (`expireTimer`) non-zero or field 14 (`isViewOnce`) set
   (`serve_export`, §7); deleted-for-everyone openings are already erased. `ACCEPT_VIEW` in import
-  mode refuses them too.
-- **To your own account:** everything else (records, boundary, audiences, openings). This is the
-  analogue of Signal's link & sync.
-- **To another account X:** exactly `SERVE`'s reply for X, with X's identity key, the export flag,
-  and an empty `since`, sealed to that key. X imports it with `ACCEPT_VIEW`; records start
+  mode refuses them too (`EPHEMERAL`).
+- **To your own account** (the analogue of Signal's link & sync): `{zrdtDump: 1, account, blob,
+  content}`. `blob` is the store's `zrdtS3` (records, boundary, audiences). `content` is the
+  openings `SERVE` gives the exporter's own account with the export flag, **sealed to the
+  exporter's own identity key** (header: own ACI, own key tag, a random id). Import: the file
+  must name this account, its header this account's ACI and key tag, and it must open under this
+  account's key. Then `MERGE` of the blob, then each opening is checked. Another account's own
+  export is refused, also with its `account` field rewritten (its content does not open). So
+  **`MERGE` only ever takes the account's own export: no foreign store is merged into any store,
+  relative or closed.** The blob's structure (digests, authors, links) stays readable, because
+  the demo's beat-4 doctor edits it (§12.4).
+- **To another account X:** `SERVE` for X, the same call a catch-up from X would make (own ACI =
+  the giver's, requester = X's ACI, key = the identity key the giver holds for X, catch-up, empty
+  `since` joined with the giver's own `since` for X, the export flag, the group's strict setting),
+  **sealed to that key**: `{zrdtExport: 2, from, to, group, key, sections}`. It holds only what
+  `SERVE` gives X: content X was sent, `after` structures, boundary digests. No new op was needed.
+  X imports it like a catch-up reply: each section must name X's ACI and key tag and open under
+  X's key; if X has no store, the export opens one as a first catch-up reply would (§6.1); then
+  `ACCEPT_VIEW` with the giver as voucher, import flag 1, mode 0 (catch-up). Records start
   `imported` (A9); boundary digests are vouched by the giver and contained like any other (§6.2).
+- **The importer keeps an opening only if it seats him**, under his own ACI and key tag, whoever
+  made the file. This is a host check on the opening's own committed audience (the leak fix of
+  round 2, §12.3). For a record whose opening came in an `ACCEPT_VIEW`, `ADDRESSED` gives the
+  same answer (`acceptView_audiences`: the recorded audience is that opening's own;
+  `run_addressed`). `zrdtd` has no import mode that checks the seat itself (§7.5).
 - **Relays of disappearing messages** keep the message's timer, which starts when the receiver
   reads it, as for a late live delivery. Optional: refuse relays of a disappearing message older
   than its timer, measured from `sent_at`.
@@ -356,46 +419,76 @@ at most one entry:
   4. Another member's `SERVE` reply. Provenance is `relayed(by)` until the author confirms (A8).
 - **Strict mode** (user decision: built, off by default, opt-in per group): a `SERVE` flag that
   releases content only in author-copy entries. A strict responder sends content as channel 3,
-  never as channel 4. It is a setting each member's client keeps per group and applies when it
-  responds; nothing on the wire carries it (§12.2).
+  never as channel 4. It is a setting each member's client keeps per group (Settings → Internal)
+  and applies when it responds; nothing on the wire carries it (§12.2).
 
 ## 6. A newcomer's store
 
 ### 6.1 Starting
 
 - Desktop starts catch-up whenever this device has no zrdt store for a group whose `membersV2`
-  includes its own ACI, not only on the transition into `membersV2`. A server lie here causes at
-  most a useless request (denial of service).
+  includes its own ACI (at startup, after a group update, or when a live record links history),
+  not only on the transition into `membersV2`. It reads no join revision (`joinedAtVersion`):
+  the trigger is "no store" (`needsCatchUp`, `ts/zrdt/catchUp.std.ts`). A server lie here causes
+  at most a useless request (denial of service).
 - It sends `ZrdtServeRequest{requestId, catch-up, since}` 1:1 to the adder, who is the sender of the
   Signal-authenticated group-update message that added it (for an invite it accepted itself, any
   member). After a timeout it asks two more members.
+- The first catch-up reply decides the store: `NEW_RELATIVE` if it carries a boundary digest,
+  `NEW` (closed) if not (a member from the start: every record it holds was sent to him). A re-add
+  opens a relative store at once (§6.5). An imported export for this account (§4.5) opens a store
+  the same way.
 - Live records that arrive meanwhile wait in `zrdt_pending` (A7).
 
 ### 6.2 The relative store
 
-- `RawStore` gains a **boundary**: a set of digests, disjoint from the store's keys, each with the
-  ACI that vouched for it.
+- **Two kinds of store** (`ChatStore`, `core/Zrdt/ChatStore.lean`). A **closed** store is the
+  `CheckedStore` of before, running the same code, so every closed theorem still covers it. A
+  **relative** store (`RelStore`, `core/Zrdt/RelStore.lean`) is a raw store plus a **boundary**:
+  digest → the ACI that vouched for it. A store stays the kind it was opened as.
 - **Accept, relative.** A record is accepted when each link is a held record or a boundary
-  digest. Everything else about `accept` is unchanged.
+  digest (`rawAcceptRel`). Everything else about `accept` is unchanged; with an empty boundary it
+  is `rawAccept` (`rawAcceptRel_empty`).
 - **Heads** are the held digests and boundary digests that no held record links to.
 - **Promotion.** If a later reply delivers a full record for a boundary digest, and its links
-  resolve, the record replaces the digest.
-- **Only a store created by catch-up is relative.** A closed store (a genesis member's, or one
-  restored from a closed own-account export) never takes a boundary digest: `ACCEPT_VIEW` gives it
-  full records only. So `fetched` stays exact for every closed store.
+  resolve, it is accepted like any other. The digest stays in the boundary (a boundary only
+  grows, so every record accepted over it keeps a valid accept order and the blob reopens);
+  `boundaryDigests` are the boundary digests with no stored record, and those are what `HEADS`,
+  `SERVE` and the UI mean by "the boundary".
+- **Only a store opened by a catch-up reply, a re-add or an export for this account can be
+  relative** (§6.1). A closed store (a genesis member's, a member-from-the-start device's, or one
+  restored from a closed own-account export) never takes a boundary digest (`acceptView_sound`). So
+  `fetched` stays exact for every closed store.
 - **Where boundary digests come from.** Only from replies that pass §4.4: solicited, sealed to this
   account, from a responder whose key has not changed since the request. The responder's ACI is
   stored as the voucher. A newcomer cannot check a digest (he has no preimage); a member who lies
   can hide a record from him (incompleteness, attributable to that member, never a leak). An
   import's boundary digests are vouched by the giver.
+- **Boundary admission** (round 2, protocol 4). A **catch-up** reply is the responder's whole
+  frontier (`Serve.serve_boundary`: each boundary entry is linked by a served record or is a
+  responder head), so in catch-up mode `ACCEPT_VIEW` keeps every boundary entry. A **per-digest**
+  reply answers digests asked for by name, and a digest that nothing links would become a head
+  that never goes away (`LINKABLE` never links a boundary digest), so the newcomer's compare code
+  would never match again (round 2 showed this). So in per-digest mode a new boundary digest is
+  kept only if it is stored or a stored record links it, counting records accepted in the same
+  request; the host passes the pending records that wait for it (§4.4), so they resolve through it
+  in one request. Otherwise it is dropped (`IGNORED`) and stays unknown; a pending record that
+  needs it gets `MISSING` again. Proved: `acceptView_boundary_linked` (per-digest: every boundary
+  digest the request adds is stored or linked by a stored record) and `acceptView_heads`,
+  `run_acceptView_heads` (per-digest: every head afterwards is a stored record or was a head
+  before).
+- **What is not true:** "every boundary digest of a relative store is linked by a stored record".
+  Counterexample: a newcomer catches up when nothing was posted since the add. The reply is just
+  `[boundary H]`, H the responder's head; the newcomer holds no record, and H must be his head, or
+  his compare code would not equal the responder's.
 - **Containment: a relative store's own records link only what a live record vouches for.** In a
-  relative store, `COMMIT` links only the heads that are held records with provenance `live` (its
-  own included) or author copy. Boundary digests and relayed or structure-only heads are left for
-  others to link; compare codes still use all heads. Reason: a digest nobody holds a preimage for
-  (a phantom), once linked by the holder, would leave every later record of his unresolvable at
-  every member. Under this rule a phantom can reach his records only through a record its author
-  sent live or as author copy, which is attributable to that author. A closed store keeps A7's
-  rule (links = heads): every link it holds resolves.
+  relative store, `COMMIT` links only `LINKABLE`'s digests: the heads that are held records with
+  provenance `live` (its own included) or author copy (`run_linkable`). Boundary digests and relayed
+  or structure-only heads are left for others to link; compare codes still use all heads. Reason: a
+  digest nobody holds a preimage for (a phantom), once linked by the holder, would leave every later
+  record of his unresolvable at every member. Under this rule a phantom can reach his records only
+  through a record its author sent live or as author copy, which is attributable to that author. A
+  closed store keeps A7's rule (links = heads): every link it holds resolves.
 
 ### 6.3 What he learns
 
@@ -404,7 +497,8 @@ at most one entry:
 - opaque digests for the older records those link to directly, and for older heads.
 
 The digests are pseudorandom, because the commitment is salted. No former member's ACI is shown,
-including in quotes (§8.3). The count of boundary digests is visible; Signal already reveals a
+including in quotes and in messages that point at an older message (§8.3), with one known gap: votes
+on a poll sent before the add. The count of boundary digests is visible; Signal already reveals a
 similar count through the iteration in a newcomer's sender-key distribution message.
 
 ### 6.4 `after` entries
@@ -436,7 +530,10 @@ Metadata only.
   account can open them; only the requesting device accepts (request id). The account's effective
   `since` is the smallest of its devices', which responder `since` corrects.
 - **Residual.** If the server hides the removal from every responder as well, gap structure
-  (authors, links) can reach him. Metadata, never content.
+  (authors, links) can reach him. Metadata, never content. If it hides the removal from one
+  author, that author still seats him: Signal delivers her message to him live, and after a
+  re-add every member re-serves it, since its audience seats him. This is the author's-view rule
+  (§8.1), shared with Signal; round 2 tested it (§12.3).
 
 ### 6.6 Other devices of the same account
 
@@ -450,28 +547,28 @@ user decision (§12.2). That device still cannot decrypt old sender-key messages
 ### 6.7 Compare codes
 
 By `served_heads'` (§7), a member who has caught up from any responder, absolute or relative,
-holds exactly that responder's heads. `agree_rel` then compares his view with any closed store,
-and `agree_rel'` with a relative one. Compare codes between old and new members match.
+holds exactly that responder's heads; for the running code, `Serve.serve_heads` and
+`Serve.Rel.serve_heads_code`. `agree_rel` then compares his view with any closed store, and
+`agree_rel'` with a relative one. Later per-digest replies add no head that is not a stored record
+(`run_acceptView_heads`, §6.2). Compare codes between old and new members match.
 
-## 7. What gets proved
+## 7. What is proved
 
 Two kinds of theorem. **Running-code theorems** are about the functions `zrdtd` runs; they are
 the ones that stop a leak caused by a bug. **Spec theorems** are about the abstract model
-(`Crdt/Merkle`) and say what a store means.
+(`Crdt/Merkle`) and say what a store means. Everything in §7.1 to §7.3 is proved: no `sorry`,
+`admit` or `native_decide`, and the axioms are only `propext`, `Classical.choice` and
+`Quot.sound`. The axiom gate (`Test/Axioms.lean`, `lake exe axiom_check`) pins them for the main
+theorems. What is still open is in §7.5.
 
-### 7.1 Running code: `core/Zrdt/Serve.lean` (Mathlib-free)
+### 7.1 Running code (`core/`, Mathlib-free)
 
-The scratch `docs/join-v2/Serve.lean` (round 1) proves the following with key tags, no author
-shortcut, per-digest mode, the export flag, author copies, and a responder with its own boundary.
-It takes the responder's `RawStore`, so that a relative store can be modelled; Lane B takes the
-relative `CheckedStore`. Axioms: `propext`, `Classical.choice`, `Quot.sound`. The scratch's
-sent-to path for records without field 201 (`Me.sentTo`, a second disjunct in `serve_content`)
-is gone with greenfield: the port drops it, and the statements below are the scratch's without
-that disjunct, so they are stronger and each proof loses a case.
+**The rule: `core/Zrdt/Serve.lean`.** `Serve.serve` takes a `RawStore`, so one set of theorems
+covers closed and relative responders. It is the round-1 scratch, ported without the sent-to path
+(greenfield), so each statement is the scratch's without that case: stronger.
 
-- **`serve_content`** (proved in scratch, with the extra disjunct). Every opening in a reply opens
-  a stored record, and its own committed audience seats the requester's ACI with the tag of the
-  key passed to `SERVE`.
+- **`serve_content`.** Every opening in a reply opens a stored record, and its own committed
+  audience seats the requester's ACI with the tag of the key passed to `SERVE`.
   ```lean
   theorem serve_content (he : Entry.addressed r o ac ∈ serve c me held q) :
       ∃ d : Digest, c.map[d]? = some r ∧
@@ -480,119 +577,151 @@ that disjunct, so they are stronger and each proof loses a case.
   ```
   It does not mention `zrdtd`'s audience table, `since`, the responder's provenance, or any host
   flag, so no stale cache or host bug can widen it.
-- **`serve_content_complete`** (proved in scratch, which has no strict mode; the port adds the
-  strict condition). The converse: every held opening that `serveOpening` accepts (it opens its
-  stored record, its audience seats `q`, and it passes the export and strict checks) is in the
-  reply (in a catch-up when `since` does not reach it, in a per-digest repair when wanted). With
-  `serve_content`, this is **`serve_content_exact`**: the content of a reply is exactly that set.
-  It depends on the store, the held openings and `q`, and on nothing else: not the audience table
-  and not the structure entries; the responder's provenance only through strict mode. **`q.key`
-  is server-influenceable** (TOFU), so the statement alone does not stop a key swap; the seal does
-  (§4.3), and the key check of `run_serve_content` ties the seal to the same key.
-- **`serve_authorCopy`** (proved in scratch). An entry marked author copy is a stored record the
-  responder wrote, holds `live`, and has not disowned.
-- **`serve_export`** (proved in scratch). In an export, no opening is ephemeral (field 5 or 14).
-- **`serve_strict`** (to prove). In strict mode, every opening in a reply is in an author-copy
-  entry.
-- **`serve_after`** (proved in scratch). An `after` entry is a stored record in the backward walk
-  from the `vis` records. With `mem_reachersOf` (`ClassifyFast.lean`), it reaches a record sent
-  to the requester that `since` does not reach.
-- **`serve_boundary`** (proved in scratch). A boundary digest is a stored record outside that walk,
-  and if the requester is entitled to it, the request is a catch-up whose `since` reaches it; or it
-  is a digest of the responder's own boundary. This is the "no hidden hole" statement.
-- **`audience_bound`** (to prove). Two openings that both match one commit have the same
-  audience, or SHA-256 has a collision. Proof: `openingMatches_spec`, `splitOpening_eq`, and
-  injectivity of the fixed-size prefix.
-- **`run_serve_content`** (to prove, like `acceptRecord_accepted`, `Proto.lean:752`). The same as
-  `serve_content` for the frame op `SERVE` that the daemon runs, plus: the reply header carries
-  `q.aci` and `keyTag q.key`, and the request id. The send wrapper takes the destination and the
-  seal key from it.
-- **`accept_audience`** (to prove). `ACCEPT`, `ACCEPT_RECORD` and `ACCEPT_VIEW` accept an
-  opening only if `openingMatches` holds and `audienceOf` returns an audience, and they put
-  exactly that audience in the table (`NO_AUDIENCE` otherwise, nothing changed). With
-  `encode_reopens` for `zrdtS3`, the table survives a save and reopen.
-- **`acceptRel` and the relative store** (to prove). `rawAcceptRel_built`, `acceptView_built`,
-  `acceptAll_sound` relative to the boundary, the boundary section of `zrdtS3`, and `linkable_sub`:
-  the links `HEADS` returns for a relative store's `COMMIT` are heads that are held records in the
-  host's `live` set (§6.2). With an empty boundary they are today's theorems.
-- **Tests (`#guard`, checked in `docs/join-v2/ServeTest.lean`).** A pre-join record goes to Bob as a
-  boundary digest only; Carol's stale-view record goes as `after`; its author gets the content
-  under her own key; an opening whose audience was rewritten to add Bob fails `openingMatches` and
-  is never served. Round 1: a requester with a changed key gets no content; an author with a
-  changed key gets none of its own records (no author shortcut); a blocked member with the zero
-  tag gets nothing; only the responder's own live records are author copies, and a disowned
-  forgery in its name is not; an export refuses a disappearing message that a relay carries; a
-  re-added member with `since` gets the gap as digests and without it as `after`; a per-digest
-  repair returns content whatever `since` says, and a gap record only as a digest; five crawl
-  shapes of `since` and `wanted` never return the pre-join record's content or structure; the
-  **H3 regression** (v1's rule `revision ≥ joinRev` releases Carol's revision-8 record when the
-  server says Bob joined at 5, and `serve` does not); a second-generation newcomer served by a
-  former newcomer gets a closed view with the responder's heads, which the pre-round-1 `serve`
-  did not give. Added in the port: an opening with no field 201 goes to no one, its author
-  included; in strict mode a relay carries no content and the author's own reply does. The
-  scratch's pre-upgrade test (the sent-to path) is dropped with that path.
-- **Satisfiable and rejecting.** A named example instantiates each main theorem on that store,
-  with every hypothesis discharged. A named example proves that a reply giving Bob the pre-join
-  opening violates `serve_content`'s conclusion.
+- **`serve_content_complete`.** The converse: every held opening that `serveOpening` accepts (it
+  opens its stored record, its audience seats `q`, and it passes the export and strict checks) is
+  in the reply (in a catch-up when `since` does not reach it, in a per-digest repair when wanted).
+  The two together say that the content of a reply is exactly that set; earlier drafts called the
+  pair `serve_content_exact`, which is not a separate theorem. **`q.key` is
+  server-influenceable** (TOFU), so the statement alone does not stop a key swap; the seal does
+  (§4.3), and `run_serve_content` ties the seal to the same key.
+- **`serve_authorCopy`**: an author-copy entry is a stored record the responder wrote, holds
+  `live`, and has not disowned. **`serve_strict`**: in strict mode every opening is in an
+  author-copy entry. **`serve_export`**: in an export no opening is ephemeral (field 5 or 14).
+- **`serve_after`**: an `after` entry is a stored record in the walk back from the `vis` records;
+  with `mem_reachersOf` (`ClassifyFast.lean`) it reaches a record sent to the requester that
+  `since` does not reach.
+- **`serve_boundary`**: a boundary digest is a stored record outside that walk, and if the
+  requester is entitled to it, the request is a catch-up whose `since` reaches it; or it is a
+  digest of the responder's own boundary. This is the "no hidden hole" statement.
+- **`audience_bound`**: two openings that both match one commit have the same audience, or
+  SHA-256 has a collision.
+- **`parseAudience_writeAudience`**, **`valid_of_parseAudience`**, **`audienceOf_valid`** (round
+  2): every well-formed audience reads back, and every audience `zrdtd` reads is well-formed.
 
-### 7.2 Spec: `Crdt/Merkle/Rel.lean`
+**The frame ops: `core/Zrdt/Proto.lean`** (`run` is what `zrdtd` executes).
 
-`docs/join-v2/Rel.lean` proves these Mathlib-free over abstract records and digests. They are to
-be ported onto the spec's `Record` and `Store`. Lane A ports the primed (relative) versions; with
-an empty responder boundary they say what the unprimed ones say.
+- **`run_serve_content`**: `serve_content` for the op `SERVE`; also nothing changes, and the reply
+  header carries `q.aci`, `keyTag q.key` and the request id. The send wrapper takes the
+  destination and the seal key from the header.
+- **The audience on accept** (the plan's `accept_audience`, proved as these theorems):
+  `accept_accepted` (an `ACCEPT` that says `OK` had a matching opening, and its audience is
+  recorded under the record's digest); `accept_refused` (a reply with an empty body leaves the
+  table unchanged and is `NO_CHAT`, `BAD_OPENING` or `NO_AUDIENCE`, each with its reason);
+  `acceptRecord_accepted` (the same for `ACCEPT_RECORD` with an opening); `checkEntry_record` with
+  `acceptView_audiences` (`ACCEPT_VIEW` records only the audience of a matching opening, for a
+  stored record).
+- **`ACCEPT_VIEW`**: `acceptView_sound` (kind and chat stay, so a closed store takes no boundary
+  digest; nothing stored is lost; every new record is that of an entry that passed its checks;
+  every new boundary digest is an entry's, vouched by the voucher); `acceptView_built` (the store
+  stays correct relative to its boundary); `acceptView_accepted` (`OK` for a record only if it is
+  stored); `acceptView_boundary_linked`, `acceptView_heads`, `run_acceptView_heads` (per-digest
+  mode adds no stray head, §6.2); `run_acceptView`.
+- **Other ops**: `run_merge_audiences` (`MERGE` keeps every recorded audience and records the
+  blob's for stored records that had none); `run_audience` (`AUDIENCE`'s value parses);
+  `run_addressed`; `run_linkable` (§6.2 containment); `run_newRelative`; `commit_openingMatches`.
 
-- **`agree_rel`.** If a view (full records `F`, boundary `B`) has the same heads as a closed
-  store `S`, every full record reachable from the view's heads is in `S`, or two records collide.
-  **It needs no condition on `B`.** This is why v1's revision check and H2's two-level hash are
-  not needed.
-- **`agree_rel'`** (round 1). The same against a relative store `(S, BS)` closed relative to
-  `BS`: every reachable digest is a store digest whose view records are all in `S`, or a digest
-  only in `BS` that the view holds no record for, or two records collide. Hypothesis: the view
-  holds no full record for a digest the responder has only as boundary (true of every served view).
-- **`served_heads`, `served_heads'`.** The view a responder serves for any predicate `vis` (full
-  records: those reaching a `vis` record; boundary: the other digests of its view linked by them,
-  or heads) has exactly the responder's heads. No collision hypothesis. The primed version serves
-  the responder's own boundary digests too (`ServedB'`).
-- **`served_closed`, `served_closed'`; `served_tight`, `served_tight'`.** The served view is closed
-  relative to its boundary, and tight when the store is.
-- **`served_boundary`, `served_boundary'`.** A boundary digest is in the responder's view, and
-  every responder record with that digest reaches no `vis` record.
-- **`newcomer_agree`, `newcomer_agree'`.** A tight view with the served heads holds only records of
-  the responder's store, or two records collide.
-- **`Breaker2.relative_responder_not_closed`** (round 1). Serving only stored records from a
-  relative responder gives a view that is not closed; `relative_responder_closed'` shows the
-  primed boundary closes it.
-- **Bridge `serve_abs`** (proved: `Crdt/Merkle/ServeAbs.lean` for a closed responder,
-  `Crdt/Merkle/ServeAbsRel.lean` for a relative one). The records and boundary in `serve`'s
-  catch-up reply are `ServedF` and `ServedB'` for `vis r := entitled q r ∧ ¬ reachable from since`
-  and `BS` = the responder's boundary. Records whose audience the responder does not hold are
-  covered: they are boundary digests when linked by a served record or heads.
+**The stores: `core/Zrdt/RelStore.lean`, `ChatStore.lean`.** `rawAcceptRel_built`,
+`rawAcceptRel_accepted`, `rawAcceptRel_missing`, `rawAcceptRel_unchanged`; `rawAcceptRel_empty` and
+`builtRel_empty_iff` (with an empty boundary, exactly the closed code and invariant);
+`RelStore.acceptAll_sound`; `load_ok`, `load_complete`, `load_reopens`; `linkable_sub`; `prune_spec`
+(the per-digest drop keeps the store correct and keeps only old, stored or linked digests);
+`ChatStore.encode_reopens` and `decodeChat_encodeChat` (a `zrdtS3` blob reopens as exactly its
+store, boundary and audiences; since round 2 with no assumption); `mergeAudiences_spec`.
 
-### 7.3 Advertised theorems
+**Tests.** `#guard`s in `Serve.lean`, ported from the scratch: a pre-join record goes to Bob as a
+boundary digest only; Carol's stale-view record goes as `after`; its author gets the content under
+her own key; an opening whose audience was rewritten to add Bob fails `openingMatches` and is never
+served; a requester with a changed key gets no content; an author with a changed key gets none of
+its own records (no author shortcut); a blocked member with the zero tag gets nothing; only the
+responder's own live records are author copies, and a disowned forgery in its name is not; an
+export refuses a disappearing message that a relay carries; a re-added member with `since` gets the
+gap as digests and without it as `after`; a per-digest repair returns content whatever `since`
+says, and a gap record only as a digest; five crawl shapes of `since` and `wanted` never return the
+pre-join record's content or structure; the **H3 regression** (v1's rule `revision ≥ joinRev`
+releases Carol's revision-8 record when the server says Bob joined at 5, and `serve` does not); a
+responder serves its own boundary digests. Added in the port: an opening with no field 201 goes to
+no one, its author included; in strict mode a relay carries no content and the author's own reply
+does. `vectors/vectors.json` (7 sessions: `tour`, `tooLarge`, `acceptRecord`, `join`, `view`,
+`boundary`, `fuzz`) runs against `zrdtd` (`vectors/zrdtd_client.py`) and, byte for byte, against
+the fork's TypeScript stub. The `boundary` session reproduces round 2's stray head under the
+protocol-3 rule and shows it gone; the join and view steps build Alice's export for Bob and import
+it into a new relative store.
 
-- New in `Crdt/Merkle/Api.lean`: `CheckedStore.agree_rel` (in its relative form),
-  `CheckedStore.serve_content` and `CheckedStore.serve_content_complete`.
-- The existing advertised theorems are restated for a store with a boundary (`Api.lean` Part 5,
-  the same names under `RelStore`: `fetched`, `no_collision`, `agree`, `abs_accept`, `abs_merge`,
-  `open_iff`, `salvage_spec`, `encode_open`, `confirmed`, `classify_spec`). `encode_injective` is
-  about one record, so no boundary enters, and it holds as stated. With an empty boundary each
-  says what it says today (examples in Part 5). Two hypotheses are new, each with a checked
-  counterexample: `agree` needs that neither store holds a record whose digest the other has only
-  as a boundary digest (`below_boundary_not_vouched`); `fetched`, `agree` and `classify_spec`
-  need no cycle (`Acyclic`), because a promoted record can close a cycle without a collision
-  (`promoted_cycle`, `promoted_cycle_not_tight`, `Crdt/Merkle/RelSpec.lean`; for SHA-256 this
-  needs a record whose digest was written into a record its own digest depends on).
-  `BuiltRel.acyclic_of_unpromoted` gives it when no record was promoted. `confirmed` holds up to
-  the sender's boundary. `CLASSIFY` on a relative store is `classifyRaw`; `RelStore.classify_spec`
-  rests on `Crdt/Merkle/ClassifyRel.lean`, which proves it for any raw store whose records sit
-  under their digests and have no cycle.
-- The three statements new for joining also hold for a responder with a boundary (a former
-  newcomer re-serves): `RelStore.agree_rel` (its own boundary as `BS`), `RelStore.serve_content`
-  and `RelStore.serve_content_complete` (examples on Bob's relative store and on a store holding
-  Alice's message over the boundary digest of `a1`). The bridge `serve_abs` for a relative
-  responder is `Serve.Rel.serve_abs` (`Crdt/Merkle/ServeAbsRel.lean`).
-- The Comparator challenge and `comparator.json` list all of these; Comparator is run only as the
-  final step.
+**Satisfiable and rejecting.** `Serve.Examples.self_served` instantiates the main `SERVE`
+theorems with every hypothesis discharged. Two examples prove that a reply giving Bob the pre-join
+opening, or Bob under a swapped key one of Alice's records, violates `serve_content`'s conclusion
+(`ContentOk`). `Crdt/Merkle/ServeExamples.lean` gives `serve_after` and `serve_boundary` real
+inputs without running `serve` in the kernel (`Serve.Examples.reply_after`,
+`Serve.Rel.Examples.reply_boundary`).
+
+### 7.2 Spec: `Crdt/Merkle/Rel.lean` and the bridge
+
+`Crdt/Merkle/Rel.lean` is the scratch `docs/join-v2/Rel.lean` ported onto the spec's `Record` and
+`Store`. It states the versions for a responder with its own boundary `BS` (primed); with
+`BS = ∅` they say what the closed versions say (`headsRel_empty`, `closedRel_empty_iff`).
+
+- **`agree_rel'`.** If a view (full records `F`, boundary `B`) has the same heads as a store
+  `(S, BS)` closed relative to `BS`, every reachable digest is a digest of `S` whose view records
+  are all in `S`, or a digest only in `BS` that the view holds no record for, or two records
+  collide. **Nothing is assumed about `B`**: this is why v1's revision check and H2's two-level
+  hash are not needed. Hypothesis: the view holds no full record for a digest the responder has
+  only as boundary (true of every served view). For a closed responder this is
+  `CheckedStore.agree_rel` (§7.3).
+- **`served_heads'`.** The view a responder serves for any predicate `vis` (full records: those
+  reaching a `vis` record; boundary: the other digests of its view linked by them, or heads,
+  including its own boundary digests, `servedB'`) has exactly the responder's heads. No collision
+  hypothesis.
+- **`served_closed'`, `served_tight'`**: the served view is closed relative to its boundary, and
+  tight when the store is. **`served_boundary'`**: a served boundary digest is one the responder
+  knows, and from it no `vis` record is reachable. **`newcomer_agree'`**: a tight view with the
+  served heads holds only records of the responder's store, or two records collide.
+- **Limits**, checked by `decide`: `after_record_served`, `phantom_boundary_indistinguishable`,
+  `below_boundary_not_vouched`, and `Breaker2.relative_responder_not_closed` (serving only stored
+  records from a relative responder gives a view that is not closed; `relative_responder_closed'`
+  shows the responder's own boundary closes it).
+- **Bridge `serve_abs`**: `Serve.serve_abs` (`ServeAbs.lean`, closed responder) and
+  `Serve.Rel.serve_abs` (`ServeAbsRel.lean`, relative responder). The records and boundary of
+  `serve`'s catch-up reply are `servedF` and `servedB'` for `vis r := entitled q r ∧ ¬ reachable
+  from since`, with `BS` = the responder's boundary. Records whose audience the responder does not
+  hold are covered: they are boundary digests when linked by a served record, or heads. From it:
+  `serve_heads`, `serve_closed`, `serve_tight`, `serve_boundary_spec`, `serve_after_reaches`,
+  `replyRecords_subset`, in both files, and `Serve.Rel.serve_heads_code` (the heads a newcomer
+  gets are the responder's `HEADS`).
+- **A store with a boundary in the model**: `RelSpec.lean` (`acceptRel`, `AcceptBuiltRel`,
+  `buildRetryRel`, `reach_transfer`, and the cycle counterexample `promoted_cycle`),
+  `RelRefine.lean` (each `RelStore` operation seen in the model), `ClassifyRel.lean`
+  (`classifyRaw` computes the spec's status on any raw store whose records sit under their digests
+  and have no cycle).
+
+### 7.3 Advertised theorems: `Crdt/Merkle/Api.lean`
+
+27 statements, listed in `comparator.json` and restated word for word in
+`Comparator/Challenge.lean`.
+
+- **The 11 of before**, for a closed store (`CheckedStore.fetched`, `no_collision`, `agree`,
+  `abs_accept`, `abs_merge`, `open_iff`, `salvage_spec`, `encode_open`, `confirmed`,
+  `classify_spec`, and `encode_injective`). Unchanged.
+- **New for joining** (Part 4): `CheckedStore.agree_rel` (`agree_rel'` for the shipped store,
+  the responder's boundary `BS` an argument), `CheckedStore.serve_content` and
+  `CheckedStore.serve_content_complete`. They are stated over `abs c` like the others; the
+  running-code names `Serve.serve_content` and `Serve.serve_content_complete` are in core, which
+  the challenge imports, so it cannot restate them under those names.
+- **The 11 for a store with a boundary** (Part 5, the same names under `RelStore`: `fetched`,
+  `no_collision`, `agree`, `abs_accept`, `abs_merge`, `open_iff`, `salvage_spec`, `encode_open`,
+  `confirmed`, `classify_spec`). `encode_injective` is about one record, so no boundary enters,
+  and it holds as stated. With an empty boundary each says what the closed statement says
+  (examples in Part 5). Two hypotheses are new, each with a checked counterexample: `agree` needs
+  that neither store holds a record whose digest the other has only as a boundary digest
+  (`below_boundary_not_vouched`); `fetched`, `agree` and `classify_spec` need no cycle
+  (`Acyclic`), because a promoted record can close a cycle without a collision (`promoted_cycle`,
+  `promoted_cycle_not_tight`, `RelSpec.lean`; for SHA-256 this needs a record whose digest was
+  written into a record its own digest depends on). `BuiltRel.acyclic_of_unpromoted` gives it
+  when no record was promoted. `confirmed` holds up to the sender's boundary. `CLASSIFY` on a
+  relative store is `classifyRaw`, and `RelStore.classify_spec` rests on `ClassifyRel.lean`.
+- **The three join statements for a responder with a boundary** (a former newcomer re-serves):
+  `RelStore.agree_rel` (its own boundary as `BS`), `RelStore.serve_content` and
+  `RelStore.serve_content_complete`, with examples on Bob's relative store and on a store holding
+  Alice's message over the boundary digest of `a1`.
 
 ### 7.4 Deniability
 
@@ -607,6 +736,18 @@ commits it pins every message's content. Reading one aloud on a recorded channel
 to that transcript, much as a signature would. Compare codes inside Signal, where the channel is
 deniable. Short SAS-style codes, keyed by nonces exchanged in-band and deleted afterwards, would
 remove the limit (later option, §10.3).
+
+### 7.5 What is still open
+
+- **Comparator** has not been run over the 27 statements (it needs about 63 GB of RAM). It is the
+  final step, with the user's approval. `lake build` and `lake exe axiom_check` pass.
+- `accept_refused` covers `ACCEPT` only. For `ACCEPT_RECORD`, "a refusal changes nothing" holds
+  in the code but is not stated as a theorem.
+- The importer's seat check on exports is host code (§4.5). An `ACCEPT_VIEW` import mode that
+  checks it in `zrdtd`, with a theorem, is an optional follow-up.
+- Trusted, as before: the protobuf scan of field 201 (`fieldValue`, `audienceOf`), like the
+  commitment's scan. The host code of §8.2, §8.3 and §4.4 (the seal, the reply checks, the target
+  and quote rules, the export seat check) is tested, not proved (§12.4).
 
 ## 8. Why no pre-join data reaches a newcomer
 
@@ -646,9 +787,17 @@ record and its own committed audience seats the requester's ACI and key. A wrong
 
 ### 8.3 Signal paths the fork closes
 
-- **Edits.** An edit of message `r` goes to `r`'s seats intersected with the current recipients,
-  not to `conversation.getRecipients()` (`sendEditedMessage.preload.ts:135-139`). A message sent
-  over the cap has no record and no audience; its edits go the stock way.
+- **Edits, and every message that points at a target** (the target rule). An edit of message `r`
+  goes to `r`'s seats intersected with the current recipients, not to
+  `conversation.getRecipients()` (`sendEditedMessage.preload.ts:135-139`). Round 2 extended this to
+  every message that names a target's author and sent timestamp: reactions, pins and unpins,
+  delete-for-everyone (decided at enqueue, while the target still holds its opening), poll votes
+  and poll ends. Each goes only to the target's seats ∩ the current recipients when the target
+  has a committed audience (`getZrdtEditRecipients`, `splitZrdtTargetConversationIds`,
+  `ts/zrdt/quote.preload.ts`). So a newcomer never learns the author or time of a message he was
+  not sent. A message sent over the cap has no record and no audience; messages that point at it
+  go the stock way. **Known gap:** a poll is not a record, so it has no audience, and a vote on a
+  poll sent before the add still reaches the newcomer (metadata).
 - **Quotes.** The rule runs in one place: on the return value of `uploadMessageQuote` in
   `sendNormalMessage` (`jobs/helpers/sendNormalMessage.preload.ts:844-990`), on every attempt. That
   function builds the wire quote for sends, edits and manual retries alike. `makeQuote`, which runs
@@ -664,7 +813,9 @@ record and its own committed audience seats the requester's ACI and key. A wrong
     from their own copy (`messages/copyQuote.preload.ts:47-150`); a newcomer sees "original not
     found"; stock clients see a quote without an original.
   - TypeScript tests: a reply drafted before an add and sent after it; an edit of a message whose
-    quote was stripped; a blocked member and a member seen as unregistered among the recipients.
+    quote was stripped; a blocked member and a member seen as unregistered among the recipients;
+    the target rule (`quote_test`). The smoke (beat 6) checks that a reaction and a pin on a
+    pre-join message, sent after the add, never reach the newcomer.
 - **Not closed:** members on stock clients (Android, iOS, stock Desktop) in the same group still
   send edits and quotes the stock way. A member can paste old text on purpose.
 
@@ -686,7 +837,7 @@ as "shared history". Signal's own Forward already covers most of this need.
 | History between one account's devices | Signal precedent | link & sync; zrdt own-account export. zrdt's re-serving to any device of the account is broader (§6.6) |
 | zrdt relays, catch-up and exports send content only to seated accounts | **zrdt** | field 201 + `SERVE` (closes gap 1) |
 | That content is readable only under the key the author addressed | **zrdt, from Signal's primitives** | key tag + the seal: sealed sender v1's ephemeral-key layer with libsignal `agree`, HKDF, AES-GCM-SIV (closes gap 5) |
-| Edits and quotes carry no older content to newcomers | **fork rule** | §8.3 (closes gap 2) |
+| Edits and quotes carry no older content to newcomers, and reactions, pins, deletes and votes no older metadata | **fork rule** | §8.3 (closes gap 2; votes on older polls excepted) |
 | Access follows the author's own membership view at enqueue and freeze, as Signal's live delivery does, and no other server-asserted fact | **zrdt** | no revision read; the author's frozen audience; responder `since` only shrinks (closes gap 3) |
 | Older links resolve without content; heads still compare, across generations | **zrdt** | relative store, boundary digests vouched by named members and never linked by the holder, `served_heads'` (closes gap 4) |
 | A relayed copy shown as the author's | **Signal channel + zrdt rule** | the author's own sealed `SERVE` reply, author copy only for its own live, undisowned records; otherwise A8 confirmation |
@@ -704,10 +855,12 @@ TypeScript client, SHA-256 collision resistance):
   Signal's exposure; after the check zrdt adds none.
 - **New small host code:** reading field 201 (`audienceOf`, `parseAddressees`) joins the unproved
   protobuf scan; the seal module and `sendZrdtServed`, with a test vector; the solicited-reply
-  check.
+  check; the export files and the importer's seat check (§4.5).
 - **Host duties:** §8.2; the audience snapshot; `since` on both sides; passing only replies that
-  pass §4.4 to `ACCEPT_VIEW`; not applying side-effect fields of late copies; the edit and quote
-  rules; the per-group strict setting.
+  pass §4.4 to `ACCEPT_VIEW`, with the request's mode and the pending records; not applying
+  side-effect fields of late copies; the edit, target and quote rules; `MERGE` only of the
+  account's own export; the per-group strict setting; running the Lean `zrdtd` (the TypeScript
+  stub runs only under tests, or with an explicit `ZRDT_ALLOW_STUB=1`).
 - **Members:** honest or attributable. Boundary digests are vouched by named members (§6.2).
 
 ## 10. Wire, frame ops, staging
@@ -729,46 +882,63 @@ message Content { oneof content { ...; ZrdtServed zrdtServed = 203;
 `ZrdtResendRequest` (Content 200) and `ZrdtResend` (201) are removed: neither sent nor parsed
 (greenfield, §3.3), and their numbers are not reused. `ZrdtNotFound` (202) stays.
 
-### 10.2 Frame ops (protocol 3)
+### 10.2 Frame ops (protocol 4)
+
+The header of `core/Zrdt/Proto.lean` fixes every byte and is authoritative; this table lists what
+JOIN added or changed. Field types are the header's: `digests` is a `u32` count and that many
+digests, `flag` a `u8` 0 or 1, `key` 33 bytes, `rid` 16 bytes, `opening` a `u32` length and bytes.
 
 | Op | Name | Request | Reply |
 |---|---|---|---|
-| `0x07` | `ACCEPT` (changed) | chat ‖ parts ‖ `opening` | as before, plus `BAD_OPENING`, `NO_AUDIENCE`; records the opening's audience |
-| `0x10` | `ACCEPT_RECORD` (changed) | as before | as before, plus `NO_AUDIENCE` for an opening; records its audience |
-| `0x11` | `AUDIENCE` | `u32` n ‖ n × (aci ‖ `u8` hasKey ‖ key(33)) | field-201 bytes; `TOO_LARGE` over 256 |
-| `0x12` | `SERVE` | chat ‖ own aci ‖ requester aci ‖ key(33) ‖ request id(16) ‖ since (`digests`) ‖ `u8` mode (catch-up, per-digest) ‖ wanted (`digests`) ‖ `u8` export ‖ `u8` strict ‖ live (`digests`) ‖ disown (`digests`) ‖ held items (digest, opening?) | header (requester aci ‖ key tag ‖ request id) ‖ entries |
-| `0x13` | `ADDRESSED` | chat ‖ aci ‖ key(33) | digests whose stored audience seats them |
-| `0x14` | `ACCEPT_VIEW` | chat ‖ voucher aci ‖ `u8` import ‖ entries | one result per entry |
-| `0x15` | `LINKABLE` | chat ‖ live (`digests`) | for a relative store, the heads that are held records in the live set (the `COMMIT` links, §6.2); for a closed store, `HEADS` |
+| `0x07` | `ACCEPT` (changed) | chat ‖ parts ‖ `opening` (always; no flag) | `OK` digest ‖ encoding; `MISSING`, `COLLISION`, `WRONG_CHAT`, `TOO_LARGE`, `NO_CHAT`, `BAD_OPENING`, `NO_AUDIENCE` |
+| `0x10` | `ACCEPT_RECORD` (changed) | chat ‖ record (`bytes`) ‖ `u8` (1: an `opening` follows) | as `ACCEPT`, plus `MALFORMED`; without an opening the record is stored as structure, no audience |
+| `0x11` | `AUDIENCE` | `u32` n ‖ n × (aci ‖ `u8` hasKey ‖ key if hasKey) | `OK` field-201 value; `TOO_LARGE` over 256; `MALFORMED` (no members, an ACI twice) |
+| `0x12` | `SERVE` | chat ‖ own aci ‖ requester aci ‖ requester key ‖ rid ‖ since ‖ responder since ‖ `u8` mode (0 catch-up, 1 per-digest) ‖ wanted (mode 1 only) ‖ export `flag` ‖ strict `flag` ‖ live ‖ disown ‖ `u32` n ‖ n × (digest ‖ opening) | `OK` header (requester aci ‖ key tag ‖ rid: 48 bytes) ‖ `u32` n ‖ entries; `NO_CHAT` |
+| `0x13` | `ADDRESSED` | chat ‖ aci ‖ key | `OK` digests whose recorded audience seats them; `NO_CHAT` |
+| `0x14` | `ACCEPT_VIEW` | chat ‖ voucher aci ‖ import `flag` ‖ `u8` mode (0 catch-up, 1 per-digest) ‖ entries ‖ pending | `OK` `u32` n ‖ one result per entry, then per pending entry; `NO_CHAT` |
+| `0x15` | `LINKABLE` | chat ‖ live | `OK` digests: for a relative store the heads that are held records in `live` (the `COMMIT` links, §6.2); for a closed store `HEADS` |
+| `0x16` | `NEW_RELATIVE` | chat ‖ group | `OK`: an empty relative store; `CHAT_OPEN` |
 
-New status `0x09` `NO_AUDIENCE`, empty body: nothing changed; the opening matches its record but
-holds no single well-formed field 201 (§3.2). `OPEN`, `MERGE`, `SALVAGE` and `ENCODE` read and
-write `zrdtS3`. `HEADS` covers held records and boundary digests. Entry encoding: a kind byte,
-then the record bytes (addressed, after) or the digest (boundary); an addressed entry adds an
-optional opening and an author-copy byte.
+- **Entries** (a `SERVE` reply after its header, and `ACCEPT_VIEW`'s entries and pending): a
+  `u32` count, then per entry a kind byte: `0x00` addressed = record (`bytes`) ‖ author-copy
+  `flag` ‖ `u8` (1: an `opening` follows); `0x01` after = record (`bytes`); `0x02` boundary =
+  digest. The requester passes a reply's unsealed entries to `ACCEPT_VIEW` unchanged.
+- **Results** (`ACCEPT_VIEW`): a status byte, then the digest for `OK` (the record's, or the
+  boundary digest), the missing `digests` for `MISSING`, the digest for `COLLISION`, otherwise
+  nothing.
+- **Statuses.** `0x08` `BAD_OPENING` (the opening does not match its record) is A4's, now also
+  from `ACCEPT` and in `ACCEPT_VIEW` results. New, all with an empty body: `0x09` `NO_AUDIENCE`
+  (the opening matches but holds no single well-formed field 201, §3.2);
+  `0x0A` `EPHEMERAL` (an `ACCEPT_VIEW` result in import mode: a disappearing or view-once
+  opening); `0x0B` `IGNORED` (an `ACCEPT_VIEW` result: a boundary entry a closed store does not
+  take, or one dropped in per-digest mode, §6.2). Every refusal changes nothing.
+- **Changed ops.** `OPEN`, `SALVAGE`, `MERGE` and `ENCODE` read and write `zrdtS3` only (§3.3).
+  `MERGE` records the blob's audience for each stored record that has none; a recorded audience
+  stays. `HEADS` on a relative store lists held digests and boundary digests that no held record
+  links; `HAS` and `GET` know stored records only. `VERSION` reports protocol 4.
 
 ### 10.3 Staging
 
 Greenfield (§3.3) leaves three stages, each built on the one before. They replace v2's phases;
-the former Phase 3 was dropped in round 1 (§11).
+the former Phase 3 was dropped in round 1 (§11). **All three are built on `join`**, with the
+round-2 fixes (§12.3). The demo build has none of them; its leak stays latent in a static group.
 
-- **Today (demo day):** nothing. The leak is latent in a static group.
 - **Stage 1, core ops** (Lean, `zrdtd`). `audienceOf` and `AUDIENCE`; `ACCEPT` with the opening
   and `NO_AUDIENCE`; the audience table in `zrdtS3` (boundary section empty); `SERVE` with the
   export and strict flags; `ADDRESSED`; `ACCEPT_VIEW` for a closed store, which ignores boundary
   entries. The §7.1 theorems other than the relative store's, and vectors for the new ops.
 - **Stage 2, the fork.** Field 201 at freeze (§4.1) and `ACCEPT` with the opening on receive; the
   seal and `sendZrdtServed`; request ids and the §4.4 checks; `ZrdtServeRequest` and `ZrdtServed`
-  (Content 204, 203), with 200 and 201 removed; `resend.preload.ts` calls `SERVE`, and the stub and
-  the zrdt-triggered sendLog re-send are deleted; the edit and quote rules; exports through
-  `SERVE` with the export flag; the per-group strict setting, off by default. A stage-2 store is
-  closed, so a newcomer's pre-join links stay pending, as today. From this stage on, membership
-  changes do not leak content.
-- **Stage 3, the relative store.** The boundary in `RawStore` and `zrdtS3`; `ACCEPT_VIEW` for a
-  relative store; `LINKABLE`; the `Rel.lean` port and the restated advertised theorems (§7.2,
-  §7.3); catch-up for any device without a store; archive and `since` on re-add; responder
-  `since` from Signal-authenticated removals; the boundary row and the "content not available"
-  labels in the UI.
+  (Content 204, 203), with 200 and 201 removed; `resend.preload.ts` calls `SERVE`, and the old
+  member check and the zrdt-triggered sendLog re-send are deleted; the edit and quote rules; exports
+  through `SERVE` with the export flag; the per-group strict setting, off by default. A stage-2
+  store is closed, so a newcomer's pre-join links stay pending, as today. From this stage on,
+  membership changes do not leak content.
+- **Stage 3, the relative store.** `RelStore` and the boundary in `zrdtS3`; `NEW_RELATIVE`;
+  `ACCEPT_VIEW` for a relative store; `LINKABLE`; the `Rel.lean` port and the restated advertised
+  theorems (§7.2, §7.3); catch-up for any device without a store; archive and `since` on re-add;
+  responder `since` from Signal-authenticated removals; the boundary row and the "content not
+  available" labels in the UI.
 - **Later, optional:** sharing by choice (§8.4); short SAS-style compare codes (§7.4); an
   `ATTESTED` gate, where an author seats only members whose add, promotion or approval it saw in a
   Signal-authenticated group-update message from the actor, or performed itself. That gate would
@@ -856,6 +1026,11 @@ theorem carol_forges (H : G → G → F) (c : F) (A : G) (rC eA sA : F) :
 
 ## 11. Design history: what was tried and why it changed
 
+- **Review round 2 (2026-11-01, on the built code)** (§12.3). A leak hunt found one content leak,
+  through another member's export file, and two metadata leaks; the verifiers found a stray head
+  after per-digest repairs and an `ACCEPT` that could skip the opening. Fixes: exports sealed to
+  one account and built by `SERVE` for that account (§4.5); the target rule (§8.3); boundary
+  admission in per-digest mode (§6.2); `ACCEPT` always takes the opening (§4.2). Protocol 4.
 - **User decisions (2026-11-01, after round 1)** (§12.2). Greenfield removed round 1's
   pre-upgrade machinery and made field 201 required.
 - **Review round 1 (2026-11-01, three breakers: 1, the malicious server; 2, R1, R2 and
@@ -1007,23 +1182,55 @@ Taken by kejace after round 1; they close the questions round 1 left open.
 3. **Strict mode is built, off by default, opt-in per group** (§5, `serve_strict`).
 4. **Per-account re-serving is kept** (§6.6): any device of an addressed account may be served
    what that account was sent.
+5. **`ACCEPT` always takes the opening** (lead decision in round 2, stated to kejace, not
+   objected): every live record has its recorded audience, and a record without content goes in
+   with `ACCEPT_RECORD` or `ACCEPT_VIEW` (§4.2).
 
-Open, for kejace: as written (§5), a group's strict opt-in is a setting on each member's client,
-which applies it to its own replies; nothing on the wire carries it. A switch that binds every
-member's client would need a new wire field.
+Open, for kejace: as built (§5), a group's strict opt-in is a setting on each member's client
+(Settings → Internal), which applies it to its own replies; nothing on the wire carries it. A switch
+that binds every member's client would need a new wire field.
 
-### 12.3 Known weak or unproven points
+### 12.3 Review round 2: the leak hunt and the verifiers
+
+Round 2 ran against the built code (zrdt `join` at `acbd70a`, fork `join` at `20f625d58`,
+protocol 3): a leak hunter attacking a late joiner (Dave) through a mock server, with Dave's phone
+as a raw client holding his identity key; a fork verifier (fresh worktree, full smoke); a Lean
+verifier. Fixes: zrdt `ed519eb`, `1af7b70` (core, protocol 4), `ab3dfef` to `00c9b96` (proofs);
+fork `c06e159e1` to `fc24c77c0`. The fork smoke after the fixes is GO, 73 of 73.
+
+| Finding (who) | Severity | Disposition |
+|---|---|---|
+| Content leak through another member's export: Dave imported Bob's export and got every pre-join text. The file held the openings as plain JSON, and the import merged Bob's store and kept every opening that matched (leak hunt) | blocker | fixed (§4.5): an own export's content is sealed to the exporter's key and only that account imports it; an export for X is `SERVE` for X, sealed to X's key, imported with `ACCEPT_VIEW`; the importer keeps an opening only if it seats him. Smoke: Bob's own export shows 0 of 12 pre-join texts; Dave's import of it is refused, also with the account field rewritten; Bob's export for Dave gives Dave no pre-join content and no pre-join record |
+| `MERGE` of another member's store put pre-join records (authors, links) into the newcomer's relative store (leak hunt) | major | fixed: `MERGE` takes only the account's own export (§4.5); another account's history comes only through `ACCEPT_VIEW` of a `SERVE` reply for that account |
+| A reaction to a pre-join message, sent after the add, reached the newcomer with the target's author and sent time; by code reading, pins, deletes and poll votes did the same (leak hunt) | major | fixed: the target rule (§8.3); the smoke checks a reaction and a pin. Left: votes on a poll sent before the add (a poll is not a record) |
+| Stray head: a per-digest reply's boundary digest that nothing links became a head for good; Dave's heads `[·3428 ·ad00]`, Alice's `[·ad00]` (fork verifier) | major | fixed in `zrdtd`, protocol 4: boundary admission in per-digest mode and the pending list (§4.4, §6.2); `acceptView_heads`, `acceptView_boundary_linked`; vector session `boundary`; the smoke re-checks heads after the per-digest asks |
+| The 11 advertised theorems were not restated for a store with a boundary (Lean verifier) | major | fixed: `Api.lean` Part 5, and the three join statements for a relative responder (§7.3) |
+| `ACCEPT` took the opening behind an optional flag, against this document (Lean verifier) | major | decided: `ACCEPT` always takes the opening (§4.2, §12.2); records without content go through `ACCEPT_RECORD` or `ACCEPT_VIEW`; `accept_accepted` strengthened, `accept_refused` new |
+| `encode_reopens` assumed that audiences read back; `MERGE` ignored the blob's audiences (Lean verifier) | minor | fixed: `parseAudience_writeAudience` (no assumption left); `run_merge_audiences` |
+| No `CLASSIFY` spec on a relative store; `serve_abs` only for a closed responder; no examples for `serve_after` and `serve_boundary` (Lean verifier) | minor | fixed: `RelStore.classify_spec` (`ClassifyRel.lean`); `Serve.Rel.serve_abs`; `ServeExamples.lean` |
+| `accept_audience` and `serve_content_exact` named here but absent; this document stale in §0, §3.3, §6.2, §7, §10.2 (Lean verifier) | minor | fixed in this revision: both are groups of theorems (§7.1) |
+| Strict mode could not be switched on (fork verifier) | minor | fixed: a per-group checkbox in Settings → Internal, a SignalCI hook, a host test that the setting reaches `SERVE` |
+| Without `ZRDT_DAEMON` the app ran the unproved TypeScript stub (both) | minor | fixed: the app needs the Lean `zrdtd`; the stub runs only under tests or `ZRDT_ALLOW_STUB=1`, and `ZRDT_REQUIRE_LEAN=1` refuses it even then |
+| Catch-up was triggered by the server's `joinedAtVersion` (fork verifier) | minor | fixed: the trigger is "no store" (§6.1) |
+| `DATABASE_SCHEMA.md` stale for migration 1860; the demo doctor sent `ACCEPT` without an opening and read a bare `zrdtS2`; a stale knip tag (fork verifier) | minor | fixed: regenerated; the doctor uses `ACCEPT_RECORD` and reads only `zrdtS3`; tag removed |
+| A removal hidden from one author: she keeps seating him, and after a re-add every member re-serves her message (leak hunt) | minor | documented (§6.5); the author's view, shared with Signal; `ATTESTED` later |
+| A quote of a message with no audience (a stock client's, or one over the cap) is stripped to an empty quote, so every receiver shows "original not found" (fork verifier) | minor | open, for kejace (§12.4) |
+| Not built: a harness key swap answering 409 between `SERVE` and the send, an envelope replay, a `SERVE` differential for relative responders, a remove-and-re-add smoke beat (both) | minor | open (§12.4) |
+| About 25 crafted requests from Dave's phone (catch-up and per-digest, crafted `since` and `wanted`, to each message's own author, junk digests, a replayed request id, strict on and off); Signal's retry; quotes; edits; removal and re-add when the removal reached every desktop (leak hunt) | none | held: no pre-join content and no pre-join record came back; pre-join records came only as boundary digests |
+
+### 12.4 Known weak or unproven points
 
 1. **Boundary digests are member-vouched.** A newcomer cannot check them (§6.2), and a hash check
    would not help (H2). The containment rule keeps a phantom out of his own records unless a live
-   or author-copy record links it. Decide whether incompleteness attributable to a member is
-   acceptable.
+   or author-copy record links it. Since round 2 a per-digest reply cannot add a head; a catch-up
+   reply still sets the frontier, vouched by its responder. Decide whether incompleteness
+   attributable to a member is acceptable.
 2. **The key tag and the seal rest on TOFU.** A key substituted before the author froze a message,
    or on first contact with a newcomer, is Signal's exposure. A member who reinstalls without
    restoring his identity key loses relayed history, as in Signal. Check that the key passed to
    `SERVE` is the one Desktop holds for the requester, and that `sendZrdtServed` seals to it.
 3. **Removed member plus a server that lies to responders too** can give him gap structure
-   (authors and links, never content), §6.5.
+   (authors and links, never content). A removal hidden from one author lets her seat him (§6.5).
 4. **The author's member view is the server's.** An early promotion faked in one author's view
    makes Signal deliver live to that account, and zrdt follows. The `ATTESTED` gate (§10.3) is the
    fix; it costs liveness.
@@ -1032,14 +1239,31 @@ member's client would need a new wire field.
    `Crdt/Merkle/RelSpec.lean`, `RelRefine.lean`, `ClassifyRel.lean`, `ServeAbsRel.lean`, and
    `Api.lean` Part 5 (§7.3). Check the two new hypotheses (no cycle; no record below the other
    store's boundary) against the counterexamples that force them.
-6. **New host code in the trusted base:** the seal module, `sendZrdtServed`, the §4.4 checks, the
-   quote rule at `uploadMessageQuote`. Each needs a test (§8.3, §10.3), including a harness test
-   that swaps the requester's key and answers 409 between `SERVE` and the send. Not yet checked:
-   that `@signalapp/libsignal-client` 0.105.4 exposes HKDF and `Aes256GcmSiv` to Node (confirm on
-   the Mac mini; otherwise Desktop's own `Crypto.node.ts` primitives serve).
-7. **The theorems in §7.** Check each statement against the code it names; check that the bridge
-   covers `since` and the responder boundary; check that `run_serve_content` ties the header's
-   key tag to the key the wrapper seals to.
+6. **Host code in the trusted base:** the seal module, `sendZrdtServed`, the §4.4 checks, the
+   quote and target rules, the export files and the importer's seat check (§4.5). They are tested,
+   not proved: unit tests (`seal_test`: a test vector; a reply re-targeted to a swapped key cannot
+   be opened; no seal to a key `SERVE` did not check), a randomized stub-versus-`zrdtd`
+   comparison (25 seeds), the vectors byte for byte on both backends, and the smoke.
+   `@signalapp/libsignal-client` 0.105.4 exposes `hkdf` and `Aes256GcmSiv` to Node, and the seal
+   uses them. **Not yet built:** the harness test that swaps the requester's key and answers 409
+   between `SERVE` and the send (the mock cannot swap a key); an envelope replay in the mock; a
+   `SERVE` comparison for relative responders; a remove-and-re-add smoke beat.
+7. **The own export's structure is readable.** Its digests, authors and links stay in the clear
+   (no content), because the demo's beat-4 doctor edits them. A reader of someone's own export
+   learns that pre-join metadata. Open, for kejace: seal or bind the structure too; beat 4's
+   verification failure would then become a plain refusal.
+8. **Metadata gaps left:** votes on a poll sent before the add (§8.3). A quote of a message with
+   no audience is stripped to an empty quote; open, for kejace: keep its id and author without
+   text, which would show the newcomer the timestamp and author of a message he may not have been
+   sent.
+9. **The demo script on `join`.** `demo/DEMO.md` and `launch.ts` still have Bob hand over his own
+   export in beat 5, which `join` now refuses. The smoke uses a five-member roster instead (Erin
+   restores in beat 5 from Bob's export for her, Dave joins in beat 6). Open, for kejace: whether
+   the script follows. The live demo runs the demo build and is not affected.
+10. **The theorems in §7.** Check each statement against the code it names; check that the bridge
+    covers `since` and the responder boundary; check that `run_serve_content` ties the header's
+    key tag to the key the wrapper seals to. Comparator over the 27 statements is still to run,
+    as the final step, with the user's approval (§7.5).
 
 Deliverable: a written verdict with the facts that decide it, and the smallest set of edits to this
 document that makes it sound.
