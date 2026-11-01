@@ -1,8 +1,8 @@
 # APP.md: integrating zrdt into Signal Desktop for the demo
 
 Audience: whoever forks Signal Desktop, writes the villain (mock server or proxy), and runs the
-demo. Companion documents: `PLAN.md` (phases, gates, who does what) and `PLAN_HUMANS.md` (the
-theorems). This file is only about getting zrdt into a Signal client and on screen.
+demo. Companion documents: `PLAN.md` (phases, gates, who does what), `PLAN_HUMANS.md` (the
+theorems) and `RESTORE_PLAN.md` (history import from any peer, confirmed by live messages). This file is only about getting zrdt into a Signal client and on screen.
 
 Facts below marked **(verified)** were checked against `signalapp/Signal-Desktop` `main` on
 2026-10-31 (version `8.36.0-alpha.1`). Anything marked **confirm on checkout** is a best guess

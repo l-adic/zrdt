@@ -3,8 +3,9 @@
 Status date: 2026-10-31. Audience: the AI lead coordinating the work, and the agents it dispatches.
 Ground truth for names, files, API and phases is the DECISIONS block this plan was derived from;
 where this plan amends it, the amendment is marked **[amendment]** and needs the lead's sign-off.
-Sibling documents: `PLAN_HUMANS.md` (the theorems and design in plain English) and `APP.md`
-(Signal-Desktop integration detail). This file owns scope, contracts, phases, gates and rules.
+Sibling documents: `PLAN_HUMANS.md` (the theorems and design in plain English), `APP.md`
+(Signal-Desktop integration detail) and `RESTORE_PLAN.md` (restore from any peer's dump, verified by
+live traffic; a follow-up whose amendments to this plan are listed in its §8). This file owns scope, contracts, phases, gates and rules.
 
 ## 1. Goal
 

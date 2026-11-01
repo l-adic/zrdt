@@ -15,7 +15,8 @@ attacks on cue and the fork catches them. A TLS proxy in front of Signal's stagi
 fallback for showing the same thing against the real network.
 
 Companion documents: `PLAN.md` (work breakdown, gates, and risks, written for the agents doing
-the work) and `APP.md` (how the code goes into Signal-Desktop).
+the work), `APP.md` (how the code goes into Signal-Desktop) and `RESTORE_PLAN.md` (getting the
+history from anyone and letting the next live message verify it).
 
 ---
 
