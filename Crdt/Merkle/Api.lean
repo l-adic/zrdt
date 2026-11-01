@@ -7,41 +7,57 @@ import Mathlib
 import Crdt.Merkle.Bridge
 import Crdt.Merkle.Refine
 import Crdt.Merkle.ClassifyFast
+import Crdt.Merkle.EncodeProofs
+import Crdt.Merkle.LoadApi
 
 set_option linter.unusedSectionVars false
 
 /-!
 # What the shipped store guarantees (docs/PLAN.md §3.2)
 
-These are the advertised statements about the shipped code, `Zrdt.CheckedStore`. Each one is
+These are the advertised statements about the shipped code, `Zrdt.CheckedStore`, and nothing
+else is advertised. The axiom gate (`Test/Axioms.lean`) pins exactly these names. Each one is
 about `abs c`, the set of records the store holds, seen in the spec model (`Bridge.lean`), with
-`hashSpec` as the hash: the record digest the code computes.
+`hashSpec` as the hash: the record digest the code computes. Each is a one-line corollary of a
+proof in `Bridge.lean`, `Refine.lean`, `LoadApi.lean`, `EncodeProofs.lean`, `ClassifyFast.lean`
+or the spec (`Defs.lean`, `Chat.lean`).
 
-Part 1:
+In the order of docs/PLAN.md §3.2:
 
-* `CheckedStore.no_collision`: no two different records in a store have the same digest.
 * `CheckedStore.fetched`: a store holds everything its heads reach, and nothing else.
+* `CheckedStore.no_collision`: no two different records in a store have the same digest.
 * `CheckedStore.agree`: two stores with the same heads hold the same records, or two records
   across the two stores have the same digest (a SHA-256 collision).
-
-Part 2 (proofs in `Refine.lean`):
-
 * `CheckedStore.abs_accept`: what each result of `accept` means (`AcceptMeans`).
 * `CheckedStore.abs_merge`: a merged store holds the records of both stores.
+* `CheckedStore.open_iff`: when `OPEN` loads a blob, and what store it gives.
+* `CheckedStore.salvage_spec`: what `SALVAGE` keeps (the model's `buildRetry`) and what it drops.
 * `CheckedStore.encode_open`: a store's blob opens as exactly that store.
 * `CheckedStore.confirmed`: what a live message's links reach is the same in your store and in
   the sender's, or there is a collision.
 * `CheckedStore.classify_spec`: `CLASSIFY` gives each stored record the spec's status
-  (`StatusMeans`, proofs in `Classify.lean` and `ClassifyFast.lean`).
+  (`StatusMeans`).
+* `Zrdt.encode_injective`: different records have different encodings. It is declared in
+  `EncodeProofs.lean` and not restated here; it is pinned by the gate with the others.
 
-TODO (other lanes): `open_iff`, `salvage_spec` (in `LoadApi.lean`, lane
-build/encode-proofs-api), `encode_injective` (`EncodeProofs.lean`).
+**Differences from the text of PLAN §3.2** (the same statements, made precise):
+
+* `u.map toSpec` (an array) is written `specOf u`, the set of the records of `u` (`Refine.lean`).
+  So a record repeated in a blob counts once, and the order of the records does not matter.
+* `salvage_spec` needs only that the blob decodes to `u`; it concludes that `u` has no collision,
+  that the store is of the right chat, and that `dropped` is sorted.
+* `confirmed` asks `c.has h = true` for each `h ∈ hs` (PLAN: `hs ⊆ c.keys`).
+* `open_iff` and `salvage_spec` are about `decodeBlob` as it is, so they do not depend on how it
+  frames records (lane T5: a count of `2^24` or more is refused, records in any order, repeats
+  allowed). `classify_spec` names one holder, the smallest (docs/review-2026-11-01 lead
+  decision 1, and `Chat.status` after lane T5).
 
 **What the statements mean depends on** (the trusted surface, beyond the code under test):
-`abs`, `toSpec`, `hashSpec` (`Bridge.lean`); the spec's `accept`, `digests`, `heads`, `Reach`,
-`Fetched`, `CollisionIn` (`Defs.lean`); `AcceptMeans` (here). For `classify_spec` also:
-`liveOf`, `StatusMeans` (`Classify.lean`), and the spec's `liveRecords`, `authorConfirmed`,
-`foreignMarked`, `holders` (`Chat.lean`).
+`abs`, `toSpec`, `hashSpec` (`Bridge.lean`); `specOf`, `AcceptMeans` (`Refine.lean`); the spec's
+`accept`, `digests`, `heads`, `Reach`, `Fetched`, `CollisionIn`, `AcceptBuilt`, `buildRetry`
+(`Defs.lean`, `Integrity.lean`); `WellSized`, `decodeBlob`, `encode` (`core/Zrdt/Encode.lean`).
+For `classify_spec` also: `liveOf`, `StatusMeans` (`Classify.lean`), and the spec's
+`liveRecords`, `authorConfirmed`, `foreignMarked`, `holders` (`Chat.lean`).
 -/
 
 namespace Zrdt
@@ -64,11 +80,8 @@ theorem CheckedStore.fetched (c : CheckedStore) :
 hold the same records. Or two different records, across the two stores, have the same digest.
 This is what lets two members compare their histories by comparing heads only. -/
 theorem CheckedStore.agree (c d : CheckedStore) (h : c.heads = d.heads) :
-    abs c = abs d ∨ CollisionIn hashSpec (abs c ∪ abs d) := by
-  have hh : Crdt.Merkle.heads hashSpec (abs c) = Crdt.Merkle.heads hashSpec (abs d) := by
-    ext x
-    rw [← c.mem_heads_iff, ← d.mem_heads_iff, h]
-  exact fetched_agree hashSpec c.fetched (hh ▸ d.fetched)
+    abs c = abs d ∨ CollisionIn hashSpec (abs c ∪ abs d) :=
+  fetched_agree hashSpec c.fetched (CheckedStore.specHeads_eq_of_heads_eq h ▸ d.fetched)
 
 /-! ## Examples
 
@@ -134,51 +147,41 @@ example : ¬ (({toSpec Examples.first} : SpecStore) = {toSpec Examples.a1} ∨
     · exact Examples.first_hash_ne_a1 (by simpa using he.symm)
     · exact hne rfl
 
-/-! ## Part 2: accept, merge, encode, confirmation -/
-
-/-- **What the result of `accept c r` means**, for the new store `c'`:
-
-* `accepted d`: the spec store of `c'` is the spec's `accept` of `toSpec r` (the record is added,
-  since its links resolve; it may have been there already), and `d` is the record's digest.
-* `missing ds`: nothing changed; `ds` is not empty, and it is exactly the links of `r` that are
-  not the digest of any record in the store.
-* `collision d`: nothing changed; `d` is the digest of `r`, and the store holds a different
-  record with that digest.
-* `wrongChat`: nothing changed; `r` belongs to another chat.
-* `tooLarge`: nothing changed; `r` has too many links, or it is new and the store is full. -/
-def AcceptMeans (c : CheckedStore) (r : Rec) : AcceptResult × CheckedStore → Prop
-  | (.accepted d, c') =>
-    abs c' = Crdt.Merkle.accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
-  | (.missing ds, c') =>
-    c' = c ∧ ds ≠ #[] ∧ ∀ x, x ∈ ds ↔ x ∈ (toSpec r).links ∧ x ∉ digests hashSpec (abs c)
-  | (.collision d, c') =>
-    c' = c ∧ d = hashRecord r ∧ ∃ x ∈ abs c, hashSpec x = d ∧ x ≠ toSpec r
-  | (.wrongChat, c') => c' = c ∧ r.group ≠ c.group
-  | (.tooLarge, c') =>
-    c' = c ∧ (¬ r.WellSized ∨ (hashRecord r ∉ digests hashSpec (abs c) ∧ maxRecords ≤ c.size + 1))
-
--- A `missing` result with an empty list, or one that changes the store, means nothing.
-example (c : CheckedStore) (r : Rec) : ¬ AcceptMeans c r (.missing #[], c) := by
-  simp [AcceptMeans]
+/-! ## Part 2: accept, merge, open, salvage, encode, confirmation -/
 
 /-- **`accept`, in the spec model.** Every result of `accept` means what `AcceptMeans` says: an
 accepted record is the spec's `accept`; any other result leaves the store as it was and gives
 the reason. The `missing` list is exact. -/
-theorem CheckedStore.abs_accept (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) := by
-  rcases h : c.accept r with ⟨res, c'⟩
-  cases res with
-  | accepted d => exact CheckedStore.abs_accept_accepted h
-  | missing ds =>
-    obtain ⟨h1, -, h2, h3, -⟩ := CheckedStore.abs_accept_missing h
-    exact ⟨h1, h2, h3⟩
-  | collision d => exact CheckedStore.abs_accept_collision h
-  | wrongChat => exact CheckedStore.abs_accept_wrongChat h
-  | tooLarge => exact CheckedStore.abs_accept_tooLarge h
+theorem CheckedStore.abs_accept (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) :=
+  CheckedStore.accept_means c r
 
 /-- **A merged store holds the records of both stores.** -/
 theorem CheckedStore.abs_merge {c d e : CheckedStore} (h : c.merge d = .ok e) :
     abs e = abs c ∪ abs d :=
   CheckedStore.merge_abs h
+
+/-- **`OPEN`, in the spec model.** `open g b` loads the store `c` exactly when `b` decodes to
+chat `g` and records `u` that are within the size limits (`WellSized`), can be accepted in some
+order (`AcceptBuilt`: every link points to a record accepted before), have no collision and are
+all of chat `g`; and then `c` is the store of chat `g` holding exactly the records of `u`. -/
+theorem CheckedStore.open_iff {g : GroupId} {b : ByteArray} {c : CheckedStore} :
+    CheckedStore.open g b = .ok c ↔
+      ∃ u, decodeBlob b = some (g, u) ∧ WellSized u ∧ AcceptBuilt hashSpec (specOf u) ∧
+        ¬ CollisionIn hashSpec (specOf u) ∧ (∀ r ∈ u, r.group = g) ∧ abs c = specOf u ∧
+        c.group = g :=
+  CheckedStore.open_ok_iff_model
+
+/-- **`SALVAGE`, in the spec model.** If `salvage g b` loads `s`, and the blob `b` holds the
+records `u`, then `u` has no collision, the store holds exactly what the model's salvage keeps
+(`buildRetry`: accept what can be accepted, in any order, until nothing more can), it is of chat
+`g`, and `dropped` is sorted and holds exactly the digests of the other records of `u`. -/
+theorem CheckedStore.salvage_spec {g : GroupId} {b : ByteArray} {s : Salvaged} {u : Array Rec}
+    (h : salvage g b = .ok s) (hu : decodeBlob b = some (g, u)) :
+    ¬ CollisionIn hashSpec (specOf u) ∧
+      abs s.store = buildRetry hashSpec (specOf u) ∧ s.store.group = g ∧
+      (∀ d, d ∈ s.dropped ↔ d ∈ digests hashSpec (specOf u \ buildRetry hashSpec (specOf u))) ∧
+      StrictlySorted s.dropped :=
+  CheckedStore.salvage_ok_model h hu
 
 /-- **A store's blob opens as exactly that store** (`=` compares contents: the maps are
 extensional). -/
@@ -225,6 +228,70 @@ example : ∃ e, (CheckedStore.empty Examples.group).merge (CheckedStore.empty E
 
 example : CheckedStore.open Examples.s1.group Examples.s1.encode = .ok Examples.s1 :=
   Examples.s1.encode_open
+
+-- `open_iff`, forwards, on the blob of `s1`: it decodes to records that are accept-built, have
+-- no collision, and are exactly the records of `s1`.
+example : ∃ u, decodeBlob Examples.s1.encode = some (Examples.s1.group, u) ∧ WellSized u ∧
+    AcceptBuilt hashSpec (specOf u) ∧ ¬ CollisionIn hashSpec (specOf u) ∧
+    (∀ r ∈ u, r.group = Examples.s1.group) ∧ abs Examples.s1 = specOf u ∧
+    Examples.s1.group = Examples.s1.group :=
+  CheckedStore.open_iff.mp Examples.s1.encode_open
+
+-- `open_iff` rejects a bad blob: a blob holding only Bob's reply `b1` (the message `a1` it links
+-- cut out) opens as no store at all, since `{b1}` is not accept-built.
+example (c : CheckedStore) :
+    CheckedStore.open Examples.group (encodeBlob Examples.group #[Examples.b1]) ≠ .ok c := by
+  intro h
+  obtain ⟨u, hu, -, hab, -⟩ := CheckedStore.open_iff.mp h
+  rw [decodeBlob_encodeBlob _ _ (by decide +kernel)] at hu
+  simp only [Option.some.injEq, Prod.mk.injEq, true_and] at hu
+  subst hu
+  exact Examples.b1_alone_not_acceptBuilt hab
+
+/-- The digests of `a1`, `c1` and `a2` differ (computed by the kernel). -/
+theorem Examples.hash_a1_ne_c1 : hashRecord Examples.a1 ≠ hashRecord Examples.c1 := by
+  decide +kernel
+
+/-- See `hash_a1_ne_c1`. -/
+theorem Examples.hash_a1_ne_a2 : hashRecord Examples.a1 ≠ hashRecord Examples.a2 := by
+  decide +kernel
+
+/-- See `hash_a1_ne_c1`. -/
+theorem Examples.hash_c1_ne_a2 : hashRecord Examples.c1 ≠ hashRecord Examples.a2 := by
+  decide +kernel
+
+-- `salvage_spec` on the doctored restore of the demo (`Examples.doctored`: the blob of `all4`
+-- with `b1` cut out, so `a2` links a record that is not there). Salvage succeeds; it keeps
+-- exactly what the model's `buildRetry` keeps and drops exactly the digests of the rest.
+example : ∃ s, CheckedStore.salvage Examples.group Examples.doctored = .ok s ∧
+    abs s.store = buildRetry hashSpec (specOf #[Examples.a1, Examples.c1, Examples.a2]) ∧
+    ∀ d, d ∈ s.dropped ↔ d ∈ digests hashSpec
+      (specOf #[Examples.a1, Examples.c1, Examples.a2] \
+        buildRetry hashSpec (specOf #[Examples.a1, Examples.c1, Examples.a2])) := by
+  have hw : WellSized #[Examples.a1, Examples.c1, Examples.a2] := by decide +kernel
+  have hdec : decodeBlob Examples.doctored =
+      some (Examples.group, #[Examples.a1, Examples.c1, Examples.a2]) :=
+    decodeBlob_encodeBlob _ _ hw
+  have hg : ∀ r ∈ #[Examples.a1, Examples.c1, Examples.a2], r.group = Examples.group := by
+    intro r hr
+    simp only [List.mem_toArray, List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl | rfl <;> rfl
+  have hcol : NoCollision #[Examples.a1, Examples.c1, Examples.a2] := by
+    intro x hx y hy hxy
+    simp only [List.mem_toArray, List.mem_cons, List.not_mem_nil, or_false] at hx hy
+    rcases hx with rfl | rfl | rfl <;> rcases hy with rfl | rfl | rfl
+    · rfl
+    · exact absurd hxy Examples.hash_a1_ne_c1
+    · exact absurd hxy Examples.hash_a1_ne_a2
+    · exact absurd hxy.symm Examples.hash_a1_ne_c1
+    · rfl
+    · exact absurd hxy Examples.hash_c1_ne_a2
+    · exact absurd hxy.symm Examples.hash_a1_ne_a2
+    · exact absurd hxy.symm Examples.hash_c1_ne_a2
+    · rfl
+  obtain ⟨s, hs⟩ := CheckedStore.salvage_ok_of hdec hw hg hcol
+  obtain ⟨-, habs, -, hdrop, -⟩ := CheckedStore.salvage_spec hs hdec
+  exact ⟨s, hs, habs, hdrop⟩
 
 example : Examples.s1.reachSet #[hashRecord Examples.a1] =
       Examples.s2.reachSet #[hashRecord Examples.a1] ∨
@@ -282,5 +349,14 @@ example : (classify Examples.s1 #[⟨hashRecord Examples.a1, .live, #[]⟩])[has
 example (x : SpecRec) : StatusMeans ∅ ⟨∅, ∅⟩ x .unconfirmed ∧
     ¬ StatusMeans ∅ ⟨∅, ∅⟩ x .confirmedByAuthor := by
   simp [StatusMeans, authorConfirmed, foreignMarked, holders, liveRecords]
+
+/-! ## The encoding
+
+`Zrdt.encode_injective` (`EncodeProofs.lean`, pinned by the gate): different records have
+different encodings, for every record, with no size bound. -/
+
+-- Alice's `a1` and Bob's `b1` are different records, so their encodings differ.
+example : encode Examples.a1 ≠ encode Examples.b1 :=
+  fun h => by have := encode_injective h; revert this; decide +kernel
 
 end Zrdt

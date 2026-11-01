@@ -16,22 +16,21 @@ what each operation of `Zrdt.CheckedStore` does to `abs c`, in the words of the 
 (`Crdt.Merkle`):
 
 * `accept` (`abs_accept_accepted`, `abs_accept_missing`, `abs_accept_collision`,
-  `abs_accept_wrongChat`, `abs_accept_tooLarge`): an accepted record is the spec's `accept`; any
-  other result leaves the store as it was, and says why. The `missing` list is exactly the links
-  the spec store does not hold.
+  `abs_accept_wrongChat`, `abs_accept_tooLarge`; together `accept_means`, read by `AcceptMeans`):
+  an accepted record is the spec's `accept`; any other result leaves the store as it was, and
+  says why. The `missing` list is exactly the links the spec store does not hold.
 * `acceptAll` (`abs_acceptAll`): a batch adds only its own records, keeps the store's, and each
   record left over is refused by the spec's `accept` (or by a collision, the chat, or size).
 * `merge` (`merge_abs`): a merged store holds the records of both stores.
-* `heads` (`heads_eq`), `has` (`has_iff`), `get` (`get_eq_some_iff`): the observers read the spec
-  store.
+* `heads` (`heads_eq`, `specHeads_eq_of_heads_eq`), `has` (`has_iff`), `get`
+  (`get_eq_some_iff`): the observers read the spec store.
 * `reachSet` (`reachSet_iff`): the walk finds exactly the digests of the spec's `reachSet`
   (`mem_walk_iff`: the link walk is right). `confirmed_records`: what a live message's links
   reach is the same, record for record, in your store and the sender's (via `confirmed_exact`).
 * `eq_of_abs`: two stores of one chat that hold the same records are equal.
 
-`open` and `salvage` over the model (`open_iff`, `salvage_spec`) are in `LoadApi.lean` (lane
-build/encode-proofs-api), built on `specOf` and the lemmas here; `encode` is core's
-`encode_reopens`.
+`open` and `salvage` over the model (`open_ok_iff_model`, `salvage_ok_model`) are in
+`LoadApi.lean`, built on `specOf` and the lemmas here; `encode` is core's `encode_reopens`.
 
 The statements advertised to readers are restated in `Api.lean`.
 -/
@@ -323,6 +322,15 @@ example : (CheckedStore.empty Examples.group).heads.toList.toFinset =
     Crdt.Merkle.heads hashSpec (abs (CheckedStore.empty Examples.group)) :=
   heads_eq _
 
+/-- Two stores with equal head caches have equal spec heads. -/
+theorem specHeads_eq_of_heads_eq {c d : CheckedStore} (h : c.heads = d.heads) :
+    Crdt.Merkle.heads hashSpec (abs c) = Crdt.Merkle.heads hashSpec (abs d) := by
+  rw [← c.heads_eq, ← d.heads_eq, h]
+
+example : Crdt.Merkle.heads hashSpec (abs Examples.s1) =
+    Crdt.Merkle.heads hashSpec (abs Examples.s1) :=
+  specHeads_eq_of_heads_eq rfl
+
 /-- **`has` asks the spec store.** `c.has d` is true exactly when the spec store holds a record
 whose digest is `d`. -/
 theorem has_iff (c : CheckedStore) {d : Digest} :
@@ -561,6 +569,48 @@ example : abs Examples.s1 = Crdt.Merkle.accept hashSpec
     show (CheckedStore.empty Examples.group).accept Examples.a1 =
       (.accepted (hashRecord Examples.a1), Examples.s1)
     rfl)
+
+/-- **What the result of `accept c r` means**, for the new store `c'` (advertised through
+`abs_accept` in `Api.lean`):
+
+* `accepted d`: the spec store of `c'` is the spec's `accept` of `toSpec r` (the record is added,
+  since its links resolve; it may have been there already), and `d` is the record's digest.
+* `missing ds`: nothing changed; `ds` is not empty, and it is exactly the links of `r` that are
+  not the digest of any record in the store.
+* `collision d`: nothing changed; `d` is the digest of `r`, and the store holds a different
+  record with that digest.
+* `wrongChat`: nothing changed; `r` belongs to another chat.
+* `tooLarge`: nothing changed; `r` has too many links, or it is new and the store is full. -/
+def _root_.Zrdt.AcceptMeans (c : CheckedStore) (r : Rec) : AcceptResult × CheckedStore → Prop
+  | (.accepted d, c') =>
+    abs c' = Crdt.Merkle.accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
+  | (.missing ds, c') =>
+    c' = c ∧ ds ≠ #[] ∧ ∀ x, x ∈ ds ↔ x ∈ (toSpec r).links ∧ x ∉ digests hashSpec (abs c)
+  | (.collision d, c') =>
+    c' = c ∧ d = hashRecord r ∧ ∃ x ∈ abs c, hashSpec x = d ∧ x ≠ toSpec r
+  | (.wrongChat, c') => c' = c ∧ r.group ≠ c.group
+  | (.tooLarge, c') =>
+    c' = c ∧ (¬ r.WellSized ∨ (hashRecord r ∉ digests hashSpec (abs c) ∧ maxRecords ≤ c.size + 1))
+
+-- A `missing` result with an empty list means nothing.
+example (c : CheckedStore) (r : Rec) : ¬ AcceptMeans c r (.missing #[], c) := by
+  simp [AcceptMeans]
+
+/-- Every result of `accept` means what `AcceptMeans` says (the five cases above, together). -/
+theorem accept_means (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) := by
+  rcases h : c.accept r with ⟨res, c'⟩
+  cases res with
+  | accepted d => exact abs_accept_accepted h
+  | missing ds =>
+    obtain ⟨h1, -, h2, h3, -⟩ := abs_accept_missing h
+    exact ⟨h1, h2, h3⟩
+  | collision d => exact abs_accept_collision h
+  | wrongChat => exact abs_accept_wrongChat h
+  | tooLarge => exact abs_accept_tooLarge h
+
+example : AcceptMeans (CheckedStore.empty Examples.group) Examples.a1
+    ((CheckedStore.empty Examples.group).accept Examples.a1) :=
+  accept_means _ _
 
 /-! ## Accepting a batch -/
 
