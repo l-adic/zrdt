@@ -231,6 +231,11 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
 
 ## A7. Scope, hooks, storage, timeline (R§2.2–R§2.7, R§2.9)
 
+> **Superseded in part by `docs/JOIN_PLAN.md` v2:** membership changes are designed there
+> (§3–§6); the demo build still must not change membership (§0). The freeze adds field 201
+> (§4.1), `ACCEPT` takes the opening (§4.2), and receive dispatch covers Content 202–204, with
+> 200 and 201 removed (§10.1).
+
 - **Scope predicate,** shared by send and receive. A record is a GroupV2 DataMessage from the
   `NormalMessage` job with no `storyContext`, no `reaction` and no `editedMessageTimestamp`.
   - Not covered: edits, deletes, reactions, polls, pins, timer, profile and group changes.
@@ -270,6 +275,12 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
 - **Blocking** is a permanent divergence in both directions. Document it.
 
 ## A8. Provenance, attribution and resend (U§4.4)
+
+> **Resend superseded by `docs/JOIN_PLAN.md` v2 §4.3–§5, §10.1:** every relay and the author's
+> own re-send is a `SERVE` reply sealed to the requester's checked identity key. The author's copy
+> is an author-copy entry in its own reply, not a sendLog re-send; a zrdt request never triggers
+> the sendLog. `ZrdtServeRequest`/`ZrdtServed` replace `ZrdtResendRequest`/`ZrdtResend`.
+> Provenance, `authorConfirmed`, `CLASSIFY`, disown and `ZrdtNotFound` are unchanged.
 
 - **Provenance per record (host state, trusted):**
   - `live`: the Signal envelope sender equals the record's author, or this device sent it;
@@ -329,6 +340,12 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
   signatures".
 
 ## A9. Restore and privacy (U§4.5)
+
+> **Superseded in part by `docs/JOIN_PLAN.md` v2 §4.5, §6:** an export to another account is
+> `SERVE`'s reply for that account, sealed to its identity key. It carries content only where the
+> message's committed audience seats that account; someone who joined later gets the newer
+> structure and opaque digests for older records, not a structure-only dump. The exclusions
+> below hold for every export. Own-account export is as here.
 
 - **Dump = store blob (structure) + a content section keyed by digest** (openings).
   - The exporter leaves out content for `expireTimer > 0`, deleted-for-everyone and view-once.
@@ -419,6 +436,11 @@ message Content { oneof content { ...; ZrdtResendRequest zrdtResendRequest = 200
 - **"A stock client keeps working"** moves to stretch: the mock setup has no stock client.
 
 ## A12. Pitch and claims (R§4)
+
+> **Trusted base extended by `docs/JOIN_PLAN.md` v2 §9:** libsignal's `agree`, HKDF and
+> AES-256-GCM-SIV (the seal); the member list the author's client sees at enqueue and freeze;
+> identity keys under TOFU; and new host code (reading field 201, the seal module,
+> `sendZrdtServed`, the solicited-reply check). The pitch is unchanged.
 
 - **Replace "a malicious server cannot drop, reorder, withhold, or rewrite history without
   detection"** (PLAN §1, PLAN_HUMANS intro, APP closing line) with:

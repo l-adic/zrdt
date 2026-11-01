@@ -3,7 +3,9 @@
 A verified transcript-consistency layer for group chat.
 
 Status date: 2026-11-01. Changes marked **[amendment]** follow the review in
-`docs/review-2026-11-01/` (`REVIEW.md`, `UPDATE-690ae65.md`, `AMENDMENTS.md`).
+`docs/review-2026-11-01/` (`REVIEW.md`, `UPDATE-690ae65.md`, `AMENDMENTS.md`). Membership changes,
+recovery by digest and exports to another account are redesigned for the build after the demo in
+`docs/JOIN_PLAN.md` v2 (not implemented); notes marked *JOIN v2* below say where.
 
 Each message carries the hashes of the messages its sender had already seen. Phones check those
 hashes. The checks are written in Lean 4, proved correct, and compiled into `zrdtd`, a small
@@ -663,9 +665,10 @@ the same vectors. `Test/Axioms.lean` pins every advertised theorem to
   The phone asks the member whose message referenced it, 1:1, then the group, to resend it by
   digest; the waiting message is kept until it can be accepted (theorem (4)). The missing message
   appears in place, first as "relayed by Bob". The app then asks its author to send it again; the
-  author's copy arrives live, and the message turns normal. A gap shows that someone is
-  inconsistent, not that the server is at fault: a member can link a made-up digest, and an
-  offline author looks the same.
+  author's copy arrives live, and the message turns normal. (*JOIN v2:* the author's copy comes
+  in its own sealed `SERVE` reply, not through Signal's resend path; `JOIN_PLAN.md` §5.) A gap
+  shows that someone is inconsistent, not that the server is at fault: a member can link a
+  made-up digest, and an offline author looks the same.
 - **Compare codes.** **[amendment]** "Copy compare code" puts the full sorted set of heads on the
   clipboard, and the other member uses "Paste compare code". There is no QR: Desktop cannot decode
   one. Comparing with Bob gives one of: identical; you're behind (Bob has messages you don't; the
@@ -738,6 +741,8 @@ Details, protobuf changes, file paths and the demo script are in `APP.md`.
   story, reaction or edit. Edits, deletes, reactions, polls, pins, timer, profile and group changes
   are not covered. 1:1 chats and Note-to-self are out. Membership changes after a group starts
   using zrdt are a non-goal; the demo group is fixed. Send and receive apply the same rule.
+  (*JOIN v2:* membership changes are designed in `JOIN_PLAN.md` §3–§6; each message carries its
+  author's audience in a new field 201.)
 - **On send.** **[amendment]** Inside the send job, once: read the heads, pick a salt, build the
   message bytes, ask `zrdtd` to `COMMIT` and `ACCEPT`, save, and send those same bytes on every
   retry.
@@ -758,14 +763,17 @@ Details, protobuf changes, file paths and the demo script are in `APP.md`.
   is confirmed by its author at once. A relayed message never changes anything outside itself, for
   example the sender's profile key. A "not found" reply is not decisive: the server can drop the
   request or the reply, and an honest member may lack the record. Stock clients log the three new
-  message types as unsupported and drop them; nothing is shown.
+  message types as unsupported and drop them; nothing is shown. (*JOIN v2:* replaced by one Lean
+  function, `SERVE`, whose replies are sealed to the requester's checked key; `JOIN_PLAN.md`
+  §4.3–§5, §10.1.)
 - **Whole-history restore** **[amendment]** from anyone. A dump is the store (structure) plus a
   content section keyed by digest. It leaves out the content of disappearing, deleted-for-everyone
   and view-once messages, and anyone who joined after a message was sent gets its structure only.
   Export asks for OS authentication and warns "do not share". Live messages then confirm it:
   `RESTORE_PLAN.md`. This holds against the server, and against a dump-giver who sends no live
   messages. A member who gives a dump and also links fakes in live messages is caught only by
-  disown.
+  disown. (*JOIN v2:* an export to another account is `SERVE`'s sealed reply for that account,
+  with opaque digests in place of pre-join structure; `JOIN_PLAN.md` §4.5.)
 - **The villain.** **[amendment]** Signal-Desktop ships a mock Signal server for its own
   integration tests. An `EvilServer` subclass overrides how it hands out messages
   (`handleMessage` and `prepareMultiDeviceMessage`, not `send()`) with a few rules: drop one group
@@ -824,7 +832,8 @@ Details, protobuf changes, file paths and the demo script are in `APP.md`.
   not a made-up record added on top (§4 (4)).
 - **Scope.** **[amendment]** Edits, deletes, reactions, polls, pins, timer, profile and group
   changes, 1:1 chats, and membership changes after a group starts using zrdt. Blocking a member
-  makes the two stores differ for good, in both directions.
+  makes the two stores differ for good, in both directions. (*JOIN v2:* membership changes,
+  `JOIN_PLAN.md` §3–§8.)
 - **Time.** No theorem says when a message was written. Links give causal order only.
 - **Compaction.** Histories only grow. Bounding storage needs a snapshot record and a theorem that
   a compacted history gives the same guarantees; not in scope.
