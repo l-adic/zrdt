@@ -243,7 +243,8 @@ theorem CheckedStore.classify_spec (c : CheckedStore) (facts : Array Fact) (d : 
 
 example (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
     (classify Examples.s1 facts)[d]? = some st ↔
-      ∃ r, Examples.s1.get d = some r ∧ StatusMeans (abs Examples.s1) (liveOf facts) (toSpec r) st :=
+      ∃ r, Examples.s1.get d = some r ∧
+        StatusMeans (abs Examples.s1) (liveOf facts) (toSpec r) st :=
   CheckedStore.classify_spec _ _ _ _
 
 /-- `s1` holds `a1` under its digest (computed by the kernel). -/

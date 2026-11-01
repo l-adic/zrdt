@@ -309,7 +309,8 @@ example : CheckedStore.empty Examples.group = CheckedStore.empty Examples.group 
 /-! ## Observers -/
 
 /-- **`heads` is the spec's heads.** -/
-theorem heads_eq (c : CheckedStore) : c.heads.toList.toFinset = Crdt.Merkle.heads hashSpec (abs c) :=
+theorem heads_eq (c : CheckedStore) :
+    c.heads.toList.toFinset = Crdt.Merkle.heads hashSpec (abs c) :=
   c.heads_toFinset
 
 /-- `headsArray` (what `HEADS` replies) holds the spec's heads. -/
@@ -372,7 +373,8 @@ theorem walkReach_iff (c : CheckedStore) (hs : Array Digest) {d : Digest} :
 the digest of a record in the spec's `reachSet` of `abs c` from `hs`: a stored record reached by
 following links from `hs`. -/
 theorem reachSet_iff (c : CheckedStore) (hs : Array Digest) {d : Digest} :
-    d ∈ c.reachSet hs ↔ d ∈ digests hashSpec (Crdt.Merkle.reachSet hashSpec (abs c) hs.toList.toFinset) := by
+    d ∈ c.reachSet hs ↔
+      d ∈ digests hashSpec (Crdt.Merkle.reachSet hashSpec (abs c) hs.toList.toFinset) := by
   rw [reachSet, mem_walk_iff, walkReach_iff, mem_digests]
   constructor
   · rintro ⟨hdm, hR⟩
@@ -419,10 +421,12 @@ theorem confirmed_records (c d : CheckedStore) (hs : Array Digest)
       (Finset.filter_subset _ _)) h
 
 /-- `s1` (Alice's `a1`) holds `a1` (computed by the kernel). -/
-theorem _root_.Zrdt.Examples.s1_has_a1 : Examples.s1.has (hashRecord Examples.a1) = true := by decide +kernel
+theorem _root_.Zrdt.Examples.s1_has_a1 : Examples.s1.has (hashRecord Examples.a1) = true := by
+  decide +kernel
 
 /-- `s2` (`a1`, then Bob's reply `b1`) holds `a1` (computed by the kernel). -/
-theorem _root_.Zrdt.Examples.s2_has_a1 : Examples.s2.has (hashRecord Examples.a1) = true := by decide +kernel
+theorem _root_.Zrdt.Examples.s2_has_a1 : Examples.s2.has (hashRecord Examples.a1) = true := by
+  decide +kernel
 
 -- A message that links `a1` reaches the same records in `s1` and in `s2`; `b1` is not reached.
 example : (Examples.s1.reachSet #[hashRecord Examples.a1] =

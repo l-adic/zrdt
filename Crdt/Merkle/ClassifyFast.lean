@@ -367,6 +367,9 @@ def authorStep (c : CheckedStore) (m : Std.ExtTreeMap Aci (Array Digest × Diges
     m.insert r.author (ls.push p.1, p.2.foldl (fun s x => s.insert x) ds)
   | none => m
 
+-- A live digest that is not stored adds nothing.
+example : authorStep (CheckedStore.empty Examples.group) ∅ (Examples.dig 9, #[]) = ∅ := rfl
+
 /-- The view of one author, from its live digests `ls` and disowned digests `ds`. -/
 def viewOf (c : CheckedStore) (p : Array Digest × DigestSet) : AuthorView :=
   let below := c.reachSet (p.1.flatMap fun l => ((c.get l).map (·.links)).getD #[])
@@ -536,12 +539,16 @@ theorem mem_reachSet_code (c : CheckedStore) (S : Array Digest) {x : Digest} :
   · rintro ⟨hx, k, hk, hR⟩
     obtain ⟨y, hy, rfl⟩ := (mem_digests hashSpec).mp (c.mem_digests_abs.mpr hx)
     refine ⟨y, (mem_reachSet hashSpec).mpr ⟨hy, ?_⟩, rfl⟩
-    exact (reach_iff_exists hashSpec).mpr ⟨k, List.mem_toFinset.mpr (Array.mem_toList_iff.mpr hk), hR⟩
+    exact (reach_iff_exists hashSpec).mpr
+      ⟨k, List.mem_toFinset.mpr (Array.mem_toList_iff.mpr hk), hR⟩
 
 /-- The live records of a list that no other of them reaches through a link (the `newest` of
 `authorViews`). -/
 def newestOf (c : CheckedStore) (ls : Array Digest) : Array Digest :=
   ls.filter (!(c.reachSet (ls.flatMap fun l => ((c.get l).map (·.links)).getD #[])).contains ·)
+
+example (c : CheckedStore) : newestOf c #[] = #[] := rfl
+example (c : CheckedStore) : (viewOf c (#[], ∅)).disowned = ∅ := rfl
 
 /-- `viewOf`'s third field is `reachersOfAll` of the newest records. -/
 theorem viewOf_reachesAllLive (c : CheckedStore) (p : Array Digest × DigestSet) :
@@ -560,7 +567,8 @@ theorem reach_of_link (c : CheckedStore) {l k x : Digest} {y : Rec} (hy : c.get 
 theorem exists_newest (c : CheckedStore) (ls : Array Digest) :
     ∀ l ∈ ls, ∃ n ∈ newestOf c ls, Reach hashSpec (abs c) {n} l := by
   classical
-  have hac : Acyclic hashSpec (abs c) := acyclic_of_acceptBuilt hashSpec c.acceptBuilt c.built.no_collision
+  have hac : Acyclic hashSpec (abs c) :=
+    acyclic_of_acceptBuilt hashSpec c.acceptBuilt c.built.no_collision
   -- The records that reach `l` through at least one link.
   let A : Digest → Finset SpecRec := fun l =>
     (abs c).filter fun x => ∃ k ∈ x.links, Reach hashSpec (abs c) {k} l
@@ -668,7 +676,8 @@ theorem authorViews_some (c : CheckedStore) (facts : Array Fact) {a : Aci} {v : 
     (v.disowned.contains d = true ↔ ∃ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a,
       (hashSpec y, d) ∈ (liveOf facts).disown) ∧
     ∃ s, v.reachesAllLive = some s ∧ (s.contains d = true ↔
-      ∀ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a, Reach hashSpec (abs c) {d} (hashSpec y)) := by
+      ∀ y ∈ liveRecords hashSpec (abs c) (liveOf facts) a,
+        Reach hashSpec (abs c) {d} (hashSpec y)) := by
   have E := byAuthor_entry c (liveFacts facts) a
   rw [authorViews_eq, Std.ExtTreeMap.getElem?_map] at hv
   obtain ⟨p, hp, rfl⟩ := Option.map_eq_some_iff.mp hv

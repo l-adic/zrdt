@@ -46,6 +46,7 @@ def liveOf (facts : Array Fact) : LiveFacts Digest where
   disown := ((liveList facts).flatMap fun f => f.disown.toList.map (f.digest, ·)).toFinset
 
 example : liveOf #[] = ⟨∅, ∅⟩ := rfl
+example : liveList #[⟨Examples.dig 1, .imported, #[]⟩] = [] := rfl
 
 /-- A digest is live in `liveOf` exactly when some live fact is about it. -/
 theorem mem_liveOf_live {facts : Array Fact} {d : Digest} :
@@ -192,10 +193,14 @@ def livesOf (c : CheckedStore) (live : Std.ExtTreeMap Digest (Array Digest) comp
     List (Digest × Rec × Array Digest) :=
   List.filterMap (fun x => Option.map (fun x_1 => (x.1, x_1, x.2)) (c.get x.1)) live.toList
 
+example (c : CheckedStore) : livesOf c ∅ = [] := rfl
+
 /-- The stored live records of `r`'s author (the `own` of `statusRef`). -/
 def ownOf (c : CheckedStore) (live : Std.ExtTreeMap Digest (Array Digest) compare) (r : Rec) :
     List (Digest × Rec × Array Digest) :=
   (livesOf c live).filter fun x => x.2.1.author == r.author
+
+example (c : CheckedStore) (r : Rec) : ownOf c ∅ r = [] := rfl
 
 /-- `statusRef`'s decision, from its four inputs. -/
 def statusOf (reached disowned parallel : Bool) (holders : List Aci) : Zrdt.Status :=
