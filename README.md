@@ -205,13 +205,32 @@ make comparator         # NOT RUN YET: run once, at the end, with approval (see 
 ```
 
 **Running Comparator.** `make comparator` builds `Comparator.Challenge` and runs the official
-comparator on `comparator.json`: by default the one built into Lake from Lean v4.35.0
-(`lake comparator --config comparator.json`, which needs a `bwrap` that can create user
-namespaces), or, after `make comparator-tools` (clones and builds leanprover/comparator,
-lean4export and landrun into `.tools/`; needs go), the standalone `lake env <comparator>
-comparator.json`. It re-checks all of Mathlib and has needed over 60 GB, so it runs under
-`systemd-run --user --scope -p MemoryMax=48G -p MemorySwapMax=0` where available
-(`MEMORY_MAX=...` to change). `make install` and `make run` never run it. Status: not run yet.
+comparator on `comparator.json`, in one of two forms (`COMPARATOR=builtin|standalone`; the
+default, `auto`, takes the first that can run here):
+
+- **builtin**: `lake comparator --config comparator.json`, built into Lake since Lean v4.35.0
+  (this toolchain) and the form upstream recommends. It sandboxes the build with bubblewrap,
+  which needs unprivileged user namespaces. On Ubuntu 23.10 and later AppArmor blocks those:
+  `bwrap --ro-bind / / true` fails with `setting up uid map: Permission denied` (it does on our
+  Ubuntu 24.04 machine). The fix needs root; give bwrap a profile that allows `userns`:
+
+  ```
+  printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}\n' \
+    | sudo tee /etc/apparmor.d/bwrap && sudo apparmor_parser -r /etc/apparmor.d/bwrap
+  ```
+
+  (or, for the whole machine, `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
+- **standalone**: `leanprover/comparator`, archived when it moved into Lake, sandboxed with
+  landrun (Landlock, no user namespaces, no root). `make comparator-tools` fetches and builds,
+  into `.tools/`, its last commit (on Lean v4.35.0), the `lean4export` that commit pins (built
+  with the same Lean, as the export format requires) and landrun from `main` (needs Go; Go 1.21
+  or newer fetches the Go 1.24 that landrun asks for). It runs nothing. `make comparator` then
+  runs `lake env <comparator> comparator.json` as comparator's README asks, in a
+  `systemd-run --user` service with `RestrictAddressFamilies=~AF_UNIX`.
+
+Either form re-checks all of Mathlib and has needed over 60 GB, so it runs with `MemoryMax=48G`
+and `MemorySwapMax=0` under `systemd-run --user` where available (`MEMORY_MAX=...` to change).
+`make install` and `make run` never run it. Status: not run yet.
 
 `make help` lists the targets. `make zrdtd` builds the daemon at `core/.lake/build/bin/zrdtd`.
 
