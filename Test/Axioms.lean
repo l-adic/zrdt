@@ -231,6 +231,18 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Crdt.Merkle.authorConfirmed_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Crdt.Merkle.authorConfirmed_sound
 
+-- Phase B: the advertised statements about the shipped store (`Api.lean`, docs/PLAN.md §3.2).
+-- Part 1; the rest of the §3.2 list is added as each statement lands.
+
+/-- info: 'Zrdt.CheckedStore.fetched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.fetched
+
+/-- info: 'Zrdt.CheckedStore.no_collision' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.no_collision
+
+/-- info: 'Zrdt.CheckedStore.agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.agree
+
 -- Phase B: the encoding (`Crdt/Merkle/EncodeProofs.lean`, docs/PLAN.md §3.2).
 
 /-- info: 'Zrdt.encode_injective' depends on axioms: [propext, Classical.choice, Quot.sound] -/
