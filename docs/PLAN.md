@@ -80,7 +80,8 @@ zrdt/                          this repo (Lean, FFI, proxy, docs)
   ffi/zrdt.h ffi/sha256.c ffi/zrdt_stub.c ffi/smoke.c
   proxy/                       stretch only: TLS proxy against staging (APP.md §8b)
   vectors/vectors.json
-  PLAN.md PLAN_HUMANS.md APP.md README.md CLAUDE.md
+  docs/PLAN.md docs/PLAN_HUMANS.md docs/APP.md   (plus docs/PHASE1-PROMPT.md, docs/VISIBILITY-AUDIT.md)
+  README.md CLAUDE.md
 signal-desktop-zrdt/           separate repo: the Signal-Desktop fork (see APP.md)
   packages/zrdt-native/        @zrdt/native (N-API package; lives in the fork so its existing
                                electron rebuild wiring builds it; vendors libzrdt.a + zrdt.h + vectors)
