@@ -1,9 +1,12 @@
 name = "zrdt"
 version = "0.1.0"
-# axiom_check MUST stay in defaultTargets: the #guard_msgs axiom gate in
-# Test/Axioms.lean only fires when that module is elaborated, and a plain
-# `lake build` must run it so drift cannot land silently.
-defaultTargets = ["Crdt", "axiom_check"]
+# Test MUST stay in defaultTargets: the #guard_msgs axiom gate in
+# Test/Axioms.lean (library Test) only fires when that module is elaborated,
+# and a plain `lake build` must run it so drift cannot land silently.
+# axiom_check is not a default target: linking it compiles Mathlib's C code
+# (about half of a fresh `make install`), and the gate does not need it.
+# `make run` re-runs the gate with `lake lean Test/Axioms.lean`.
+defaultTargets = ["Crdt", "Test"]
 
 [[require]]
 name = "mathlib"
@@ -21,6 +24,8 @@ name = "Crdt"
 name = "Test"
 globs = ["Test.+"]
 
+# `lake exe axiom_check` prints "axiom gate passed" (the gate itself ran when Test.Axioms was
+# built); slow the first time, as it links Mathlib's C.
 [[lean_exe]]
 name = "axiom_check"
 root = "Test.Axioms"

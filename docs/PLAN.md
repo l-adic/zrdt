@@ -825,6 +825,10 @@ Rung 3's `axiom_check` is a `lean_exe` rooted in `Test.Axioms`, which imports Ma
 it compiles and links Mathlib's C (review §1.1). It stays as it is: it is a default target, so
 every `lake build` runs the gate; it runs on the Linux box only; it is outside `core/` and never
 ships. **[amendment]** (lead to confirm)
+**[amendment, 2026-11-01 late]** The `Test` library (which holds `Test.Axioms`) replaced
+`axiom_check` in the default targets: every `lake build` still elaborates the gate, without
+linking Mathlib's C (about half of a fresh `make install`). `lake exe axiom_check` still works;
+`make run` re-runs the gate with `lake lean Test/Axioms.lean`.
 
 Trusted at rung 9: Lean kernel (plus external checkers with `--paranoid` if time), the statements
 in `Comparator/Challenge.lean`. Everything below the spec is covered by refinement. Everything

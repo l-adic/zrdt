@@ -121,7 +121,9 @@ def run_vectors(path, vectors_path):
 
 
 def smoke(path, n):
-    z = Zrdtd(path)
+    # zrdtd logs each error reply on stderr; the one this run asks for on purpose (HEADS after
+    # CLOSE: NO_CHAT) would read like a failure, so stderr is dropped, as in vectors mode.
+    z = Zrdtd(path, stderr=subprocess.DEVNULL)
     group, author = b"\x67" * 32, b"\xa1" * 16
     ok = True
 
@@ -166,7 +168,7 @@ def smoke(path, n):
     assert blob_reply[0] == OK
     blob = blob_reply[5:]
     ok &= z.call("CLOSE", chat("bench")) == bytes([OK])
-    ok &= z.call("HEADS", chat("bench"))[0] == 0x82  # NO_CHAT
+    ok &= z.call("HEADS", chat("bench"))[0] == 0x82  # NO_CHAT, expected: the chat is closed
     t0 = time.perf_counter()
     opened = z.call("OPEN", chat("bench") + group + b"\x00" + bstr(blob))
     open_ms = (time.perf_counter() - t0) * 1e3

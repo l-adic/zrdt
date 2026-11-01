@@ -131,11 +131,13 @@ examples use `decide +kernel`, which adds no axiom. (The gate also pins older CR
 
 **Comparator: not run yet.** `comparator.json` names the 11 statements and permits only the
 three axioms above; `make comparator` would judge `Crdt.Merkle.Api` against
-`Comparator/Challenge.lean` with `lake comparator`, and `make check` would replay the build with
-`lake check`. Neither has completed a run: they re-check all of Mathlib, and the attempts so far
-ran out of memory on a 63 GB machine. They run once, as the last step, only with the
-maintainer's approval. Until then the statements are checked by reading `Api.lean`, and the
-axioms only by the gate above, which runs in the elaborator during `lake build`.
+`Comparator/Challenge.lean` with the official comparator (`lake comparator`, or the standalone
+`leanprover/comparator`; see "Running Comparator" below), and `make check` would replay the build
+with `lake check`. Neither has completed a run: earlier re-check runs reached 61.5 GB and
+63.5 GB on our 62 GB Linux machine and were killed for lack of memory, and on that machine
+bubblewrap cannot sandbox until root allows it (below). They run once, as the last step, only
+with the maintainer's approval. Until then the statements are checked by reading `Api.lean`, and
+the axioms only by the gate above, which runs in the elaborator during `lake build`.
 
 ## Trusted base
 
@@ -183,12 +185,16 @@ make install && make run
 ```
 
 Prerequisites: [elan](https://github.com/leanprover/elan) (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`;
-it installs the Lean toolchain named in `lean-toolchain`), python3, git and curl. `make install`
-fetches the Mathlib build cache, runs `lake build` (proofs and axiom gate) and builds `zrdtd`;
-about 10 minutes on a 32-core machine from a fresh clone, most of it compiling Mathlib's C code
-for the `axiom_check` executable (the cache has the proofs, not the native objects). `make run` runs the axiom gate, replays the 133 test vectors
-against `zrdtd` and round-trips a 1000-record chat through it. The GUI demo (Signal Desktop with
-zrdt) is in `l-adic/signal-desktop-zrdt`: `make install && make run` there.
+it installs the Lean toolchain named in `lean-toolchain`), python3, git and curl; network
+access (GitHub and the Mathlib build cache); about 9 GB of free disk (8 GB in `.lake`, about
+1 GB of Mathlib cache in `~/.cache/mathlib`). `make install && make run` is tested on Linux
+(Ubuntu 24.04, x86-64); `zrdtd` alone (`make zrdtd`, no Mathlib) also builds on macOS (Apple
+silicon). `make install` fetches the Mathlib build cache, runs `lake build` (proofs and axiom
+gate) and builds `zrdtd`: about 4.5 minutes from a fresh clone on a 32-core Linux machine
+(measured with the Mathlib cache already in `~/.cache/mathlib`; downloading it adds about
+1 GB). `make run` re-runs the axiom gate, replays the 133 test vectors against `zrdtd` and
+round-trips a 1000-record chat through it, in about 10 seconds. The GUI demo (Signal Desktop with zrdt) is in `l-adic/signal-desktop-zrdt`, branch
+`zrdt`: `make install && make run` there (macOS on Apple silicon).
 
 ## Build and check
 
@@ -196,7 +202,8 @@ zrdt) is in `l-adic/signal-desktop-zrdt`: `make install && make run` there.
 make install            # fetch the Mathlib cache, lake build (runs the axiom gate), build zrdtd
 make run                # axiom gate, the 133 test vectors and a 1000-record smoke against zrdtd
 lake build              # build the spec and proofs; the axiom gate runs as part of it
-lake exe axiom_check    # prints "axiom gate passed: ..."
+lake lean Test/Axioms.lean   # run the axiom gate again (silent if it passes; make run does this)
+lake exe axiom_check    # prints "axiom gate passed: ..." (links Mathlib's C: slow the first time)
 cd core && lake build   # the shipped code and zrdtd only: Init and Std, no Mathlib
 make vectors            # regenerate vectors/vectors.json (its checks run in `cd core && lake build`)
 python3 vectors/zrdtd_client.py vectors core/.lake/build/bin/zrdtd   # zrdtd gives every reply
@@ -204,9 +211,12 @@ make closure            # zrdtd links no Mathlib; silent if OK
 make comparator         # NOT RUN YET: run once, at the end, with approval (see above)
 ```
 
-**Running Comparator.** `make comparator` builds `Comparator.Challenge` and runs the official
-comparator on `comparator.json`, in one of two forms (`COMPARATOR=builtin|standalone`; the
-default, `auto`, takes the first that can run here):
+**Running Comparator.** `make comparator` fetches the Mathlib build cache and runs the official
+comparator on `comparator.json`, which builds the challenge and the solution itself, inside its
+sandbox. It needs Linux. For a verdict you can trust, run it in a fresh clone *before*
+`make install`: comparator's README asks that the solution not be compiled outside the sandbox
+first. It comes in two forms (`COMPARATOR=builtin|standalone`; the default, `auto`, takes the
+first that can run here, and says what is missing if neither can):
 
 - **builtin**: `lake comparator --config comparator.json`, built into Lake since Lean v4.35.0
   (this toolchain) and the form upstream recommends. It sandboxes the build with bubblewrap,
@@ -228,9 +238,14 @@ default, `auto`, takes the first that can run here):
   runs `lake env <comparator> comparator.json` as comparator's README asks, in a
   `systemd-run --user` service with `RestrictAddressFamilies=~AF_UNIX`.
 
-Either form re-checks all of Mathlib and has needed over 60 GB, so it runs with `MemoryMax=48G`
-and `MemorySwapMax=0` under `systemd-run --user` where available (`MEMORY_MAX=...` to change).
-`make install` and `make run` never run it. Status: not run yet.
+Memory: `lake check` (`make check`) re-checks every declaration the build reaches, all of
+Mathlib included; `lake comparator` exports only the 11 theorems and what they use. Re-check runs
+on 2026-11-01 reached 61.5 GB and 63.5 GB on our 62 GB machine and were killed by the OOM killer,
+which took the rest of the session with them. So both run under `systemd-run --user` with
+`MemoryMax=48G` and `MemorySwapMax=0`, and refuse to run where that is not available unless
+`FORCE_UNCAPPED=1`. A run the cap stops (status 137) is not a verdict: on a machine with more
+RAM, raise the cap, e.g. `make comparator MEMORY_MAX=100G`. `make install` and `make run` never
+run either. Status: not run yet.
 
 `make help` lists the targets. `make zrdtd` builds the daemon at `core/.lake/build/bin/zrdtd`.
 
