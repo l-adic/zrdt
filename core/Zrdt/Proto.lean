@@ -745,6 +745,33 @@ def run (build : String) (t : Table) : Request → Reply × Table
   | .encode chat => reading t chat fun c => .blob c.encode
   | .close chat => (.ok, t.erase chat)
 
+/-- **`ACCEPT_RECORD` checks before it stores.** If it replies `ACCEPTED` for record `r`, the
+bytes it got are exactly `r`'s encoding, and the opening, if one came, is a nonce and message
+bytes that hold no field 15 or 200 and whose commitment, by `r`'s author in `r`'s group, is
+`r`'s commit. -/
+theorem acceptRecord_accepted {build : String} {t t' : Table} {chat : String} {b : ByteArray}
+    {o : Option ByteArray} {r : Rec} {d : Digest}
+    (h : run build t (.acceptRecord chat b o) = (.accept r (.accepted d), t')) :
+    encode r = b ∧ ∀ op ∈ o, ∃ (n : Nonce) (m : ByteArray), op = n.bytes ++ m ∧
+      committedBytes m = some m ∧ commit r.group r.author n m = some r.commit := by
+  simp only [run] at h
+  split at h
+  · simp at h
+  · split at h
+    · simp at h
+    · rename_i r' hdec
+      split at h
+      · rename_i hop
+        unfold acceptInto takeOut at h
+        split at h
+        · simp only [Prod.mk.injEq, Reply.accept.injEq] at h
+          obtain ⟨⟨rfl, -⟩, -⟩ := h
+          refine ⟨encode_of_decode hdec, fun op hmem => ?_⟩
+          subst hmem
+          exact openingMatches_spec (by simpa using hop)
+        · simp at h
+      · simp at h
+
 /-- Answer one request payload: the reply payload and the new table. A request that cannot be
 read gets `UNKNOWN_OP` or `BAD_REQUEST` and changes nothing. -/
 def step (build : String) (t : Table) (payload : ByteArray) : ByteArray × Table :=

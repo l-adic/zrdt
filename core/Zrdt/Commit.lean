@@ -195,7 +195,38 @@ commitment is `c`. -/
 def openingMatches (group : GroupId) (author : Aci) (c : Digest) (o : ByteArray) : Bool :=
   match splitOpening o with
   | none => false
-  | some (n, m) => committedBytes m == some m && commit group author n m == some c
+  | some (n, m) => decide (committedBytes m = some m ∧ commit group author n m = some c)
+
+/-- `splitOpening` cuts the opening in two: the nonce, then the rest. -/
+theorem splitOpening_eq {o : ByteArray} {n : Nonce} {m : ByteArray}
+    (h : splitOpening o = some (n, m)) : o = n.bytes ++ m := by
+  simp only [splitOpening, Option.bind_eq_bind, Option.bind_eq_some_iff, Option.pure_def,
+    Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨n', hn, rfl, rfl⟩ := h
+  unfold Nonce.ofBytes? at hn
+  split at hn
+  · rename_i hs
+    cases hn
+    have h32 : 32 ≤ o.size := by
+      simp only [ByteArray.size_extract] at hs; omega
+    show o = o.extract 0 32 ++ o.extract 32 o.size
+    rw [← ByteArray.extract_eq_extract_append_extract 32 (Nat.zero_le _) h32,
+      ByteArray.extract_zero_size]
+  · cases hn
+
+/-- **What a matching opening means.** If `openingMatches group author c o`, then `o` is a nonce
+followed by message bytes that hold no field 15 or 200, and the commitment of that nonce and
+those bytes, by `author` in `group`, is `c`. -/
+theorem openingMatches_spec {group : GroupId} {author : Aci} {c : Digest} {o : ByteArray}
+    (h : openingMatches group author c o = true) :
+    ∃ (n : Nonce) (m : ByteArray), o = n.bytes ++ m ∧ committedBytes m = some m ∧
+      commit group author n m = some c := by
+  unfold openingMatches at h
+  split at h
+  · cases h
+  · rename_i n m hs
+    obtain ⟨h1, h2⟩ := of_decide_eq_true h
+    exact ⟨n, m, splitOpening_eq hs, h1, h2⟩
 
 /-! ## Examples -/
 

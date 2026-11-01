@@ -343,6 +343,9 @@ def tour : Array Step := #[
   ask "OPEN rep from a blob that holds b1 twice" (.open "rep" group
     (.blob (encodeBlob group #[a1, b1, c1, b1, a2]))) .ok,
   ask "ENCODE rep: b1 counts once" (.encode "rep") .ok (some (.blob all4.encode)),
+  ask "OPEN rep2 from a record list that holds a1 twice" (.open "rep2" group
+    (.records #[encode a2, encode a1, encode c1, encode b1, encode a1])) .ok,
+  ask "ENCODE rep2: a1 counts once" (.encode "rep2") .ok (some (.blob all4.encode)),
   ask "OPEN a doctored blob (b1 cut out): unverifiable a2, missing b1"
     (.open "bad" group (.blob (encodeBlob group #[a1, c1, a2]))) .unverifiable
     (some (.opened (.error (.unverifiable #[hashRecord a2] #[hashRecord b1])))),
