@@ -542,6 +542,16 @@ def size (c : CheckedStore) : Nat := c.raw.map.size
 /-- The stored records, sorted by digest. -/
 def records (c : CheckedStore) : Array Rec := (c.raw.map.toList.map Prod.snd).toArray
 
+/-- The records of a store are the values of its map. -/
+theorem mem_records {c : CheckedStore} {x : Rec} :
+    x ∈ c.records ↔ ∃ k : Digest, c.raw.map[k]? = some x := by
+  simp only [records, List.mem_toArray, List.mem_map]
+  constructor
+  · rintro ⟨⟨k, y⟩, hk, rfl⟩
+    exact ⟨k, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mp hk⟩
+  · rintro ⟨k, hk⟩
+    exact ⟨(k, x), Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mpr hk, rfl⟩
+
 /-- The store blob (docs/PLAN.md §3.4): the chat id and the records sorted by digest. The heads
 are not written; `open` recomputes them. -/
 def encode (c : CheckedStore) : ByteArray := encodeBlob c.group c.records
@@ -601,13 +611,161 @@ decreasing_by
     | exact Prod.Lex.right _ (by simp)
     | exact Prod.Lex.left _ _ (size_erase_lt h)
 
+/-- The records not marked done, in order. -/
+def leftovers (rs : Array Rec) (done : Array Bool) : Array Rec :=
+  (rs.zip done).filterMap fun (r, ok) => if ok then none else some r
+
 /-- Accept a batch of records, in any order that lets their links resolve (Kahn's algorithm).
 Every record goes through `accept`. Returns the new store and the records that were not accepted,
 in input order. -/
 def acceptAll (c : CheckedStore) (rs : Array Rec) : CheckedStore × Array Rec :=
   let (counts, waiting, ready) := plan c rs
   let (c', done) := acceptLoop rs c counts waiting (Array.replicate rs.size false) ready
-  (c', (rs.zip done).filterMap fun (r, ok) => if ok then none else some r)
+  (c', leftovers rs done)
+
+/-! ### What `acceptAll` guarantees -/
+
+/-- What stays true while `acceptAll` runs on store `c` and batch `rs`: the current store `cur`
+has `c`'s chat, keeps every record of `c`, holds only records of `c` or `rs`, and holds every
+record marked done. -/
+structure LoopInv (c : CheckedStore) (rs : Array Rec) (cur : CheckedStore) (done : Array Bool) :
+    Prop where
+  group_eq : cur.group = c.group
+  keeps : ∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → cur.raw.map[k]? = some x
+  only : ∀ (k : Digest) (x : Rec), cur.raw.map[k]? = some x → c.raw.map[k]? = some x ∨ x ∈ rs
+  done_stored : ∀ (i : Nat) (h : i < rs.size), done[i]? = some true →
+    cur.raw.map[hashRecord rs[i]]? = some rs[i]
+  size_eq : done.size = rs.size
+
+/-- Accepting a record of the batch keeps the invariant, with the record marked done. -/
+theorem LoopInv.accepted {c cur cur' : CheckedStore} {rs : Array Rec} {done : Array Bool}
+    {i : Nat} {r : Rec} {d : Digest} (h : LoopInv c rs cur done) (hr : rs[i]? = some r)
+    (hacc : cur.accept r = (.accepted d, cur')) :
+    LoopInv c rs cur' (done.setIfInBounds i true) := by
+  have hraw : rawAccept cur.raw r = (.accepted d, cur'.raw) := by
+    have h1 : (cur.accept r).1 = .accepted d := by rw [hacc]
+    have h2 : (cur.accept r).2.raw = cur'.raw := by rw [hacc]
+    rw [accept_fst] at h1
+    rw [accept_raw] at h2
+    exact Prod.ext h1 h2
+  obtain ⟨rfl, hg, hmap, hold⟩ := rawAccept_accepted hraw
+  have hi : i < rs.size := by
+    rcases Nat.lt_or_ge i rs.size with h' | h'
+    · exact h'
+    · simp [Array.getElem?_eq_none h'] at hr
+  have hri : rs[i] = r := by simpa [Array.getElem?_eq_getElem hi] using hr
+  have hmem : r ∈ rs := hri ▸ Array.getElem_mem hi
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · exact hg.trans h.group_eq
+  · intro k x hk
+    have := h.keeps k x hk
+    rw [hmap, Std.ExtTreeMap.getElem?_insert]
+    split
+    · rename_i he
+      rw [Std.LawfulEqCmp.compare_eq_iff_eq] at he
+      subst he
+      rw [hold x this]
+    · exact this
+  · intro k x hk
+    rw [hmap, Std.ExtTreeMap.getElem?_insert] at hk
+    split at hk
+    · cases hk; exact Or.inr hmem
+    · exact h.only k x hk
+  · intro j hj hdone
+    rw [hmap, Std.ExtTreeMap.getElem?_insert]
+    by_cases hji : j = i
+    · subst hji
+      simp [hri]
+    · rw [Array.getElem?_setIfInBounds_ne (Ne.symm hji)] at hdone
+      have hs := h.done_stored j hj hdone
+      split
+      · rename_i he
+        rw [Std.LawfulEqCmp.compare_eq_iff_eq] at he
+        rw [← he] at hs
+        rw [hold _ hs]
+      · exact hs
+  · simp [h.size_eq]
+
+/-- The worklist loop keeps the invariant. -/
+theorem acceptLoop_inv {c : CheckedStore} {rs : Array Rec} (cur : CheckedStore)
+    (counts : Array Nat) (waiting : Std.ExtTreeMap Digest (List Nat) compare) (done : Array Bool)
+    (ready : List Nat) (h : LoopInv c rs cur done) :
+    LoopInv c rs (acceptLoop rs cur counts waiting done ready).1
+      (acceptLoop rs cur counts waiting done ready).2 := by
+  fun_induction acceptLoop rs cur counts waiting done ready with
+  | case1 => exact h
+  | case2 _ _ _ _ _ _ _ ih => exact ih h
+  | case3 _ _ _ _ _ _ _ hr _ _ hacc _ _ _ _ _ ih => exact ih (h.accepted hr hacc)
+  | case4 _ _ _ _ _ _ _ hr _ _ hacc _ _ ih => exact ih (h.accepted hr hacc)
+  | case5 cur counts waiting done i ready r hr res c' hres hacc ih =>
+    have : c' = cur := by
+      have := accept_unchanged (c := cur) (r := r) (by rw [hacc]; exact fun d e => hres d e)
+      rwa [hacc] at this
+    subst this
+    exact ih h
+
+/-- The invariant holds at the start. -/
+theorem LoopInv.start (c : CheckedStore) (rs : Array Rec) :
+    LoopInv c rs c (Array.replicate rs.size false) where
+  group_eq := rfl
+  keeps := fun _ _ h => h
+  only := fun _ _ h => Or.inl h
+  done_stored := fun i h hd => by simp [h] at hd
+  size_eq := by simp
+
+/-- A record is left over exactly when it is in the batch and was not marked done. -/
+theorem mem_leftovers {rs : Array Rec} {done : Array Bool} (hs : done.size = rs.size)
+    {x : Rec} :
+    x ∈ leftovers rs done ↔ ∃ (i : Nat) (h : i < rs.size), rs[i] = x ∧ done[i]? = some false := by
+  rw [leftovers, Array.mem_filterMap]
+  constructor
+  · rintro ⟨⟨r, ok⟩, hmem, hf⟩
+    obtain ⟨i, hi, he⟩ := Array.mem_iff_getElem.mp hmem
+    have hi' : i < rs.size := by simp at hi; omega
+    have hid : i < done.size := by simp at hi; omega
+    rw [Array.getElem_zip] at he
+    simp only [Prod.mk.injEq] at he
+    obtain ⟨rfl, rfl⟩ := he
+    cases hok : done[i] <;> simp [hok] at hf
+    exact ⟨i, hi', hf, by simp [hid, hok]⟩
+  · rintro ⟨i, hi, rfl, hd⟩
+    have hid : i < done.size := by omega
+    refine ⟨(rs[i], false), ?_, by simp⟩
+    have : done[i] = false := by simpa [hid] using hd
+    rw [Array.mem_iff_getElem]
+    exact ⟨i, by simp; omega, by simp [Array.getElem_zip, this]⟩
+
+/-- **What `acceptAll` guarantees** (whatever order the worklist takes): the chat is the same;
+every record of `c` is kept; every stored record comes from `c` or from the batch; every record
+of the batch that is not left over is stored under its digest; and every left-over record is
+from the batch. So a mistake in the worklist could only leave records over, never add a wrong
+one or lose one. -/
+theorem acceptAll_sound (c : CheckedStore) (rs : Array Rec) :
+    (c.acceptAll rs).1.group = c.group ∧
+    (∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x → (c.acceptAll rs).1.raw.map[k]? = some x) ∧
+    (∀ (k : Digest) (x : Rec), (c.acceptAll rs).1.raw.map[k]? = some x →
+      c.raw.map[k]? = some x ∨ x ∈ rs) ∧
+    (∀ x ∈ rs, x ∉ (c.acceptAll rs).2 → (c.acceptAll rs).1.raw.map[hashRecord x]? = some x) ∧
+    (∀ x ∈ (c.acceptAll rs).2, x ∈ rs) := by
+  unfold acceptAll
+  generalize plan c rs = p
+  obtain ⟨counts, waiting, ready⟩ := p
+  dsimp only
+  have h := acceptLoop_inv c counts waiting (Array.replicate rs.size false) ready
+    (LoopInv.start c rs)
+  generalize acceptLoop rs c counts waiting (Array.replicate rs.size false) ready = res at h ⊢
+  obtain ⟨e, done⟩ := res
+  dsimp only
+  refine ⟨h.group_eq, h.keeps, h.only, ?_, ?_⟩
+  · intro x hx hleft
+    obtain ⟨i, hi, rfl⟩ := Array.mem_iff_getElem.mp hx
+    have hid : i < done.size := by rw [h.size_eq]; exact hi
+    cases hdi : done[i]
+    · exact absurd ((mem_leftovers h.size_eq).mpr ⟨i, hi, rfl, by simp [hid, hdi]⟩) hleft
+    · exact h.done_stored i hi (by simp [hid, hdi])
+  · intro x hx
+    obtain ⟨i, hi, rfl, _⟩ := (mem_leftovers h.size_eq).mp hx
+    exact Array.getElem_mem hi
 
 /-! ## Loading and merging -/
 
@@ -734,6 +892,80 @@ def mergeBlob (c : CheckedStore) (b : ByteArray) : Except OpenError CheckedStore
   match CheckedStore.open c.group b with
   | .error e => .error e
   | .ok d => c.merge d
+
+/-! ### What `merge` and `open` guarantee -/
+
+/-- A successful merge holds exactly the records of both stores, and keeps `c`'s chat. -/
+theorem merge_ok {c d e : CheckedStore} (h : c.merge d = .ok e) :
+    e.group = c.group ∧ ∀ (k : Digest) (x : Rec),
+      e.raw.map[k]? = some x ↔ c.raw.map[k]? = some x ∨ d.raw.map[k]? = some x := by
+  unfold merge at h
+  split at h
+  · simp at h
+  obtain ⟨hg, hkeep, honly, hall, _⟩ := acceptAll_sound c d.records
+  generalize c.acceptAll d.records = res at h hg hkeep honly hall
+  obtain ⟨e', left⟩ := res
+  dsimp only at h hg hkeep honly hall
+  split at h
+  · rename_i hleft
+    simp only [Except.ok.injEq] at h
+    subst e
+    have hnil : ∀ x, x ∉ left := by
+      intro x hx; simp_all [Array.isEmpty_iff]
+    refine ⟨hg, fun k x => ⟨fun hk => ?_, ?_⟩⟩
+    · rcases honly k x hk with hc | hd
+      · exact Or.inl hc
+      · obtain ⟨k', hk'⟩ := mem_records.mp hd
+        have h1 := d.built.hash_eq k' x hk'
+        have h2 := e'.built.hash_eq k x hk
+        exact Or.inr (by rw [← h2, h1]; exact hk')
+    · rintro (hc | hd)
+      · exact hkeep k x hc
+      · have := hall x (mem_records.mpr ⟨k, hd⟩) (hnil x)
+        rwa [d.built.hash_eq k x hd] at this
+  · simp at h
+
+/-- A successful `openRecords` holds exactly the given records, each under its digest; the input
+was within the size limits and all of chat `g`. -/
+theorem openRecords_ok {g : GroupId} {u : Array Rec} {c : CheckedStore}
+    (h : openRecords g u = .ok c) :
+    c.group = g ∧ WellSized u ∧ (∀ r ∈ u, r.group = g) ∧
+      ∀ (k : Digest) (x : Rec), c.raw.map[k]? = some x ↔ x ∈ u ∧ hashRecord x = k := by
+  unfold openRecords at h
+  split at h
+  · simp at h
+  rename_i hcheck
+  have hws : WellSized u := by
+    unfold checkInput at hcheck
+    by_cases hw : WellSized u
+    · exact hw
+    · simp [hw] at hcheck
+  have hchat : ∀ r ∈ u, r.group = g := by
+    unfold checkInput at hcheck
+    simp only [hws, ↓reduceIte] at hcheck
+    intro r hr
+    split at hcheck
+    · rename_i hall
+      simp only [allInChat, Array.all_eq_true_iff_forall_mem, beq_iff_eq] at hall
+      exact hall r hr
+    · simp at hcheck
+  obtain ⟨hg, _, honly, hall, _⟩ := acceptAll_sound (empty g) u
+  generalize (empty g).acceptAll u = res at h hg honly hall
+  obtain ⟨e, left⟩ := res
+  dsimp only at h hg honly hall
+  split at h
+  · rename_i hleft
+    simp only [Except.ok.injEq] at h
+    subst c
+    have hnil : ∀ x, x ∉ left := by
+      intro x hx; simp_all [Array.isEmpty_iff]
+    refine ⟨hg, hws, hchat, fun k x => ⟨fun hk => ?_, ?_⟩⟩
+    · rcases honly k x hk with he | hu
+      · simp [empty] at he
+      · exact ⟨hu, e.built.hash_eq k x hk⟩
+    · rintro ⟨hu, rfl⟩
+      exact hall x hu (hnil x)
+  · simp at h
 
 end CheckedStore
 
