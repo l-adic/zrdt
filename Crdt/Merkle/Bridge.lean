@@ -29,9 +29,10 @@ The shipped code (`Zrdt`, no Mathlib) stores records in a map from digest to rec
 
 * `Built.acceptBuilt`: its records can be accepted one at a time from the empty store
   (`AcceptBuilt`);
-* `Built.mem_heads_iff`: its head cache holds exactly the spec's heads;
+* `Built.mem_heads_iff`: its head cache holds exactly the spec's heads
+  (`CheckedStore.heads_toFinset` states it as an equality of finite sets);
 * `Built.no_collision`: no two of its records have the same digest;
-* `Built.closed`-style: every link is the digest of a stored record (`Built.closed_abs`).
+* `Built.closed_abs`: every link is the digest of a stored record (`Closed`).
 
 The advertised statements built on these are in `Crdt/Merkle/Api.lean`.
 -/
@@ -95,6 +96,8 @@ instance Digest.instLinearOrder : LinearOrder Digest where
 theorem Digest.lt_iff_compare {a b : Digest} : a < b ↔ compare a b = .lt := Iff.rfl
 
 example : Examples.dig 1 < Examples.dig 2 := by decide +kernel
+-- The order's `compare` is the code's `compare`.
+example (a b : Digest) : compare a b = compareBytes a.bytes b.bytes := rfl
 
 /-! ## Spec records -/
 
@@ -294,6 +297,12 @@ namespace CheckedStore
 theorem mem_heads_iff (c : CheckedStore) {d : Digest} :
     d ∈ c.heads ↔ d ∈ Crdt.Merkle.heads hashSpec (abs c) :=
   c.built.mem_heads_iff
+
+/-- **The head cache is the spec's heads**, as finite sets. -/
+theorem heads_toFinset (c : CheckedStore) :
+    c.heads.toList.toFinset = Crdt.Merkle.heads hashSpec (abs c) := by
+  ext d
+  rw [List.mem_toFinset, Std.ExtTreeSet.mem_toList, c.mem_heads_iff]
 
 /-- A checked store holds a digest exactly when its spec store has a record with that hash. -/
 theorem mem_digests_abs (c : CheckedStore) {d : Digest} :
