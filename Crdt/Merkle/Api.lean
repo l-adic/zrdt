@@ -5,6 +5,7 @@ Authors: zrdt contributors
 -/
 import Mathlib
 import Crdt.Merkle.Bridge
+import Crdt.Merkle.Refine
 
 set_option linter.unusedSectionVars false
 
@@ -15,15 +16,23 @@ These are the advertised statements about the shipped code, `Zrdt.CheckedStore`.
 about `abs c`, the set of records the store holds, seen in the spec model (`Bridge.lean`), with
 `hashSpec` as the hash: the record digest the code computes.
 
-Part 1 (this file so far):
+Part 1:
 
 * `CheckedStore.no_collision`: no two different records in a store have the same digest.
 * `CheckedStore.fetched`: a store holds everything its heads reach, and nothing else.
 * `CheckedStore.agree`: two stores with the same heads hold the same records, or two records
   across the two stores have the same digest (a SHA-256 collision).
 
-TODO (later lanes): `abs_accept`, `abs_merge`, `open_iff`, `salvage_spec`, `encode_open`,
-`confirmed`, `classify_spec`, `encode_injective`.
+Part 2 (proofs in `Refine.lean`):
+
+* `CheckedStore.abs_accept`: what each result of `accept` means (`AcceptMeans`).
+* `CheckedStore.abs_merge`: a merged store holds the records of both stores.
+* `CheckedStore.encode_open`: a store's blob opens as exactly that store.
+* `CheckedStore.confirmed`: what a live message's links reach is the same in your store and in
+  the sender's, or there is a collision.
+
+TODO (other lanes): `open_iff`, `salvage_spec` (in `LoadApi.lean`, lane
+build/encode-proofs-api), `classify_spec`, `encode_injective` (`EncodeProofs.lean`).
 -/
 
 namespace Zrdt
@@ -115,5 +124,103 @@ example : ¬ (({toSpec Examples.first} : SpecStore) = {toSpec Examples.a1} ∨
     · exact Examples.first_hash_ne_a1 (by simpa using he)
     · exact Examples.first_hash_ne_a1 (by simpa using he.symm)
     · exact hne rfl
+
+/-! ## Part 2: accept, merge, encode, confirmation -/
+
+/-- **What the result of `accept c r` means**, for the new store `c'`:
+
+* `accepted d`: the spec store of `c'` is the spec's `accept` of `toSpec r` (the record is added,
+  since its links resolve; it may have been there already), and `d` is the record's digest.
+* `missing ds`: nothing changed; `ds` is not empty, and it is exactly the links of `r` that are
+  not the digest of any record in the store.
+* `collision d`: nothing changed; `d` is the digest of `r`, and the store holds a different
+  record with that digest.
+* `wrongChat`: nothing changed; `r` belongs to another chat.
+* `tooLarge`: nothing changed; `r` has too many links, or it is new and the store is full. -/
+def AcceptMeans (c : CheckedStore) (r : Rec) : AcceptResult × CheckedStore → Prop
+  | (.accepted d, c') =>
+    abs c' = Crdt.Merkle.accept hashSpec (abs c) (toSpec r) ∧ d = hashRecord r
+  | (.missing ds, c') =>
+    c' = c ∧ ds ≠ #[] ∧ ∀ x, x ∈ ds ↔ x ∈ (toSpec r).links ∧ x ∉ digests hashSpec (abs c)
+  | (.collision d, c') =>
+    c' = c ∧ d = hashRecord r ∧ ∃ x ∈ abs c, hashSpec x = d ∧ x ≠ toSpec r
+  | (.wrongChat, c') => c' = c ∧ r.group ≠ c.group
+  | (.tooLarge, c') =>
+    c' = c ∧ (¬ r.WellSized ∨ (hashRecord r ∉ digests hashSpec (abs c) ∧ maxRecords ≤ c.size + 1))
+
+-- A `missing` result with an empty list, or one that changes the store, means nothing.
+example (c : CheckedStore) (r : Rec) : ¬ AcceptMeans c r (.missing #[], c) := by
+  simp [AcceptMeans]
+
+/-- **`accept`, in the spec model.** Every result of `accept` means what `AcceptMeans` says: an
+accepted record is the spec's `accept`; any other result leaves the store as it was and gives
+the reason. The `missing` list is exact. -/
+theorem CheckedStore.abs_accept (c : CheckedStore) (r : Rec) : AcceptMeans c r (c.accept r) := by
+  rcases h : c.accept r with ⟨res, c'⟩
+  cases res with
+  | accepted d => exact CheckedStore.abs_accept_accepted h
+  | missing ds =>
+    obtain ⟨h1, -, h2, h3, -⟩ := CheckedStore.abs_accept_missing h
+    exact ⟨h1, h2, h3⟩
+  | collision d => exact CheckedStore.abs_accept_collision h
+  | wrongChat => exact CheckedStore.abs_accept_wrongChat h
+  | tooLarge => exact CheckedStore.abs_accept_tooLarge h
+
+/-- **A merged store holds the records of both stores.** -/
+theorem CheckedStore.abs_merge {c d e : CheckedStore} (h : c.merge d = .ok e) :
+    abs e = abs c ∪ abs d :=
+  CheckedStore.merge_abs h
+
+/-- **A store's blob opens as exactly that store** (`=` compares contents: the maps are
+extensional). -/
+theorem CheckedStore.encode_open (c : CheckedStore) : CheckedStore.open c.group c.encode = .ok c :=
+  CheckedStore.encode_reopens c
+
+/-- **Confirmation: "held by the sender"** (docs/PLAN.md §3.2). A live message links the digests
+`hs`, and both your store `c` and the sender's store `d` hold every one of them. Then the
+digests the links reach are the same in both stores. Or two different records, across the two
+stores, have the same digest. (`Refine.confirmed_records` also gives the same record for each
+digest.) This says the sender holds these records; it says nothing about who wrote them. -/
+theorem CheckedStore.confirmed (c d : CheckedStore) (hs : Array Digest)
+    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
+    c.reachSet hs = d.reachSet hs ∨ CollisionIn hashSpec (abs c ∪ abs d) :=
+  (CheckedStore.confirmed_records c d hs hc hd).imp_left And.left
+
+/-! ### Part 2 examples
+
+Each statement on a concrete input, with every hypothesis discharged. -/
+
+example : AcceptMeans (CheckedStore.empty Examples.group) Examples.a1
+    ((CheckedStore.empty Examples.group).accept Examples.a1) :=
+  CheckedStore.abs_accept _ _
+
+-- Bob's reply `b1` is offered to the empty store: it is `missing` exactly `a1`'s digest.
+example : ((CheckedStore.empty Examples.group).accept Examples.b1).1 =
+    .missing #[hashRecord Examples.a1] := by
+  decide +kernel
+
+/-- Merging the empty store into the empty store succeeds (computed by the kernel). -/
+theorem Examples.merge_empty_ok :
+    ((CheckedStore.empty Examples.group).merge (CheckedStore.empty Examples.group)).toBool =
+      true := by
+  decide +kernel
+
+example : ∃ e, (CheckedStore.empty Examples.group).merge (CheckedStore.empty Examples.group) =
+    .ok e ∧ abs e = abs (CheckedStore.empty Examples.group) ∪
+      abs (CheckedStore.empty Examples.group) := by
+  have h := Examples.merge_empty_ok
+  revert h
+  cases hm : (CheckedStore.empty Examples.group).merge (CheckedStore.empty Examples.group) with
+  | ok e => exact fun _ => ⟨e, rfl, CheckedStore.abs_merge hm⟩
+  | error _ => simp [Except.toBool]
+
+example : CheckedStore.open Examples.s1.group Examples.s1.encode = .ok Examples.s1 :=
+  Examples.s1.encode_open
+
+example : Examples.s1.reachSet #[hashRecord Examples.a1] =
+      Examples.s2.reachSet #[hashRecord Examples.a1] ∨
+    CollisionIn hashSpec (abs Examples.s1 ∪ abs Examples.s2) :=
+  CheckedStore.confirmed _ _ _ (fun h hh => by simp at hh; subst hh; exact Examples.s1_has_a1)
+    (fun h hh => by simp at hh; subst hh; exact Examples.s2_has_a1)
 
 end Zrdt

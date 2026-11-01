@@ -19,13 +19,17 @@ what each operation of `Zrdt.CheckedStore` does to `abs c`, in the words of the 
   `abs_accept_wrongChat`, `abs_accept_tooLarge`): an accepted record is the spec's `accept`; any
   other result leaves the store as it was, and says why. The `missing` list is exactly the links
   the spec store does not hold.
-* `merge` (`abs_merge`): a merged store holds the records of both stores.
+* `merge` (`merge_abs`): a merged store holds the records of both stores.
 * `heads` (`heads_eq`), `has` (`has_iff`), `get` (`get_eq_some_iff`): the observers read the spec
   store.
-* `reachSet` (`reachSet_iff`): the walk finds exactly the digests of the spec's `reachSet`.
-* `open` (`open_sound`, `open_complete`, `open_iff`), `salvage` (`salvage_spec`), `encode`
-  (`encode_open`).
+* `reachSet` (`reachSet_iff`): the walk finds exactly the digests of the spec's `reachSet`
+  (`mem_walk_iff`: the link walk is right). `confirmed_records`: what a live message's links
+  reach is the same, record for record, in your store and the sender's (via `confirmed_exact`).
 * `eq_of_abs`: two stores of one chat that hold the same records are equal.
+
+`open` and `salvage` over the model (`open_iff`, `salvage_spec`) are in `LoadApi.lean` (lane
+build/encode-proofs-api), built on `specOf` and the lemmas here; `encode` is core's
+`encode_reopens`.
 
 The statements advertised to readers are restated in `Api.lean`.
 -/
@@ -386,9 +390,10 @@ theorem reachSet_toFinset (c : CheckedStore) (hs : Array Digest) :
 /-- **Confirmation is exact** (docs/PLAN.md §3.2, "held by the sender"). A live message links
 `hs`, and both your store `c` and the sender's store `d` hold every digest of `hs`. Then the
 records the links reach are the same in both stores, digest for digest and record for record.
-Or two different records, across the two stores, have the same digest. -/
-theorem confirmed (c d : CheckedStore) (hs : Array Digest) (hc : ∀ h ∈ hs, c.has h = true)
-    (hd : ∀ h ∈ hs, d.has h = true) :
+Or two different records, across the two stores, have the same digest. (`Api.lean` advertises
+the digest form as `confirmed`; with no collision, equal digests already mean equal records.) -/
+theorem confirmed_records (c d : CheckedStore) (hs : Array Digest)
+    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
     (c.reachSet hs = d.reachSet hs ∧ ∀ k ∈ c.reachSet hs, c.get k = d.get k) ∨
       CollisionIn hashSpec (abs c ∪ abs d) := by
   have hsub : ∀ (e : CheckedStore), (∀ h ∈ hs, e.has h = true) →
@@ -411,24 +416,18 @@ theorem confirmed (c d : CheckedStore) (hs : Array Digest) (hc : ∀ h ∈ hs, c
     exact CollisionIn.mono hashSpec (Finset.union_subset_union (Finset.filter_subset _ _)
       (Finset.filter_subset _ _)) h
 
-/-- The weaker form in docs/PLAN.md §3.2: the two reach sets are equal as sets of digests. -/
-theorem confirmed_digests (c d : CheckedStore) (hs : Array Digest)
-    (hc : ∀ h ∈ hs, c.has h = true) (hd : ∀ h ∈ hs, d.has h = true) :
-    c.reachSet hs = d.reachSet hs ∨ CollisionIn hashSpec (abs c ∪ abs d) :=
-  (confirmed c d hs hc hd).imp_left And.left
-
 /-- `s1` (Alice's `a1`) holds `a1` (computed by the kernel). -/
-theorem Examples.s1_has_a1 : Examples.s1.has (hashRecord Examples.a1) = true := by decide +kernel
+theorem _root_.Zrdt.Examples.s1_has_a1 : Examples.s1.has (hashRecord Examples.a1) = true := by decide +kernel
 
 /-- `s2` (`a1`, then Bob's reply `b1`) holds `a1` (computed by the kernel). -/
-theorem Examples.s2_has_a1 : Examples.s2.has (hashRecord Examples.a1) = true := by decide +kernel
+theorem _root_.Zrdt.Examples.s2_has_a1 : Examples.s2.has (hashRecord Examples.a1) = true := by decide +kernel
 
 -- A message that links `a1` reaches the same records in `s1` and in `s2`; `b1` is not reached.
 example : (Examples.s1.reachSet #[hashRecord Examples.a1] =
       Examples.s2.reachSet #[hashRecord Examples.a1] ∧
       ∀ k ∈ Examples.s1.reachSet #[hashRecord Examples.a1], Examples.s1.get k = Examples.s2.get k) ∨
     CollisionIn hashSpec (abs Examples.s1 ∪ abs Examples.s2) :=
-  confirmed _ _ _ (fun h hh => by simp at hh; subst hh; exact Examples.s1_has_a1)
+  confirmed_records _ _ _ (fun h hh => by simp at hh; subst hh; exact Examples.s1_has_a1)
     (fun h hh => by simp at hh; subst hh; exact Examples.s2_has_a1)
 
 example : hashRecord Examples.a1 ∈ Examples.s2.reachSet #[hashRecord Examples.a1] ↔
@@ -559,8 +558,9 @@ example : abs Examples.s1 = Crdt.Merkle.accept hashSpec
 
 /-! ## Merge -/
 
-/-- **A merged store holds the records of both stores.** -/
-theorem abs_merge {c d e : CheckedStore} (h : c.merge d = .ok e) : abs e = abs c ∪ abs d := by
+/-- **A merged store holds the records of both stores** (advertised as `abs_merge` in
+`Api.lean`). -/
+theorem merge_abs {c d e : CheckedStore} (h : c.merge d = .ok e) : abs e = abs c ∪ abs d := by
   obtain ⟨_, hiff⟩ := merge_ok h
   ext x
   rw [Finset.mem_union, mem_abs, mem_abs, mem_abs]
@@ -572,12 +572,6 @@ theorem abs_merge {c d e : CheckedStore} (h : c.merge d = .ok e) : abs e = abs c
   · rintro (⟨k, r, hk, rfl⟩ | ⟨k, r, hk, rfl⟩)
     · exact ⟨k, r, (hiff k r).mpr (Or.inl hk), rfl⟩
     · exact ⟨k, r, (hiff k r).mpr (Or.inr hk), rfl⟩
-
-/-! ## Encode -/
-
-/-- **A store reopens as itself** (exact: the maps are extensional). -/
-theorem encode_open (c : CheckedStore) : CheckedStore.open c.group c.encode = .ok c :=
-  encode_reopens c
 
 end CheckedStore
 

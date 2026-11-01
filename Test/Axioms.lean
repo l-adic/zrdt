@@ -243,5 +243,19 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 /-- info: 'Zrdt.CheckedStore.agree' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Zrdt.CheckedStore.agree
 
+-- Part 2 (`Api.lean`, proofs in `Refine.lean`).
+
+/-- info: 'Zrdt.CheckedStore.abs_accept' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.abs_accept
+
+/-- info: 'Zrdt.CheckedStore.abs_merge' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.abs_merge
+
+/-- info: 'Zrdt.CheckedStore.encode_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.encode_open
+
+/-- info: 'Zrdt.CheckedStore.confirmed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.CheckedStore.confirmed
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
