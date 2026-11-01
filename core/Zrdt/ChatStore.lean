@@ -187,6 +187,49 @@ theorem acceptAll_sound (s : ChatStore) (rs : Array Rec) :
     obtain ⟨hg, hb, hk, ho, -⟩ := RelStore.acceptAll_sound c rs
     exact ⟨rfl, hg, hb, hk, ho, fun x hx d hd => (RelStore.acceptAll_accepted hx hd).2⟩
 
+/-- `accept`'s answer is `rawAcceptRel`'s on the store's data and boundary, for either kind. -/
+theorem accept_fst (s : ChatStore) (r : Rec) :
+    (s.accept r).1 = (rawAcceptRel s.raw s.boundary r).1 := by
+  cases s with
+  | closed c => exact (congrArg Prod.fst (rawAcceptRel_empty c.raw r)).symm
+  | relative c => rfl
+
+/-- **A larger boundary keeps `accepted`.** Two stores with the same records and chat, the
+second's boundary holding every digest of the first's: if `accept` says `accepted d` on the
+first, it does on the second. -/
+theorem accept_fst_mono {s s' : ChatStore} {r : Rec} {d : Digest}
+    (hm : s'.raw.map = s.raw.map) (hg : s'.raw.group = s.raw.group)
+    (hB : ∀ x ∈ s'.boundary, x ∈ s.boundary) (h : (s'.accept r).1 = .accepted d) :
+    (s.accept r).1 = .accepted d := by
+  rw [accept_fst] at h ⊢
+  exact rawAcceptRel_fst_mono hm hg hB h
+
+/-- Drop the boundary digests that are not in `old`, stored nowhere, and linked by no stored
+record (`RelStore.prune`). A closed store has no boundary and is unchanged. -/
+def prune : ChatStore → Boundary → ChatStore
+  | .closed c, _ => .closed c
+  | .relative c, old => .relative (c.prune old)
+
+/-- **What `prune` does, for either kind of store.** The kind, the records and the chat are the
+same; the boundary only shrinks; a boundary digest that stays is in `old`, stored, or linked by a
+stored record. -/
+theorem prune_spec (s : ChatStore) (old : Boundary) :
+    (s.prune old).isRelative = s.isRelative ∧ (s.prune old).raw.map = s.raw.map ∧
+    (s.prune old).raw.group = s.raw.group ∧
+    (∀ (x : Digest) (a : Aci), (s.prune old).boundary[x]? = some a → s.boundary[x]? = some a) ∧
+    (∀ x, x ∈ (s.prune old).boundary → x ∈ old ∨ x ∈ s.raw.map ∨
+      ∃ (k : Digest) (r : Rec), s.raw.map[k]? = some r ∧ x ∈ r.links) := by
+  cases s with
+  | closed c =>
+    refine ⟨rfl, rfl, rfl, fun _ _ h => h, fun x hx => ?_⟩
+    simp [prune, boundary] at hx
+  | relative c =>
+    obtain ⟨hm, hg, hb, hk⟩ := c.prune_spec old
+    exact ⟨rfl, hm, hg, hb, hk⟩
+
+open Examples in
+#guard ((ChatStore.relative relStore).prune ∅).boundaryDigests.toList == [hashRecord a1]
+
 /-- `CLASSIFY`: `classify` on a closed store (exactly the code the theorems about `classify` are
 about), `classifyRaw` on a relative one. -/
 def classify (s : ChatStore) (facts : Array Fact) : Std.ExtTreeMap Digest Status compare :=

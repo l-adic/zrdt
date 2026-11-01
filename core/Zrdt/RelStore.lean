@@ -18,7 +18,9 @@ given to him by a named member, its **voucher** (the responder whose reply carri
 - `rawAcceptRel c B r`: `rawAccept`, except that a link is resolved by a stored record or by a
   digest of `B`. `rawAcceptRel_empty`: with an empty boundary it is exactly `rawAccept`.
 - `RelStore`: a raw store, a boundary, and the proof of `BuiltRel`. The only ways to change one
-  are `accept` (through `rawAcceptRel`) and `addBoundary`.
+  are `accept` (through `rawAcceptRel`), `addBoundary`, and `prune`, which drops boundary digests
+  that are stored nowhere and linked by no stored record (`ACCEPT_VIEW` in per-digest mode,
+  `Zrdt.Proto`).
 
 **Promotion.** If a record arrives whose digest is a boundary digest, and its links resolve, it is
 accepted like any other: from then on the digest is a stored record. The digest stays in `B` (a
@@ -37,6 +39,9 @@ order, and a store blob reopens (`load_reopens`). The digests a store holds no r
   records; it succeeds for any store's own records and boundary, and gives back that store.
 - `linkable_sub`: the links a relative store's `COMMIT` uses are heads that are stored records in
   the host's `live` set (docs/JOIN_PLAN.md §6.2, containment).
+- `prune_built` (by construction), `prune_spec`: dropping unlinked boundary digests keeps the store
+  correct, and every boundary digest that stays is old, stored, or linked by a stored record.
+- `rawAcceptRel_fst_mono`: a larger boundary keeps `accepted`.
 
 **Closed stores are untouched.** `CheckedStore`, `Built`, `rawAccept` and every theorem about them
 are as before. A closed store is the relative store with an empty boundary (`ofChecked`), and a
@@ -73,6 +78,63 @@ def RawStore.reachSet (c : RawStore) (start : Array Digest) : DigestSet :=
 theorem CheckedStore.reachSet_raw (c : CheckedStore) (start : Array Digest) :
     c.reachSet start = c.raw.reachSet start := rfl
 
+/-- The digests of a list inserted into a set: the set's and the list's. -/
+theorem mem_foldl_insert_digests {l : List Digest} {s : DigestSet} {d : Digest} :
+    d ∈ l.foldl (·.insert ·) s ↔ d ∈ s ∨ d ∈ l := by
+  induction l generalizing s with
+  | nil => simp
+  | cons x xs ih =>
+    rw [List.foldl_cons, ih, Std.ExtTreeSet.mem_insert, Std.LawfulEqCmp.compare_eq_iff_eq,
+      List.mem_cons]
+    constructor
+    · rintro ((rfl | h) | h)
+      · exact .inr (.inl rfl)
+      · exact .inl h
+      · exact .inr (.inr h)
+    · rintro (h | rfl | h)
+      · exact .inl (.inr h)
+      · exact .inl (.inl rfl)
+      · exact .inr h
+
+/-- The digests that some stored record links. -/
+def RawStore.linkedSet (c : RawStore) : DigestSet :=
+  c.map.foldl (init := ∅) fun acc _ r => r.links.foldl (·.insert ·) acc
+
+/-- A digest is in `linkedSet` exactly when a stored record links it. -/
+theorem RawStore.mem_linkedSet {c : RawStore} {d : Digest} :
+    d ∈ c.linkedSet ↔ ∃ (k : Digest) (r : Rec), c.map[k]? = some r ∧ d ∈ r.links := by
+  have step : ∀ (l : List (Digest × Rec)) (s : DigestSet),
+      d ∈ l.foldl (fun acc b => b.2.links.foldl (·.insert ·) acc) s ↔
+        d ∈ s ∨ ∃ p ∈ l, d ∈ p.2.links := by
+    intro l
+    induction l with
+    | nil => simp
+    | cons p rest ih =>
+      intro s
+      rw [List.foldl_cons, ih, ← Array.foldl_toList, mem_foldl_insert_digests,
+        Array.mem_toList_iff]
+      constructor
+      · rintro ((h | h) | ⟨q, hq, hd⟩)
+        · exact .inl h
+        · exact .inr ⟨p, List.mem_cons_self, h⟩
+        · exact .inr ⟨q, List.mem_cons_of_mem _ hq, hd⟩
+      · rintro (h | ⟨q, hq, hd⟩)
+        · exact .inl (.inl h)
+        · rcases List.mem_cons.mp hq with rfl | hq
+          · exact .inl (.inr hd)
+          · exact .inr ⟨q, hq, hd⟩
+  rw [linkedSet, Std.ExtTreeMap.foldl_eq_foldl_toList, step]
+  simp only [Std.ExtTreeSet.not_mem_empty, false_or]
+  constructor
+  · rintro ⟨⟨k, r⟩, hp, hd⟩
+    exact ⟨k, r, Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mp hp, hd⟩
+  · rintro ⟨k, r, hk, hd⟩
+    exact ⟨(k, r), Std.ExtTreeMap.mem_toList_iff_getElem?_eq_some.mpr hk, hd⟩
+
+open Examples in
+#guard (RawStore.linkedSet ⟨group, ((∅ : RecMap).insert (hashRecord b1) b1).insert
+  (hashRecord c1) c1, ∅⟩).toList == [hashRecord a1]
+
 /-! ## Accept order and correctness, relative to a boundary -/
 
 /-- `AcceptOrderRel B l`: the list is newest first, and every link of a record is the digest of a
@@ -104,6 +166,17 @@ theorem AcceptOrderRel.mono {B B' : Boundary} (hB : ∀ d ∈ B, d ∈ B') {l : 
   induction h with
   | nil => exact .nil
   | cons hr _ ih => exact .cons (fun d hd => (hr d hd).imp (hB d) id) ih
+
+/-- A smaller boundary keeps an accept order, if it keeps every boundary digest the order's
+records link. -/
+theorem AcceptOrderRel.restrict {B B' : Boundary} {l : List Rec}
+    (hB : ∀ r ∈ l, ∀ d ∈ r.links, d ∈ B → d ∈ B') (h : AcceptOrderRel B l) :
+    AcceptOrderRel B' l := by
+  induction h with
+  | nil => exact .nil
+  | @cons r older hr _ ih =>
+    refine .cons (fun d hd => (hr d hd).imp (hB r List.mem_cons_self d hd) id)
+      (ih fun x hx => hB x (List.mem_cons_of_mem _ hx))
 
 /-- Every link of an accept order is a digest of the boundary or of a record in it. -/
 theorem AcceptOrderRel.links {B : Boundary} {l : List Rec} (h : AcceptOrderRel B l) :
@@ -503,6 +576,42 @@ theorem rawAcceptRel_of_ok {c : RawStore} {B : Boundary} {r : Rec} (hg : r.group
       · exact hxb h'
     simp [hfull, hmiss]
 
+/-- **What `rawAcceptRel` answers does not depend on the heads, and a larger boundary keeps
+`accepted`.** Two raw stores with the same records and chat, the second boundary holding every
+digest of the first: if the first says `accepted d`, so does the second. -/
+theorem rawAcceptRel_fst_mono {c c' : RawStore} {B B' : Boundary} {r : Rec} {d : Digest}
+    (hm : c'.map = c.map) (hg : c'.group = c.group) (hB : ∀ x ∈ B', x ∈ B)
+    (h : (rawAcceptRel c' B' r).1 = .accepted d) : (rawAcceptRel c B r).1 = .accepted d := by
+  unfold rawAcceptRel at h ⊢
+  rw [hm, hg] at h
+  dsimp only at h ⊢
+  by_cases hgr : r.group ≠ c.group
+  · simp [hgr] at h
+  by_cases hw : ¬ r.WellSized
+  · simp [hgr, hw] at h
+  simp only [hgr, hw, ↓reduceIte] at h ⊢
+  cases hd : c.map[hashRecord r]? with
+  | some old =>
+    rw [hd] at h
+    by_cases ho : old = r
+    · simp only [ho, ↓reduceIte] at h ⊢; exact h
+    · simp [ho] at h
+  | none =>
+    rw [hd] at h
+    simp only at h ⊢
+    by_cases hfull : maxRecords ≤ c.map.size + 1
+    · simp [hfull] at h
+    simp only [hfull, ↓reduceIte] at h ⊢
+    by_cases hmiss : (missingLinksRel c.map B' r).isEmpty = true
+    · have hmiss' : (missingLinksRel c.map B r).isEmpty = true := by
+        rw [Array.isEmpty_iff, Array.eq_empty_iff_forall_not_mem] at hmiss ⊢
+        intro x hx
+        obtain ⟨hx, hxm, hxb⟩ := mem_missingLinksRel.mp hx
+        refine hmiss x (mem_missingLinksRel.mpr ⟨hx, hxm, fun hb => hxb (hB x hb)⟩)
+      simp only [hmiss, hmiss', ↓reduceIte] at h ⊢
+      exact h
+    · simp [hmiss] at h
+
 /-! ## The relative store -/
 
 /-- A store together with its boundary and the proof that it is correct relative to it. The only
@@ -676,6 +785,108 @@ theorem addBoundary_spec {c e : RelStore} {d : Digest} {v : Aci}
 def addBoundaryAll (c : RelStore) : List (Digest × Aci) → Option RelStore
   | [] => some c
   | (d, v) :: rest => (c.addBoundary d v).bind (·.addBoundaryAll rest)
+
+/-- The boundary digests `prune old` drops: not in `old`, not stored, and linked by no stored
+record. -/
+def pruned (c : RelStore) (old : Boundary) (d : Digest) : Bool :=
+  !old.contains d && !c.raw.map.contains d && !c.raw.linkedSet.contains d
+
+/-- What `pruned` means. -/
+theorem pruned_iff {c : RelStore} {old : Boundary} {d : Digest} :
+    c.pruned old d = true ↔
+      d ∉ old ∧ d ∉ c.raw.map ∧ ∀ (k : Digest) (r : Rec), c.raw.map[k]? = some r → d ∉ r.links := by
+  rw [pruned, Std.ExtTreeMap.mem_iff_contains (t := old), Std.ExtTreeMap.mem_iff_contains
+    (t := c.raw.map)]
+  have hl : (∀ (k : Digest) (r : Rec), c.raw.map[k]? = some r → d ∉ r.links) ↔
+      c.raw.linkedSet.contains d = false := by
+    rw [Bool.eq_false_iff, ne_eq, ← Std.ExtTreeSet.mem_iff_contains, RawStore.mem_linkedSet]
+    constructor
+    · rintro h ⟨k, r, hk, hd⟩
+      exact h k r hk hd
+    · intro h k r hk hd
+      exact h ⟨k, r, hk, hd⟩
+  rw [hl]
+  cases old.contains d <;> cases c.raw.map.contains d <;> cases c.raw.linkedSet.contains d <;>
+    simp
+
+/-- Dropping boundary digests that are stored nowhere and linked by no stored record keeps the
+store correct. -/
+theorem prune_built {c : RawStore} {B : Boundary} (h : BuiltRel c B) (drop : Digest → Bool)
+    (hdrop : ∀ d, drop d = true → d ∉ c.map ∧
+      ∀ (k : Digest) (r : Rec), c.map[k]? = some r → d ∉ r.links) :
+    BuiltRel { c with heads := c.heads.filter fun d => !drop d } (B.filter fun d _ => !drop d) where
+  hash_eq := h.hash_eq
+  group_eq := h.group_eq
+  heads_iff := by
+    intro x
+    simp only [Std.ExtTreeSet.mem_filter, Std.ExtTreeMap.mem_filter, Std.ExtTreeSet.get_eq,
+      Std.ExtTreeMap.getKey_eq]
+    constructor
+    · rintro ⟨hx, hd⟩
+      obtain ⟨hmb, hnl⟩ := (h.heads_iff x).mp hx
+      exact ⟨hmb.imp id fun hb => ⟨hb, hd⟩, hnl⟩
+    · rintro ⟨hmb, hnl⟩
+      have hb : x ∈ c.map ∨ x ∈ B := hmb.imp id fun ⟨hb, _⟩ => hb
+      refine ⟨(h.heads_iff x).mpr ⟨hb, hnl⟩, ?_⟩
+      rcases hmb with hm | ⟨_, hd⟩
+      · cases hx : drop x
+        · rfl
+        · exact absurd hm (hdrop x hx).1
+      · exact hd
+  order := by
+    obtain ⟨l, hl, hmem⟩ := h.order
+    refine ⟨l, hl.restrict fun r hr d hd hb => ?_, hmem⟩
+    obtain ⟨k, hk⟩ := (hmem r).mp hr
+    simp only [Std.ExtTreeMap.mem_filter, Std.ExtTreeMap.getKey_eq]
+    refine ⟨hb, ?_⟩
+    cases hx : drop d
+    · rfl
+    · exact absurd hd ((hdrop d hx).2 k r hk)
+  size_lt := h.size_lt
+  boundary_lt := Nat.lt_of_le_of_lt Std.ExtTreeMap.size_filter_le_size h.boundary_lt
+  wellSized := h.wellSized
+
+/-- Drop the boundary digests that are not in `old`, not stored, and linked by no stored record
+(`pruned`): `ACCEPT_VIEW` in per-digest mode keeps only the boundary digests a stored record
+links (docs/JOIN_PLAN.md §4.4). The records are the same. -/
+def prune (c : RelStore) (old : Boundary) : RelStore :=
+  ⟨{ c.raw with heads := c.raw.heads.filter fun d => !c.pruned old d },
+    c.boundary.filter fun d _ => !c.pruned old d,
+    prune_built c.built (c.pruned old) fun _ hd =>
+      let h := pruned_iff.mp hd; ⟨h.2.1, h.2.2⟩⟩
+
+/-- **What `prune` does.** The records and the chat are the same. The boundary only shrinks, and a
+digest stays exactly when it is not dropped. A boundary digest that stays is in `old`, stored, or
+linked by a stored record. -/
+theorem prune_spec (c : RelStore) (old : Boundary) :
+    (c.prune old).raw.map = c.raw.map ∧ (c.prune old).raw.group = c.raw.group ∧
+    (∀ (x : Digest) (a : Aci), (c.prune old).boundary[x]? = some a → c.boundary[x]? = some a) ∧
+    (∀ x, x ∈ (c.prune old).boundary → x ∈ old ∨ x ∈ c.raw.map ∨
+      ∃ (k : Digest) (r : Rec), c.raw.map[k]? = some r ∧ x ∈ r.links) := by
+  refine ⟨rfl, rfl, fun x a hx => ?_, fun x hx => ?_⟩
+  · simp only [prune, Std.ExtTreeMap.getElem?_filter'] at hx
+    cases hc : c.boundary[x]? with
+    | none => rw [hc] at hx; cases hx
+    | some b => rw [hc] at hx; simp only [Option.filter] at hx; split at hx <;> simp_all
+  · simp only [prune, Std.ExtTreeMap.mem_filter, Std.ExtTreeMap.getKey_eq] at hx
+    obtain ⟨_, hnd⟩ := hx
+    have hp : c.pruned old x = false := by
+      cases hp : c.pruned old x
+      · rfl
+      · simp [hp] at hnd
+    by_cases ho : x ∈ old
+    · exact .inl ho
+    by_cases hm : x ∈ c.raw.map
+    · exact .inr (.inl hm)
+    refine .inr (.inr ?_)
+    rw [← RawStore.mem_linkedSet, Std.ExtTreeSet.mem_iff_contains]
+    rw [Std.ExtTreeMap.mem_iff_contains, Bool.not_eq_true] at ho hm
+    simpa [pruned, ho, hm] using hp
+
+open Examples in
+-- A digest no record links is dropped; one in `old` stays.
+#guard (((empty group).addBoundaryAll [(dig 1, alice), (dig 2, alice)]).map fun c =>
+  (c.prune ((∅ : Boundary).insert (dig 2) bob)).boundary.keys) == some [dig 2]
 
 /-! ## Observers -/
 
