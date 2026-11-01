@@ -262,6 +262,40 @@ theorem rawAccept_built {c : RawStore} (h : Built c) (r : Rec) : Built (rawAccep
         · exact h.wellSized k x hk
     · exact h
 
+/-! ## Walking links -/
+
+/-- Erasing a key that is present makes a map smaller (used to show that `walk` ends). -/
+theorem size_erase_lt {β : Type} {m : Std.ExtTreeMap Digest β compare} {d : Digest}
+    (h : d ∈ m) : (m.erase d).size < m.size := by
+  rw [Std.ExtTreeMap.size_erase]
+  simp only [Std.ExtTreeMap.mem_iff_contains.mp h, ↓reduceIte]
+  have : m.size ≠ 0 := by
+    intro h0
+    rw [← Std.ExtTreeMap.eq_empty_iff_size_eq_zero] at h0
+    simp [h0] at h
+  omega
+
+/-- Visit every key reachable from `todo`, where the keys to visit after key `d` are
+`next (left[d])`. `left` holds the keys not visited yet (with their values), and `seen` the
+visited ones. A digest that is not a key of `left` (unknown, or already visited) is skipped.
+Each step either removes a key from `left` or shortens `todo`, so the walk ends. -/
+def walk {β : Type} (next : β → List Digest) (left : Std.ExtTreeMap Digest β compare)
+    (seen : DigestSet) : List Digest → DigestSet
+  | [] => seen
+  | d :: todo =>
+    if h : d ∈ left then
+      walk next (left.erase d) (seen.insert d) (next (left.get d h) ++ todo)
+    else walk next left seen todo
+termination_by todo => (left.size, todo.length)
+decreasing_by
+  · exact Prod.Lex.left _ _ (size_erase_lt h)
+  · exact Prod.Lex.right _ (by simp)
+
+open Examples in
+-- 1 → 2 → 3, and 4 → 1; walking from 2 visits 2 and 3; 9 is not a key.
+#guard (walk id (Std.ExtTreeMap.ofList [(dig 1, [dig 2]), (dig 2, [dig 3]), (dig 3, []),
+  (dig 4, [dig 1])] compare) ∅ [dig 2, dig 9]).toList == [dig 2, dig 3]
+
 /-! ## The checked store -/
 
 /-- A store together with the proof that it is correct. The only way to get one is `empty`,
@@ -319,34 +353,10 @@ def encode (c : CheckedStore) : ByteArray := encodeBlob c.group c.records
 
 /-! ## Reachability -/
 
-/-- Erasing a key that is present makes a map smaller (used to show the loops below end). -/
-theorem size_erase_lt {β : Type} {m : Std.ExtTreeMap Digest β compare} {d : Digest}
-    (h : d ∈ m) : (m.erase d).size < m.size := by
-  rw [Std.ExtTreeMap.size_erase]
-  simp only [Std.ExtTreeMap.mem_iff_contains.mp h, ↓reduceIte]
-  have : m.size ≠ 0 := by
-    intro h0
-    rw [← Std.ExtTreeMap.eq_empty_iff_size_eq_zero] at h0
-    simp [h0] at h
-  omega
-
-/-- Follow links from the digests in `todo`. `left` holds the stored records not reached yet,
-and `seen` the digests reached so far. A digest that is not stored is skipped. -/
-def reachLoop (left : RecMap) (seen : DigestSet) : List Digest → DigestSet
-  | [] => seen
-  | d :: todo =>
-    if h : d ∈ left then
-      reachLoop (left.erase d) (seen.insert d) ((left.get d h).links.toList ++ todo)
-    else reachLoop left seen todo
-termination_by todo => (left.size, todo.length)
-decreasing_by
-  · exact Prod.Lex.left _ _ (size_erase_lt h)
-  · exact Prod.Lex.right _ (by simp)
-
-/-- The stored records reached from the digests `start` by following links, as their digests.
-A start digest that is not stored is left out. -/
+/-- The stored records reached from the digests `start` by following links, as their digests
+(`start` included). A start digest that is not stored is left out. -/
 def reachSet (c : CheckedStore) (start : Array Digest) : DigestSet :=
-  reachLoop c.raw.map ∅ start.toList
+  walk (fun r => r.links.toList) c.raw.map ∅ start.toList
 
 /-! ## Accepting many records -/
 
@@ -460,12 +470,20 @@ def explain (c : CheckedStore) (left : Array Rec) : OpenError :=
       let (records, missing) := leftoverReport c left
       .unverifiable records missing
 
+/-- Whether every record belongs to chat `g`. -/
+def allInChat (g : GroupId) (u : Array Rec) : Bool := u.all fun r => r.group == g
+
+/-- The checks `open` and `salvage` make before accepting anything: the size limits, then the
+chat of every record. -/
+def checkInput (g : GroupId) (u : Array Rec) : Option OpenError :=
+  if WellSized u then (if allInChat g u then none else some .wrongChat) else some .tooLarge
+
 /-- Load the records `u` as a new store of chat `g`. Every record must be accepted; otherwise
 nothing is loaded and the error says why. -/
 def openRecords (g : GroupId) (u : Array Rec) : Except OpenError CheckedStore :=
-  if ¬ WellSized u then .error .tooLarge
-  else if u.any (fun r => r.group != g) then .error .wrongChat
-  else
+  match checkInput g u with
+  | some e => .error e
+  | none =>
     let (c, left) := acceptAll (empty g) u
     if left.isEmpty then .ok c else .error (explain c left)
 
@@ -490,9 +508,9 @@ structure Salvaged where
 rest. It refuses (loads nothing) if the input is too large, holds a record of another chat, or
 holds two different records with the same digest. -/
 def salvageRecords (g : GroupId) (u : Array Rec) : Except OpenError Salvaged :=
-  if ¬ WellSized u then .error .tooLarge
-  else if u.any (fun r => r.group != g) then .error .wrongChat
-  else
+  match checkInput g u with
+  | some e => .error e
+  | none =>
     let (c, left) := acceptAll (empty g) u
     let left := withDigests left
     match findCollision c left with
