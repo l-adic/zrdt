@@ -1122,13 +1122,174 @@ the lane empties its list as its sessions cover them; all three lists are empty 
 integration). -/
 
 -- [BEGIN lane base] sessions
+/-! ### Piece stores (lane base, docs/apps/BUILD_M1.md §B.5)
+
+One `zrdtd` holds Alice's torrent channel `files`, with her announcement A of the 2.5 KiB
+`AppBase.AppExamples.stream` (three pieces at k = 10), and two piece stores bound to A: Bob's
+(`p`) and Carol's (`pc`). Bob fetches every piece and completes. Carol fetches piece 0, and the
+other two are missing (the server deleted them); she gets them from Bob at the frame level: Bob's
+`PIECE_OPENING`s, his per-digest `SERVE` on his piece key, and her `PIECE_ACCEPT` of the bytes in
+the openings, where a tampered copy (Dave's) is refused. -/
+
+namespace Pieces
+open AppBase AppBase.AppExamples
+open Serve.Examples (keyMallory)
+
+/-- A step from a protocol-5 request. -/
+def askApp (name : String) (q : Apps.Request) (expect : Code) (reply? : Option Apps.Reply := none) :
+    Step :=
+  { name, request := q.write, expect, reply? := reply?.map (·.write) }
+
+/-- A step from a base request. -/
+def askBase (name : String) (q : AppBase.Request) (expect : Code)
+    (reply? : Option AppBase.Reply := none) : Step :=
+  askApp name (.base q) expect (reply?.map .base)
+
+/-- `PIECES_BIND` of A under `key` from the channel `files`, as `me` under `k`. -/
+def bindA (key : String) (me : Aci) (k : ByteArray) (A : Rec := annA) (o : ByteArray := openA)
+    (app : String := "bt") (chan : String := "files") : AppBase.Request :=
+  .piecesBind key chan group app me k (encode A) o
+
+/-- The digest of piece `i`. -/
+def d (i : Nat) : Digest := hashRecord (pieceRecord ctxA i (pieceA i))
+
+/-- Bob's opening of piece `i`. -/
+def op (i : Nat) : ByteArray := pieceOpening ctxA i (pieceA i)
+
+/-- The manifest record F. -/
+def F : Rec := manifestRecord ctxA
+
+/-- Bob's per-digest `SERVE` on his piece key, for `to` under `key`: the pieces Carol lacks,
+with their openings. -/
+def repairServe (to : Aci) (key : ByteArray) : ServeRequest :=
+  { own := bob, requester := to, key, rid, since := #[], ownSince := #[],
+    wanted := some #[d 1, d 2], forExport := false, strict := false, live := #[], disown := #[],
+    held := #[(d 1, op 1), (d 2, op 2)] }
+
+/-- An announcement no channel holds: A with a nonce of its own. -/
+def annStray : Rec := Rec.make chanBt (commitOf chanBt alice storeNonce msgA) #[] alice
+
+/-- The session. -/
+def steps : Array Step := #[
+  askBase "CHANNEL of group, bt, files: the torrent channel id" (.channel group "bt" "files") .ok
+    (some (.channel chanBt)),
+  askBase "CHANNEL with an empty app tag: BAD_APP 6" (.channel group "" "files") .badApp
+    (some (.badApp .limits)),
+  askBase "CHANNEL with a 65-byte name: BAD_APP 6"
+    (.channel group "bt" (String.ofList (List.replicate 65 'n'))) .badApp (some (.badApp .limits)),
+  ask "AUDIENCE alice, bob, carol (keys), mallory (none)" (.audience membersA) .ok
+    (some (.audience audA)),
+  ask "NEW files (the torrent channel)" (.new "files" chanBt) .ok,
+  ask "COMMIT A: the opening is the nonce and the app message, whole" (.commit chanBt alice nonceA msgA)
+    .ok (some (.committed annA.commit openA)),
+  ask "ACCEPT A into files" (.accept "files" (.ofRec annA) openA) .ok
+    (some (.accept annA (.accepted (hashRecord annA)))),
+  ask "ACCEPT the bare announcement (no descriptor) into files"
+    (.accept "files" (.ofRec annBare) openBare) .ok,
+  askBase "PIECES_BIND from a channel key not open: NO_CHAT" (bindA "p" bob keyBob (chan := "none"))
+    .noChat,
+  askBase "PIECES_BIND under the channel's own key: CHAT_OPEN" (bindA "files" bob keyBob) .chatOpen,
+  askBase "PIECES_BIND of bytes that are not a record: MALFORMED"
+    (.piecesBind "p" "files" group "bt" bob keyBob ((encode annA).push 0) openA) .malformed,
+  askBase "PIECES_BIND of an announcement files does not hold: BAD_APP 1"
+    (bindA "p" bob keyBob (A := annStray)) .badApp (some (.badApp .notStored)),
+  askBase "PIECES_BIND of A with another record's opening: BAD_APP 2"
+    (bindA "p" bob keyBob (o := openBare)) .badApp (some (.badApp .opening)),
+  askBase "PIECES_BIND of A as a git push: BAD_APP 3" (bindA "p" bob keyBob (app := "git-sha256"))
+    .badApp (some (.badApp .notApp)),
+  askBase "PIECES_BIND of A in another Signal group: BAD_APP 3"
+    (.piecesBind "p" "files" otherGroup "bt" bob keyBob (encode annA) openA) .badApp
+    (some (.badApp .notApp)),
+  askBase "PIECES_BIND of the bare announcement: BAD_APP 5"
+    (bindA "p" bob keyBob (A := annBare) (o := openBare)) .badApp (some (.badApp .descriptor)),
+  askBase "PIECES_BIND as mallory (no key in A's audience): BAD_APP 4"
+    (bindA "p" Serve.Examples.mallory keyMallory) .badApp (some (.badApp .notSeated)),
+  askBase "PIECES_BIND as bob under a swapped key: BAD_APP 4"
+    (bindA "p" bob Serve.Examples.keyBob') .badApp (some (.badApp .notSeated)),
+  askBase "PIECES_BIND p as bob: L, k, the digests, body, manifest, no pointers"
+    (bindA "p" bob Serve.Examples.keyBob) .ok (some (.bound ctxA)),
+  askBase "PIECES_BIND p again: CHAT_OPEN" (bindA "p" bob Serve.Examples.keyBob) .chatOpen,
+  ask "HEADS p: the piece store is empty" (.heads "p") .ok (some (.digests #[])),
+  askBase "PIECE_ACCEPT p 0" (.pieceAccept "p" 0 (pieceA 0)) .ok (some (.digest (d 0))),
+  askBase "PIECE_ACCEPT p 1 with a byte changed: BAD_PIECE"
+    (.pieceAccept "p" 1 (flip (pieceA 1) 3)) .badPiece (some (.badPiece none)),
+  askBase "PIECE_ACCEPT p 2 with piece 0's bytes (wrong length): BAD_PIECE"
+    (.pieceAccept "p" 2 (pieceA 0)) .badPiece (some (.badPiece none)),
+  askBase "PIECE_ACCEPT p 3 (there are 3 pieces): BAD_PIECE" (.pieceAccept "p" 3 (pieceA 0))
+    .badPiece (some (.badPiece none)),
+  askBase "PIECE_ACCEPT on a key that is no piece store: NO_CHAT"
+    (.pieceAccept "files" 0 (pieceA 0)) .noChat,
+  askBase "PIECES_COMPLETE p: MISSING pieces 1 and 2" (.piecesComplete "p") .missing
+    (some (.accept F (.missing (sorted #[d 1, d 2])))),
+  askBase "PIECE_ACCEPT p 1" (.pieceAccept "p" 1 (pieceA 1)) .ok (some (.digest (d 1))),
+  askBase "PIECE_ACCEPT p 2" (.pieceAccept "p" 2 (pieceA 2)) .ok (some (.digest (d 2))),
+  askBase "PIECE_ACCEPT p 2 again: the same digest" (.pieceAccept "p" 2 (pieceA 2)) .ok
+    (some (.digest (d 2))),
+  askBase "PIECES_COMPLETE p: OK, F" (.piecesComplete "p") .ok
+    (some (.accept F (.accepted (hashRecord F)))),
+  ask "HEADS p: F" (.heads "p") .ok (some (.digests #[hashRecord F])),
+  askBase "ASSEMBLE p of the stream: OK" (.assemble "p" stream) .ok (some .ok),
+  askBase "ASSEMBLE p with a byte of piece 1 changed: BAD_PIECE 1"
+    (.assemble "p" (flip stream 1500)) .badPiece (some (.badPiece (some 1))),
+  askBase "ASSEMBLE p of 2000 bytes: BAD_PIECE 3 (N, the length is not L)"
+    (.assemble "p" (stream.extract 0 2000)) .badPiece (some (.badPiece (some 3))),
+  ask "ACCEPT_RECORD into a piece store: BAD_REQUEST (only PIECE_ACCEPT fills it)"
+    (.acceptRecord "p" (encode annA) (some openA)) .badRequest,
+  ask "MERGE into a piece store: BAD_REQUEST" (.merge "p" (encodeBlob chanBt #[])) .badRequest,
+  ask "NEW under a piece key: CHAT_OPEN" (.new "p" chanBt) .chatOpen,
+  askBase "PIECES_BIND pc as carol" (bindA "pc" carol Serve.Examples.keyCarol) .ok
+    (some (.bound ctxA)),
+  askBase "PIECE_ACCEPT pc 0 (from the CDN)" (.pieceAccept "pc" 0 (pieceA 0)) .ok
+    (some (.digest (d 0))),
+  askBase "PIECES_COMPLETE pc: MISSING 1 and 2 (the server deleted them)" (.piecesComplete "pc")
+    .missing (some (.accept F (.missing (sorted #[d 1, d 2])))),
+  askBase "PIECE_OPENING p 1 (Bob, the responder)" (.pieceOpening "p" 1 (pieceA 1)) .ok
+    (some (.opening (op 1))),
+  askBase "PIECE_OPENING p 2" (.pieceOpening "p" 2 (pieceA 2)) .ok (some (.opening (op 2))),
+  askBase "PIECE_OPENING p 1 of other bytes: BAD_PIECE" (.pieceOpening "p" 1 (pieceA 2)) .badPiece
+    (some (.badPiece none)),
+  ask "SERVE p per-digest to carol: pieces 1 and 2 with their openings"
+    (.serve "p" (repairServe carol Serve.Examples.keyCarol)) .ok,
+  ask "SERVE p per-digest to mallory: no opening (A does not seat her)"
+    (.serve "p" (repairServe Serve.Examples.mallory keyMallory)) .ok,
+  askBase "PIECE_ACCEPT pc 2 from Dave's tampered reply: BAD_PIECE"
+    (.pieceAccept "pc" 2 (flip (pieceA 2) 0)) .badPiece (some (.badPiece none)),
+  askBase "PIECE_ACCEPT pc 1 from Bob's reply" (.pieceAccept "pc" 1 (pieceA 1)) .ok
+    (some (.digest (d 1))),
+  askBase "PIECE_ACCEPT pc 2 from Bob's reply" (.pieceAccept "pc" 2 (pieceA 2)) .ok
+    (some (.digest (d 2))),
+  askBase "PIECES_COMPLETE pc: OK, F" (.piecesComplete "pc") .ok
+    (some (.accept F (.accepted (hashRecord F)))),
+  ask "HEADS pc: F, as Bob's" (.heads "pc") .ok (some (.digests #[hashRecord F])),
+  askBase "ASSEMBLE pc of the stream: OK" (.assemble "pc" stream) .ok (some .ok),
+  ask "CLOSE pc: the store and its context go" (.close "pc") .ok,
+  ask "HEADS pc: NO_CHAT" (.heads "pc") .noChat,
+  askBase "PIECE_OPENING pc: NO_CHAT" (.pieceOpening "pc" 1 (pieceA 1)) .noChat,
+  askBase "PIECES_COMPLETE pc: NO_CHAT" (.piecesComplete "pc") .noChat,
+  askBase "ASSEMBLE pc: NO_CHAT" (.assemble "pc" stream) .noChat,
+  raw "op 0x1D (reserved): UNKNOWN_OP" ⟨#[0x1D]⟩ .unknownOp,
+  raw "CHANNEL with a byte left over: BAD_REQUEST"
+    ((AppBase.Request.channel group "bt" "files").write.push 0) .badRequest]
+
+/-- The checks on the session's replies: the repair reply to Carol carries both openings, the one
+to Mallory neither, and Bob's and Carol's piece stores have the same heads. -/
+def checks (out : List (Step × ByteArray)) : Bool :=
+  let reply (name : String) : ByteArray := (out.find? (·.1.name == name)).elim .empty (·.2)
+  let toCarol := reply "SERVE p per-digest to carol: pieces 1 and 2 with their openings"
+  let toMallory := reply "SERVE p per-digest to mallory: no opening (A does not seat her)"
+  containsBytes toCarol (op 1) && containsBytes toCarol (op 2) &&
+    !containsBytes toMallory (op 1) && !containsBytes toMallory (op 2) &&
+    reply "HEADS p: F" == reply "HEADS pc: F, as Bob's"
+
+end Pieces
+
 /-- Lane base's sessions (`pieces`: `CHANNEL`, `PIECES_BIND`, `PIECE_ACCEPT`, `PIECE_OPENING`,
 `PIECES_COMPLETE`, `ASSEMBLE`, the piece-key guard, and the torrent beat's repair at the frame
 level). -/
-def baseSessions : Array (String × Array Step) := #[]
+def baseSessions : Array (String × Array Step) := #[("pieces", Pieces.steps)]
 
 /-- Lane base's statuses that no session produces yet. -/
-def baseUncovered : List Code := [.badPiece, .badApp]
+def baseUncovered : List Code := []
 -- [END lane base]
 
 -- [BEGIN lane torrent] sessions
@@ -1187,6 +1348,13 @@ def failures : List String :=
 -- [BEGIN lane base] checks
 -- Every base op appears in some session.
 #guard baseOpNames.all fun (b, _) => sessions.any fun (_, steps) => steps.any (·.request[0]? == some b)
+#guard Pieces.checks (Pieces.steps.toList.zip (replies Pieces.steps))
+-- Every base request of the session reads back as itself.
+#guard Pieces.steps.all fun st =>
+  st.request[0]? == some 0x1D || !(st.request[0]?.any fun b => 0x17 ≤ b && b ≤ 0x1C) ||
+    (match Apps.Request.parse st.request with
+      | .ok q => q.write == st.request
+      | .error _ => st.expect == .badRequest)
 -- [END lane base]
 
 -- [BEGIN lane torrent] checks
