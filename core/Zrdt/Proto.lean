@@ -408,7 +408,8 @@ def torrentOpNames : List (UInt8 × String) := []
 
 -- [BEGIN lane git] op names, 0x28-0x2F
 /-- Lane git's op names (`Zrdt.Git`). -/
-def gitOpNames : List (UInt8 × String) := []
+def gitOpNames : List (UInt8 × String) :=
+  [(0x28, "GIT_PREPARE"), (0x29, "GIT_OBJECTS"), (0x2A, "GIT_VIEW")]
 #guard gitOpNames.all fun (b, _) => 0x28 ≤ b && b ≤ 0x2F
 -- [END lane git]
 

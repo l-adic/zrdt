@@ -1140,12 +1140,312 @@ def torrentUncovered : List Code := [.badName]
 -- [END lane torrent]
 
 -- [BEGIN lane git] sessions
+/-! ### The git session (docs/apps/BUILD_M1.md §A.2 at the frame level)
+
+Group "Code" is `group`; its git channel is `GitV.chan`. Alice, Bob and Carol each hold the channel
+under their own key ("alice", "bob", "carol"); Dave joins later with a relative store ("dave").
+The objects are those of `Git.Beat`, pinned against a real SHA-256 repository. The steps:
+P1 (Alice's root push, a complete table), Bob's forced P2, three equal `GIT_VIEW`s, Dave's
+catch-up (structure and a boundary digest only), Carol's `GATE` (Dave new), Alice's share S
+(`COVERS_CHANGED`, then `OK`), Carol's P3, Dave's view, Dave's `ROOT`, Bob's `OLD_OBJECT`, and the
+other refusals. `GIT_OBJECTS` on a bound piece store needs lane base's `PIECES_BIND`; here it
+appears only with `NO_CHAT`. -/
+
+namespace GitV
+open Git Git.Beat
+
+/-- Dave's identity key. -/
+def keyDave : ByteArray := Serve.Examples.idKey 4
+/-- Dave. -/
+def dave : Aci := Serve.Examples.dave
+/-- The git channel of group `group`. -/
+def chan : GroupId := AppBase.channelId group AppBase.appGit AppBase.channelGit
+/-- A seat. -/
+def seat (a : Aci) (k : ByteArray) : Serve.Seat := ⟨a, Serve.keyTag k⟩
+/-- The field-201 value `AUDIENCE` gives for these members. -/
+def audOf (ms : Array (Aci × Option ByteArray)) : ByteArray :=
+  match audienceReply ms with
+  | .audience b => b
+  | _ => .empty
+/-- Alice, Bob, Carol. -/
+def abc : Array (Aci × Option ByteArray) :=
+  #[(alice, some keyAlice), (bob, some keyBob), (carol, some keyCarol)]
+/-- Alice, Bob, Carol, Dave. -/
+def abcd : Array (Aci × Option ByteArray) := abc.push (dave, some keyDave)
+/-- Alice, Bob, Carol under a new key, Dave. -/
+def abc'd : Array (Aci × Option ByteArray) :=
+  #[(alice, some keyAlice), (bob, some keyBob), (carol, some Serve.Examples.keyCarol'),
+    (dave, some keyDave)]
+
+/-- `refs/heads/main`. -/
+def main : String := "refs/heads/main"
+/-- An id. -/
+def oid (k : Kind) (c : ByteArray) : Oid := idOf k c
+
+/-- A `GIT_PREPARE` request on channel key `ck`. -/
+def push (ck : String) (author : Aci) (n : UInt8) (aud : ByteArray) (us : Array Update)
+    (hs : Array (Digest × ByteArray)) (stream : ByteArray) (share : Bool := false)
+    (expect : Array Serve.Seat := #[]) (repo : String := "demo") (ptrs : ByteArray := .empty)
+    (sg : GroupId := group) (k : Nat := AppBase.testPieceExp) : PrepareReq :=
+  { sg, channelKey := ck, author, nonce := Serve.Examples.nonceOf n, exp := k, audience := aud,
+    share, expect, repo, updates := us, helds := hs, pointers := ptrs, stream }
+
+/-- What `GIT_PREPARE` returns when the push passes, with these covers. -/
+def preparedOf (req : PrepareReq) (covers : Array Serve.Seat := #[]) : Option Prepared :=
+  match checkObjectsE req.stream with
+  | .ok os =>
+    match finish req os (sortUpdates req.updates) covers with
+    | .ok out => some out
+    | .error _ => none
+  | .error _ => none
+
+/-- The push record and its opening: `COMMIT` of the message with commitment nonce `n`. -/
+def recOf (author : Aci) (n : UInt8) (out : Option Prepared) (links : Array Digest) :
+    Rec × ByteArray :=
+  match out.bind fun o => commitWithOpening chan author (Serve.Examples.nonceOf n) o.message with
+  | some (c, o) => (Rec.make chan c links author, o)
+  | none => (Rec.make chan Digest.zero links author, .empty)
+
+/-- The held opening of a record. -/
+def held (x : Rec × ByteArray) : Digest × ByteArray := (hashRecord x.1, x.2)
+
+/-- P1: Alice creates main at c1, carrying c0 and c1 (the freeze job's call, with pointers). -/
+def p1Req : PrepareReq :=
+  push "alice" alice 0x31 (audOf abc) #[⟨main, none, some (oid .commit c1), false⟩] #[] p1Stream
+    (ptrs := "p1-pointers".toUTF8)
+/-- P1's record. -/
+def p1 : Rec × ByteArray := recOf alice 0x41 (preparedOf p1Req) #[]
+/-- P2: Bob force-pushes main c1 → c2. -/
+def p2Req : PrepareReq :=
+  push "bob" bob 0x32 (audOf abc) #[⟨main, some (oid .commit c1), some (oid .commit c2), true⟩]
+    #[held p1] p2Stream (ptrs := "p2-pointers".toUTF8)
+/-- P2's record. -/
+def p2 : Rec × ByteArray := recOf bob 0x42 (preparedOf p2Req) #[hashRecord p1.1]
+/-- Carol's push of c3 on main, before the share: Dave is in the audience. -/
+def p3Req (hs : Array (Digest × ByteArray)) : PrepareReq :=
+  push "carol" carol 0x33 (audOf abcd) #[⟨main, some (oid .commit c2), some (oid .commit c3), false⟩]
+    hs p3Stream (ptrs := "p3-pointers".toUTF8)
+/-- S: Alice shares main@c2 with the channel. -/
+def sReq (expect : Array Serve.Seat) : PrepareReq :=
+  push "alice" alice 0x34 (audOf abcd) #[⟨main, some (oid .commit c2), some (oid .commit c2), false⟩]
+    #[held p1, held p2] sStream (share := true) (expect := expect) (ptrs := "s-pointers".toUTF8)
+/-- S's record. -/
+def s : Rec × ByteArray :=
+  recOf alice 0x44 (preparedOf (sReq #[seat dave keyDave]) #[seat dave keyDave]) #[hashRecord p2.1]
+/-- P3 after S. -/
+def p3 : Rec × ByteArray :=
+  recOf carol 0x43 (preparedOf (p3Req #[held p1, held p2, held s])) #[hashRecord s.1]
+/-- Every opening of the channel. -/
+def all4 : Array (Digest × ByteArray) := #[held p1, held p2, held s, held p3]
+
+/-- The reply to a passing push. -/
+def okReply (req : PrepareReq) (covers : Array Serve.Seat := #[]) : Option Git.Reply :=
+  (preparedOf req covers).map .prepared
+
+/-- Ids, sorted. -/
+def sortedIds (os : List Oid) : Array Oid := (os.mergeSort fun a b => compare a b != .gt).toArray
+
+/-- The view after P2: P1's and P2's updates; main is c2 (P2 saw P1 and replaced c1). -/
+def viewP2 : Git.View :=
+  { log := [(⟨hashRecord p1.1, alice, false, ⟨main, none, some (oid .commit c1), false⟩⟩ : LogEntry),
+      ⟨hashRecord p2.1, bob, false, ⟨main, some (oid .commit c1), some (oid .commit c2), true⟩⟩].mergeSort
+      logLe
+    refs := [(main, hashRecord p2.1, some (oid .commit c2))] }
+
+/-- The log line of S and of P3. -/
+def logS : LogEntry := ⟨hashRecord s.1, alice, true, ⟨main, some (oid .commit c2), some (oid .commit c2), false⟩⟩
+/-- P3's log line. -/
+def logP3 : LogEntry := ⟨hashRecord p3.1, carol, false, ⟨main, some (oid .commit c2), some (oid .commit c3), false⟩⟩
+
+/-- Dave's view after S and P3: only S and P3; main is c3. -/
+def viewDave : Git.View :=
+  { log := [logS, logP3].mergeSort logLe, refs := [(main, hashRecord p3.1, some (oid .commit c3))] }
+
+/-- Carol's view at the end: all four pushes; main is c3. -/
+def viewAll : Git.View :=
+  { log := (viewP2.log ++ [logS, logP3]).mergeSort logLe
+    refs := [(main, hashRecord p3.1, some (oid .commit c3))] }
+
+/-- A tag object (refused: `KIND`). -/
+def tagRaw : ByteArray := "tag 6\x00hello\n".toUTF8
+/-- A tree with a gitlink (refused: `GITLINK`). -/
+def gitlinkTree : ByteArray := treeOf [("160000", "sub", oid .commit c0)]
+/-- A tree whose entries are out of order (refused: `MALFORMED`). -/
+def unorderedTree : ByteArray :=
+  treeOf [("100644", "a.txt", oid .blob bA), ("100644", "README.md", oid .blob bReadme)]
+/-- A signed commit (refused: `HEADER`). -/
+def signedCommit : ByteArray :=
+  ("tree " ++ (oid .tree t0).toHex ++ "\nauthor Eve <eve@example.org> 1730419200 +0000\n" ++
+    "committer Eve <eve@example.org> 1730419200 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n" ++
+    " xyz\n -----END PGP SIGNATURE-----\n\nsigned\n").toUTF8
+/-- P1's objects in decreasing order (refused: `ORDER`). -/
+def unorderedStream : ByteArray :=
+  ([(Kind.blob, bReadme), (.blob, bA), (.tree, t0), (.tree, t1), (.commit, c0), (.commit, c1)].map
+    (fun (k, c) => (oid k c, rawOf k c)) |>.mergeSort (fun a b => compare a.1 b.1 != .lt)).foldl
+    (fun acc (_, r) => acc ++ r) .empty
+/-- Seventeen updates (refused: `LIMITS`). -/
+def manyUpdates : Array Update :=
+  (Array.range 17).map fun i => ⟨"refs/heads/b" ++ toString (10 + i), none, some (oid .commit c3), false⟩
+
+/-- A step from a git request. -/
+def askGit (name : String) (q : Git.Request) (expect : Code) (reply? : Option Git.Reply := none) :
+    Step :=
+  { name, request := q.write, expect, reply? := reply?.map (·.write) }
+
+/-- A step from a protocol-4 request on a record. -/
+def acceptIn (ck : String) (x : Rec × ByteArray) : Step :=
+  ask s!"ACCEPT into {ck}" (.accept ck (.ofRec x.1) x.2) .ok (some (.accept x.1 (.accepted (hashRecord x.1))))
+
+/-- The PUSH_REFUSED reply. -/
+def refused (r : PushReason) (ss : Array (Serve.Seat × UInt8)) (ns : Array String) (os : Array Oid) :
+    Git.Reply := .refused (.pushRefused r ss ns os)
+
+/-- The session. -/
+def steps : Array Step := #[
+  ask "NEW alice: the git channel of group Code" (.new "alice" chan) .ok,
+  ask "NEW bob" (.new "bob" chan) .ok,
+  ask "NEW carol" (.new "carol" chan) .ok,
+  ask "AUDIENCE alice, bob, carol" (.audience abc) .ok (some (.audience (audOf abc))),
+  askGit "GIT_PREPARE P1, the pre-check (no pointers yet): OK, root commit c0 from a complete (empty) table"
+    (.prepare { p1Req with pointers := .empty }) .ok (okReply { p1Req with pointers := .empty }),
+  askGit "GIT_PREPARE P1 in the freeze job, with the pointers: OK"
+    (.prepare p1Req) .ok (okReply p1Req),
+  ask "COMMIT P1's message" (.commit chan alice (Serve.Examples.nonceOf 0x41)
+    ((preparedOf p1Req).elim .empty (·.message))) .ok (some (.committed p1.1.commit p1.2)),
+  acceptIn "alice" p1, acceptIn "bob" p1, acceptIn "carol" p1,
+  askGit "GIT_VIEW bob after P1: main = c1"
+    (.view group "bob" "demo" #[held p1]) .ok
+    (some (.view { log := [⟨hashRecord p1.1, alice, false, ⟨main, none, some (oid .commit c1), false⟩⟩]
+                   refs := [(main, hashRecord p1.1, some (oid .commit c1))] })),
+  askGit "GIT_PREPARE P2 (Bob, forced main c1 -> c2): OK, Alice and Carol hold c0 and c1 through P1"
+    (.prepare p2Req) .ok (okReply p2Req),
+  ask "COMMIT P2's message" (.commit chan bob (Serve.Examples.nonceOf 0x42)
+    ((preparedOf p2Req).elim .empty (·.message))) .ok (some (.committed p2.1.commit p2.2)),
+  acceptIn "alice" p2, acceptIn "bob" p2, acceptIn "carol" p2,
+  askGit "GIT_VIEW alice: Bob force-pushed main c1 -> c2" (.view group "alice" "demo" #[held p1, held p2])
+    .ok (some (.view viewP2)),
+  askGit "GIT_VIEW bob: the same" (.view group "bob" "demo" #[held p2, held p1]) .ok (some (.view viewP2)),
+  askGit "GIT_VIEW carol: the same" (.view group "carol" "demo" #[held p1, held p2]) .ok
+    (some (.view viewP2)),
+  ask "HEADS carol: P2" (.heads "carol") .ok (some (.digests #[hashRecord p2.1])),
+  ask "NEW_RELATIVE dave: Dave joins" (.newRelative "dave" chan) .ok,
+  ask "ACCEPT_VIEW dave: Alice's catch-up, P2 as structure and P1 as a boundary digest"
+    (.acceptView "dave" alice false false #[.after (encode p2.1), .boundary (hashRecord p1.1)] #[]) .ok,
+  ask "HEADS dave: P2, the others' compare code" (.heads "dave") .ok (some (.digests #[hashRecord p2.1])),
+  askGit "GIT_VIEW dave: nothing (no opening)" (.view group "dave" "demo" #[]) .ok
+    (some (.view { log := [], refs := [] })),
+  ask "AUDIENCE alice, bob, carol, dave" (.audience abcd) .ok (some (.audience (audOf abcd))),
+  askGit "GIT_PREPARE P3 (Carol, Dave now in the audience): PUSH_REFUSED GATE, Dave new"
+    (.prepare (p3Req #[held p1, held p2])) .pushRefused
+    (some (refused .gate #[(seat dave keyDave, 0)] #[main]
+      (sortedIds [oid .commit c2, oid .blob bReadme, oid .blob bA2]))),
+  askGit "GIT_PREPARE S (Alice shares main@c2) with an empty expect: COVERS_CHANGED, Dave covered"
+    (.prepare (sReq #[])) .pushRefused (some (refused .coversChanged #[(seat dave keyDave, 2)] #[] #[])),
+  askGit "GIT_PREPARE S with expect = Dave: OK" (.prepare (sReq #[seat dave keyDave])) .ok
+    (okReply (sReq #[seat dave keyDave]) #[seat dave keyDave]),
+  ask "COMMIT S's message" (.commit chan alice (Serve.Examples.nonceOf 0x44)
+    ((preparedOf (sReq #[seat dave keyDave]) #[seat dave keyDave]).elim .empty (·.message))) .ok
+    (some (.committed s.1.commit s.2)),
+  acceptIn "alice" s, acceptIn "bob" s, acceptIn "carol" s, acceptIn "dave" s,
+  askGit "GIT_PREPARE P3 again: OK, Dave holds c2 and its objects through S"
+    (.prepare (p3Req #[held p1, held p2, held s])) .ok (okReply (p3Req #[held p1, held p2, held s])),
+  ask "COMMIT P3's message" (.commit chan carol (Serve.Examples.nonceOf 0x43)
+    ((preparedOf (p3Req #[held p1, held p2, held s])).elim .empty (·.message))) .ok
+    (some (.committed p3.1.commit p3.2)),
+  acceptIn "alice" p3, acceptIn "bob" p3, acceptIn "carol" p3, acceptIn "dave" p3,
+  askGit "GIT_VIEW dave: S and P3 only; main = c3" (.view group "dave" "demo" #[held s, held p3]) .ok
+    (some (.view viewDave)),
+  askGit "GIT_VIEW carol: all four pushes; main = c3" (.view group "carol" "demo" all4) .ok
+    (some (.view viewAll)),
+  askGit "GIT_VIEW alice: the same" (.view group "alice" "demo" all4.reverse) .ok (some (.view viewAll)),
+  askGit "GIT_VIEW alice, another repository: empty" (.view group "alice" "other" all4) .ok
+    (some (.view { log := [], refs := [] })),
+  askGit "GIT_PREPARE Dave's root push of a new repository: PUSH_REFUSED ROOT (a relative store)"
+    (.prepare (push "dave" dave 0x35 (audOf abcd) #[⟨main, none, some (oid .commit d0), false⟩]
+      #[held s, held p3] dStream (repo := "mine"))) .pushRefused
+    (some (refused .root #[] #[] #[oid .commit d0])),
+  askGit "GIT_PREPARE Bob re-pushes c1 as a new branch: PUSH_REFUSED OLD_OBJECT"
+    (.prepare (push "bob" bob 0x36 (audOf abcd) #[⟨"refs/heads/old", none, some (oid .commit c1), false⟩]
+      all4 oldStream)) .pushRefused
+    (some (refused .oldObject #[] #[] (sortedIds [oid .blob bA, oid .tree t1, oid .commit c1]))),
+  askGit "GIT_PREPARE Bob creates branch x at c3, no objects: OK (no descriptor)"
+    (.prepare (push "bob" bob 0x37 (audOf abcd) #[⟨"refs/heads/x", none, some (oid .commit c3), false⟩]
+      all4 .empty)) .ok
+    (okReply (push "bob" bob 0x37 (audOf abcd) #[⟨"refs/heads/x", none, some (oid .commit c3), false⟩]
+      all4 .empty)),
+  askGit "GIT_PREPARE the same with Carol's key changed: PUSH_REFUSED GATE, Carol marked key changed"
+    (.prepare (push "bob" bob 0x37 (audOf abc'd) #[⟨"refs/heads/x", none, some (oid .commit c3), false⟩]
+      all4 .empty)) .pushRefused
+    (some (refused .gate #[(seat carol Serve.Examples.keyCarol', 1)] #[] #[oid .commit c3])),
+  askGit "GIT_PREPARE a share with Carol's key changed: PUSH_REFUSED KEY_CHANGED"
+    (.prepare (push "alice" alice 0x38 (audOf abc'd)
+      #[⟨main, some (oid .commit c2), some (oid .commit c2), false⟩] all4 sStream (share := true)))
+    .pushRefused (some (refused .keyChanged #[(seat carol Serve.Examples.keyCarol', 1)] #[] #[])),
+  askGit "GIT_PREPARE a share that does not carry its commit: PUSH_REFUSED BAD_SHARE"
+    (.prepare (push "alice" alice 0x39 (audOf abcd)
+      #[⟨main, some (oid .commit c2), some (oid .commit c2), false⟩] all4
+      (streamOf [(.blob, bReadme), (.blob, bA2), (.tree, t2)]) (share := true))) .pushRefused
+    (some (refused .badShare #[] #[] #[oid .commit c2])),
+  askGit "GIT_PREPARE a tag object: BAD_OBJECTS KIND"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[⟨"refs/tags/v1", none, some (oid .commit c3), false⟩]
+      all4 tagRaw)) .badObjects (some (.refused (.badObjects .kind zeroOid))),
+  askGit "GIT_PREPARE a gitlink: BAD_OBJECTS GITLINK"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 (rawOf .tree gitlinkTree))) .badObjects
+    (some (.refused (.badObjects .gitlink (oid .tree gitlinkTree)))),
+  askGit "GIT_PREPARE a tree out of order: BAD_OBJECTS MALFORMED"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 (rawOf .tree unorderedTree))) .badObjects
+    (some (.refused (.badObjects .malformed (oid .tree unorderedTree)))),
+  askGit "GIT_PREPARE a signed commit: BAD_OBJECTS HEADER"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 (rawOf .commit signedCommit))) .badObjects
+    (some (.refused (.badObjects .header (oid .commit signedCommit)))),
+  askGit "GIT_PREPARE objects in decreasing order: BAD_OBJECTS ORDER"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 unorderedStream)) .badObjects,
+  askGit "GIT_PREPARE a bad repository name: BAD_OBJECTS NAME"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[⟨"refs/heads/y", none, some (oid .commit c3), false⟩]
+      all4 .empty (repo := "-x"))) .badObjects (some (.refused (.badObjects .name zeroOid))),
+  askGit "GIT_PREPARE a ref name with '..': BAD_OBJECTS NAME"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[⟨"refs/heads/a..b", none, some (oid .commit c3), false⟩]
+      all4 .empty)) .badObjects (some (.refused (.badObjects .name zeroOid))),
+  askGit "GIT_PREPARE one name twice: BAD_OBJECTS LIST"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[⟨"refs/heads/y", none, some (oid .commit c3), false⟩,
+      ⟨"refs/heads/y", none, some (oid .commit c2), false⟩] all4 .empty)) .badObjects
+    (some (.refused (.badObjects .list zeroOid))),
+  askGit "GIT_PREPARE seventeen updates: BAD_OBJECTS LIMITS"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) manyUpdates all4 .empty)) .badObjects
+    (some (.refused (.badObjects .limits zeroOid))),
+  askGit "GIT_PREPARE without the openings: OPENINGS_MISSING, every record"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] #[] .empty)) .openingsMissing
+    (some (.openingsMissing (sorted (all4.map (·.1))))),
+  askGit "GIT_PREPARE with P2's opening under P1's digest: BAD_OPENING"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] #[(hashRecord p1.1, p2.2)] .empty)) .badOpening,
+  askGit "GIT_PREPARE for another group's channel: BAD_APP 1"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 .empty (sg := otherGroup))) .badApp
+    (some (.refused (.badApp .notStored))),
+  askGit "GIT_PREPARE with piece size 2^12: BAD_APP 6"
+    (.prepare (push "alice" alice 0x3a (audOf abcd) #[] all4 .empty (k := 12))) .badApp
+    (some (.refused (.badApp .limits))),
+  askGit "GIT_PREPARE in a channel that is not open: NO_CHAT"
+    (.prepare (push "nobody" alice 0x3a (audOf abcd) #[] #[] .empty)) .noChat,
+  askGit "GIT_VIEW without the openings: OPENINGS_MISSING" (.view group "carol" "demo" #[held p1])
+    .openingsMissing (some (.openingsMissing (sorted #[hashRecord p2.1, hashRecord s.1, hashRecord p3.1]))),
+  askGit "GIT_VIEW for another group: BAD_APP 1" (.view otherGroup "carol" "demo" all4) .badApp,
+  askGit "GIT_VIEW in a channel that is not open: NO_CHAT" (.view group "nobody" "demo" #[]) .noChat,
+  askGit "GIT_OBJECTS on a piece key that is not bound: NO_CHAT" (.objects "nopiece" p1Stream) .noChat,
+  raw "GIT_PREPARE cut short: BAD_REQUEST" ((Git.Request.prepare p1Req).write.extract 0 40) .badRequest,
+  raw "GIT_VIEW with a byte left over: BAD_REQUEST"
+    ((Git.Request.view group "carol" "demo" #[]).write.push 0) .badRequest,
+  raw "GIT_PREPARE with an empty ref name: BAD_REQUEST"
+    ((Git.Request.prepare (push "alice" alice 0x3a (audOf abcd) #[⟨"", none, none, false⟩] #[] .empty)).write)
+    .badRequest]
+
+end GitV
+
 /-- Lane git's sessions (`git`: `GIT_PREPARE`, `GIT_OBJECTS`, `GIT_VIEW`, and the git beat: P1,
 forced P2, equal views, `GATE`, the share S, P3, and `ROOT`). -/
-def gitSessions : Array (String × Array Step) := #[]
+def gitSessions : Array (String × Array Step) := #[("git", GitV.steps)]
 
 /-- Lane git's statuses that no session produces yet. -/
-def gitUncovered : List Code := [.pushRefused, .badObjects, .openingsMissing]
+def gitUncovered : List Code := []
 -- [END lane git]
 
 /-- The sessions, each run on a fresh `zrdtd`: protocol 4's, then each lane's. -/

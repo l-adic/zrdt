@@ -145,10 +145,10 @@ def session (payloads : List ByteArray) (build : String := buildId) : List ByteA
 open Examples in
 #guard session [(Proto.Request.new "c" group).write,
     (Proto.Request.acceptRecord "c" (encode a1) none).write,
-    (Proto.Request.heads "c").write, ⟨#[0x17]⟩, ⟨#[0x2A, 1]⟩] ==
+    (Proto.Request.heads "c").write, ⟨#[0x17]⟩, ⟨#[0x2B, 1]⟩] ==
   Proto.session [(Proto.Request.new "c" group).write,
     (Proto.Request.acceptRecord "c" (encode a1) none).write, (Proto.Request.heads "c").write,
-    ⟨#[0x17]⟩, ⟨#[0x2A, 1]⟩] buildId
+    ⟨#[0x17]⟩, ⟨#[0x2B, 1]⟩] buildId
 
 /-! ## The daemon's state -/
 
