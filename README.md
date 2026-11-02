@@ -15,6 +15,13 @@ of the history. The checks are written in Lean 4 without Mathlib, proved in Lean
 and compiled into `zrdtd`, a small program that runs beside a Signal-Desktop fork and checks every
 record the fork sends or receives.
 
+Late joiners are included (protocol 4): a member added after the chat starts holds bare
+digests, a boundary, for the older messages he was not sent (`Zrdt.RelStore`), each message
+commits to its author's list of recipients, and a member's reply carries content only to those
+recipients. Each `CheckedStore` statement below has a `RelStore` twin in `Api.lean`, with the
+reply rule (`serve_content`, `serve_content_complete`) and the late joiner's check against a
+member (`agree_rel`); see `docs/JOIN_PLAN.md`.
+
 Lean v4.35.0, Mathlib v4.35.0. Plan and design: `docs/PLAN.md` (scope, contracts, gates),
 `docs/PLAN_HUMANS.md` (the theorems in plain English), `docs/APP.md` (the Signal-Desktop fork),
 `docs/RESTORE_PLAN.md` (restore from any member's copy).
@@ -32,11 +39,11 @@ yet. Two members compare histories by comparing heads (the "compare code").
 ```
   Crdt/Merkle/     spec (Mathlib): Record, Store, accept, heads, Reach, Fetched, AcceptBuilt, status
        |           and the proofs about the code: Bridge, Refine, LoadApi, Classify*, EncodeProofs
-       |           Api.lean: the 11 advertised statements
+       |           Api.lean: the 27 advertised statements
   core/Zrdt/       the code that ships (Init and Std only, no Mathlib): Digest, Sha256, Record,
        |           Encode, Store (CheckedStore), Commit, Provenance (CLASSIFY), Proto, Vectors
   zrdtd            core/Zrdtd/Main.lean: frames on stdin/stdout, one table of CheckedStores
-       |           u32 length | op | body   (protocol 2, core/Zrdt/Proto.lean)
+       |           u32 length | op | body   (protocol 4, core/Zrdt/Proto.lean)
   Signal fork      l-adic/signal-desktop-zrdt, branch zrdt (Signal-Desktop v8.33.0):
                    ts/zrdt/ (send, receive, resend, UI), zrdt/ submodule (this repo), demo/
 ```
@@ -115,7 +122,7 @@ is why some part of the app exists.
 
 ### Axioms and the gate
 
-`Test/Axioms.lean` pins the axioms of each of the 11 names to `propext`, `Classical.choice`,
+`Test/Axioms.lean` pins the axioms of each of the 27 names to `propext`, `Classical.choice`,
 `Quot.sound` with `#guard_msgs`. It is a default target, so every `lake build` runs it, and any
 `sorry`, `native_decide` or new axiom fails the build. It also pins some proof obligations that
 are not advertised: `authorConfirmed_sound`, `salvage_maximal`, `confirmed_exact`,
@@ -124,12 +131,12 @@ are not advertised: `authorConfirmed_sound`, `salvage_maximal`, `confirmed_exact
 stores; `committedBytes_idem`, `commitWithOpening_matches`, `Zrdt.Proto.commit_openingMatches`:
 the opening `COMMIT` returns always passes that check). Nothing that `lake build` builds has a
 `sorry`, a `native_decide`, an `axiom`, an `opaque` or an `@[extern]`. The only `sorry`s in the
-repository are in `Comparator/Challenge.lean`, on purpose: it restates the 11 statements with
+repository are in `Comparator/Challenge.lean`, on purpose: it restates the 27 statements with
 `sorry` proofs as the challenge for `lake comparator`, and it is not a default target. Concrete
 examples use `decide +kernel`, which adds no axiom. (The gate also pins older CRDT results in
 `Crdt/*.lean` that are not part of the chat claims.)
 
-**Comparator: not run yet.** `comparator.json` names the 11 statements and permits only the
+**Comparator: not run yet.** `comparator.json` names the 27 statements and permits only the
 three axioms above; `make comparator` would judge `Crdt.Merkle.Api` against
 `Comparator/Challenge.lean` with the official comparator (`lake comparator`, or the standalone
 `leanprover/comparator`; see "Running Comparator" below), and `make check` would replay the build
@@ -175,7 +182,7 @@ Not proved, and needed for the claims to hold of the running app:
   replies or members compare.
 - Confidentiality (Signal's job). An exported store leaves Signal's encryption. Links are
   receipts the whole group sees.
-- Membership changes after the chat starts, edits, deletes, reactions, polls, 1:1 chats, time,
+- Removing members after the chat starts, edits, deletes, reactions, polls, 1:1 chats, time,
   and compaction (a store only grows).
 
 ## Quick start
@@ -239,7 +246,7 @@ first that can run here, and says what is missing if neither can):
   `systemd-run --user` service with `RestrictAddressFamilies=~AF_UNIX`.
 
 Memory: `lake check` (`make check`) re-checks every declaration the build reaches, all of
-Mathlib included; `lake comparator` exports only the 11 theorems and what they use. Re-check runs
+Mathlib included; `lake comparator` exports only the 27 theorems and what they use. Re-check runs
 on 2026-11-01 reached 61.5 GB and 63.5 GB on our 62 GB machine and were killed by the OOM killer,
 which took the rest of the session with them. So both run under `systemd-run --user` with
 `MemoryMax=48G` and `MemorySwapMax=0`, and refuse to run where that is not available unless
@@ -282,7 +289,7 @@ Crdt/Merkle/   Defs, Integrity, Chat (spec); Bridge, Refine, LoadSpec, LoadApi, 
 Crdt/*.lean    phase 0: CRDT merge algebra (not part of the chat claims)
 core/          package zrdt-core: Zrdt/* and Zrdtd/*; no `require`, builds without Mathlib
 Test/          Axioms.lean, the axiom gate
-Comparator/    Challenge.lean: the 11 statements with `sorry`, the challenge for `lake comparator`
+Comparator/    Challenge.lean: the 27 statements with `sorry`, the challenge for `lake comparator`
                (comparator.json); not a default target, not run yet
 vectors/       vectors.json (generated) and zrdtd_client.py
 docs/          PLAN, PLAN_HUMANS, APP, RESTORE_PLAN, review-2026-11-01/

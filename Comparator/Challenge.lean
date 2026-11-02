@@ -22,29 +22,37 @@ it.
 
 This file imports only the modules that define what the statements mention (`Bridge.lean`,
 `Refine.lean`, `ClassifyStatus.lean`, `Rel.lean`, `RelBridge.lean`, `core/Zrdt/Serve.lean`, and
-through them the spec, `RelSpec.lean` and the shipped code). It must not import `Api.lean`, `EncodeProofs.lean`, `LoadApi.lean`
-or `ServeAbs.lean`: those declare the names below or import a module that does.
+through them the spec, `RelSpec.lean` and the shipped code). It must not import `Api.lean`,
+`EncodeProofs.lean`, `LoadApi.lean` or `ServeAbs.lean`: those declare the names below or import a
+module that does.
 
 Keep this file in step with `Api.lean` and with the list in `comparator.json` and
 `Test/Axioms.lean`. It is not a default target, so `lake build` never sees its `sorry`s.
+
 ## Where each statement appears in the presentation
 
 The talk names three guarantees (G1–G3) and three laws of sync (L1–L3). The comment above each
-statement gives its label, the plain-words line from the slides, and the demo beat it backs.
+statement gives its label, the plain-words line from the slides, and the demo beat it backs
+(where one does). A `RelStore` statement is about the store of a member added later (records,
+plus bare digests, its boundary, for older messages he was not sent; docs/JOIN_PLAN.md §6.2), and
+carries the label of the `CheckedStore` statement of the same name.
 
 * **G1** You can confirm you see the same chat: `CheckedStore.agree` (with `no_collision` and
-  `encode_injective` underneath).
+  `encode_injective` underneath); `RelStore.agree` (with `RelStore.no_collision`).
 * **G2** If a message is kept from you, you find out: `CheckedStore.abs_accept`,
-  `CheckedStore.fetched`.
-* **G3** A reply shows what its author had: `CheckedStore.confirmed`, `CheckedStore.classify_spec`.
+  `CheckedStore.fetched`; `RelStore.abs_accept`, `RelStore.fetched`.
+* **G3** A reply shows what its author had: `CheckedStore.confirmed`, `CheckedStore.classify_spec`;
+  `RelStore.confirmed`, `RelStore.classify_spec`.
 * **L1** Members restore each other's history: `CheckedStore.open_iff`, `CheckedStore.salvage_spec`,
-  `CheckedStore.abs_merge`, `CheckedStore.encode_open`.
-* **L2** Nobody can quietly withhold what you're owed: in this build, through **G1** (a member
-  with a message you lack has a different code). The reply rule (`serve_content_complete`) is
-  in the next version (branch `join`), not in this challenge.
-* **L3** Join late, check against a member: next version only (`newcomer_agree'`, branch `join`).
-  The next-version statements for L1's reply rule (`serve_content`), L2 and L3 are not in this
-  challenge.
+  `CheckedStore.abs_merge`, `CheckedStore.encode_open`; `RelStore.open_iff`,
+  `RelStore.salvage_spec`, `RelStore.abs_merge`, `RelStore.encode_open`. The reply rule, content
+  goes only where its author sent it: `CheckedStore.serve_content`, `RelStore.serve_content`.
+* **L2** Nobody can quietly withhold what you're owed: `CheckedStore.serve_content_complete`,
+  `RelStore.serve_content_complete` (a member's reply carries every message it holds that you
+  asked for and its author sent you); and, between replies, **G1** (a member with a message you
+  lack has a different code).
+* **L3** Join late, check against a member: `CheckedStore.agree_rel`, `RelStore.agree_rel` (the
+  spec form is `newcomer_agree'` in `Crdt/Merkle/Rel.lean`).
 
 The limit on the slides, "the newest message is invisible until a later one names it, or you
 compare", is `withheld_tail_undetectable` in `Crdt/Merkle/Chat.lean`. It is proved, but it is not
@@ -67,7 +75,7 @@ theorem CheckedStore.fetched (c : CheckedStore) :
   sorry
 
 -- G1, You can confirm you see the same chat: same code, exactly the same messages, or two
--- different messages share a fingerprint. Beats 1 and 3 (the compare code); also L2 in this build.
+-- different messages share a fingerprint. Beats 1 and 3 (the compare code); also L2 between replies.
 theorem CheckedStore.agree (c d : CheckedStore) (h : c.heads = d.heads) :
     abs c = abs d ∨ CollisionIn hashSpec (abs c ∪ abs d) :=
   sorry
@@ -128,6 +136,10 @@ theorem CheckedStore.classify_spec (c : CheckedStore) (facts : Array Fact) (d : 
 theorem encode_injective : Function.Injective encode :=
   sorry
 
+-- L3, Join late, check against a member: a late joiner's view with the same code as a member's
+-- store holds, under every digest its newest messages point back to, the member's message or no
+-- message at all (a digest the member also holds only as a bare digest); or two different
+-- messages share a fingerprint. Nothing is assumed about the late joiner's own bare digests.
 theorem CheckedStore.agree_rel (c : CheckedStore) (BS : Finset Digest) {F : SpecStore}
     {B : Finset Digest} (hh : headsRel hashSpec F B = headsRel hashSpec (abs c) BS)
     (hFB : ∀ r ∈ F, hashSpec r ∈ BS → hashSpec r ∈ digests hashSpec (abs c)) :
@@ -137,6 +149,10 @@ theorem CheckedStore.agree_rel (c : CheckedStore) (BS : Finset Digest) {F : Spec
         CollisionIn hashSpec (abs c ∪ F) :=
   sorry
 
+-- L1, the reply rule: content goes only where its author sent it. Every message a member's
+-- reply carries with its content is one the member holds, and its author's own list of
+-- recipients names the asker under the key the reply is sealed to. Beat 5 on the late-joiner
+-- build (Bob's "Export for: Dave" is that reply, for Dave).
 theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Serve.HeldMap}
     {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
     (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
@@ -144,6 +160,9 @@ theorem CheckedStore.serve_content (c : CheckedStore) {me : Serve.Me} {held : Se
       ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
   sorry
 
+-- L2, Nobody can quietly withhold what you're owed: a member's reply carries every message it
+-- holds the content of, that its author sent to the asker, and that the asker asked for (a
+-- catch-up from what he already has, or a message by name).
 theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
     {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
     (hr : toSpec r ∈ abs c) (hop : (held.getD (hashRecord r) {}).opening = some op)
@@ -155,17 +174,26 @@ theorem CheckedStore.serve_content_complete (c : CheckedStore) {me : Serve.Me}
       Serve.serve c.raw me held q :=
   sorry
 
--- The statements for a store with a boundary (docs/JOIN_PLAN.md §7.3, Part 5 of `Api.lean`).
+-- The statements for a store with a boundary (docs/JOIN_PLAN.md §7.3, Part 5 of `Api.lean`): the
+-- store of a member added later, which holds bare digests (its boundary) for older messages he
+-- was not sent. Each has the label of the statement above with the same name.
 
+-- G2, for a late joiner: following links from the heads reaches only messages he holds and his
+-- bare digests, and reaches every message he holds (when no message closes a cycle).
 theorem RelStore.fetched (c : RelStore) (hac : Acyclic hashSpec c.raw.abs) :
     (∀ d, Reach hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) d →
       d ∈ inView hashSpec c.raw.abs (boundarySet c.boundary)) ∧
     Tight hashSpec c.raw.abs (headsRel hashSpec c.raw.abs (boundarySet c.boundary)) :=
   sorry
 
+-- G1 (underneath), for a late joiner: no two different messages in his store share a
+-- fingerprint.
 theorem RelStore.no_collision (c : RelStore) : ¬ CollisionIn hashSpec c.raw.abs :=
   sorry
 
+-- G1, for late joiners: same code, the same messages, when neither holds a message the other
+-- has only as a bare digest (and neither has a cycle); or two different messages share a
+-- fingerprint.
 theorem RelStore.agree (c d : RelStore) (h : c.heads = d.heads)
     (hc : Acyclic hashSpec c.raw.abs) (hd : Acyclic hashSpec d.raw.abs)
     (hcd : ∀ r ∈ c.raw.abs, hashSpec r ∈ boundarySet d.boundary →
@@ -175,9 +203,13 @@ theorem RelStore.agree (c d : RelStore) (h : c.heads = d.heads)
     c.raw.abs = d.raw.abs ∨ CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
   sorry
 
+-- G2, for a late joiner: a message is added only if everything it names is there, as a message
+-- or a bare digest; otherwise the app is told exactly what is missing.
 theorem RelStore.abs_accept (c : RelStore) (r : Rec) : AcceptRelMeans c r (c.accept r) :=
   sorry
 
+-- L1, for a late joiner: catching up from another copy keeps both sets of messages and both
+-- sets of bare digests.
 theorem RelStore.abs_merge {c d e : RelStore} (h : c.merge d = .ok e) :
     e.raw.abs = c.raw.abs ∪ d.raw.abs ∧
       inView hashSpec e.raw.abs (boundarySet e.boundary) =
@@ -185,6 +217,8 @@ theorem RelStore.abs_merge {c d e : RelStore} (h : c.merge d = .ok e) :
           inView hashSpec d.raw.abs (boundarySet d.boundary) :=
   sorry
 
+-- L1, for a late joiner: a copy loads only if every link in it finds its target, a message or a
+-- bare digest of the copy.
 theorem RelStore.open_iff {g : GroupId} {B : Boundary} {u : Array Rec} {c : RelStore} :
     RelStore.load g B u = .ok c ↔
       B.size < maxRecords ∧ WellSized u ∧ AcceptBuiltRel hashSpec (boundarySet B) (specOf u) ∧
@@ -192,6 +226,8 @@ theorem RelStore.open_iff {g : GroupId} {B : Boundary} {u : Array Rec} {c : RelS
         c.group = g ∧ c.boundary = B :=
   sorry
 
+-- L1, for a late joiner: "Keep what verifies" keeps exactly what checks out over the copy's bare
+-- digests, the most any app could.
 theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
     {s : RelStore.Salvaged} (h : RelStore.salvage g B u = .ok s) :
     ¬ CollisionIn hashSpec (specOf u) ∧
@@ -202,11 +238,15 @@ theorem RelStore.salvage_spec {g : GroupId} {B : Boundary} {u : Array Rec}
       StrictlySorted s.dropped :=
   sorry
 
+-- L1, for a late joiner: saving and reopening gives back exactly the same chat, bare digests
+-- and recorded recipients included.
 theorem RelStore.encode_open (c : RelStore) (auds : AudTable) :
     openChat c.group (encodeChat (.relative c) auds) =
       .ok (.relative c, storedAudiences (.relative c) auds) :=
   sorry
 
+-- G3, for a late joiner: a member's new message confirms what is behind it, down to where the
+-- sender himself holds only a bare digest; or two different messages share a fingerprint.
 theorem RelStore.confirmed (c d : RelStore) (hs : Array Digest) (hd : ∀ h ∈ hs, d.has h = true) :
     (∀ x, Reach hashSpec c.raw.abs hs.toList.toFinset x →
       Reach hashSpec d.raw.abs hs.toList.toFinset x ∨
@@ -215,6 +255,7 @@ theorem RelStore.confirmed (c d : RelStore) (hs : Array Digest) (hd : ∀ h ∈ 
       CollisionIn hashSpec (c.raw.abs ∪ d.raw.abs) :=
   sorry
 
+-- G3, for a late joiner: every label is exactly as specified (when no message closes a cycle).
 theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
     (facts : Array Fact) (d : Digest) (st : Zrdt.Status) :
     (classifyRaw c.raw facts)[d]? = some st ↔
@@ -222,6 +263,9 @@ theorem RelStore.classify_spec (c : RelStore) (hac : Acyclic hashSpec c.raw.abs)
         Crdt.Merkle.status hashSpec c.raw.abs (liveOf facts) (toSpec r) = st.toSpec :=
   sorry
 
+-- L3, against a member who joined late himself: a view with his code holds, under every digest
+-- its heads reach, his message or no message at all (a digest he holds only bare); or two
+-- different messages share a fingerprint.
 theorem RelStore.agree_rel (c : RelStore) {F : SpecStore} {B : Finset Digest}
     (hh : headsRel hashSpec F B = headsRel hashSpec c.raw.abs (boundarySet c.boundary))
     (hFB : ∀ r ∈ F, hashSpec r ∈ boundarySet c.boundary →
@@ -233,6 +277,8 @@ theorem RelStore.agree_rel (c : RelStore) {F : SpecStore} {B : Finset Digest}
         CollisionIn hashSpec (c.raw.abs ∪ F) :=
   sorry
 
+-- L1, the reply rule, from a member who joined late himself: content goes only where its author
+-- sent it.
 theorem RelStore.serve_content (c : RelStore) {me : Serve.Me} {held : Serve.HeldMap}
     {q : Serve.Query} {r : Rec} {op : ByteArray} {ac : Bool}
     (he : Serve.Entry.addressed r (some op) ac ∈ Serve.serve c.raw me held q) :
@@ -240,6 +286,8 @@ theorem RelStore.serve_content (c : RelStore) {me : Serve.Me} {held : Serve.Held
       ∃ aud, Serve.audienceOf op = some aud ∧ Serve.seats aud q.aci q.key = true :=
   sorry
 
+-- L2, from a member who joined late himself: his reply carries every message he holds the
+-- content of, that its author sent to the asker, and that the asker asked for.
 theorem RelStore.serve_content_complete (c : RelStore) {me : Serve.Me}
     {held : Serve.HeldMap} {q : Serve.Query} {r : Rec} {op : ByteArray}
     (hr : toSpec r ∈ c.raw.abs) (hop : (held.getD (hashRecord r) {}).opening = some op)
