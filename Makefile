@@ -37,10 +37,10 @@ install: ## Build it all: fetch the Mathlib cache, lake build (proofs + axiom ga
 	cd core && lake build zrdtd
 	@echo "install: done. Next: make run"
 
-run: ## Check it: axiom gate, the 133 test vectors and a 1000-record round trip against zrdtd
+run: ## Check it: axiom gate, the 281 test vectors and a 1000-record round trip against zrdtd
 	@$(need_lake)
 	@$(need_python)
-	@echo "[1/3] axiom gate: the 11 advertised theorems use only propext, Classical.choice, Quot.sound"
+	@echo "[1/3] axiom gate: the 27 advertised theorems use only propext, Classical.choice, Quot.sound"
 	@lake -q --log-level=error lean Test/Axioms.lean && echo "axiom gate passed (Test/Axioms.lean elaborated again; every #guard_msgs matched)"
 	@cd core && lake -q --log-level=error build zrdtd
 	@echo "[2/3] test vectors: zrdtd, compiled from the verified Lean code, gives every expected reply"
@@ -102,7 +102,7 @@ closure: ## Check the linked zrdtd: only Init, Std, zrdt-core (and runtime libuv
 # before anything is fetched or built.
 #
 # Memory: `lake check` re-checks every declaration the default targets reach, all of Mathlib
-# included; `lake comparator` exports only the 11 theorems and what they use (Lake/CLI/Check.lean).
+# included; `lake comparator` exports only the 27 theorems and what they use (Lake/CLI/Check.lean).
 # Re-check runs on 2026-11-01 reached 61.5 GB and 63.5 GB on the 62 GB Linux box and were
 # OOM-killed, taking the session with them. So they run under a cap: MemoryMax=$(MEMORY_MAX), no
 # swap, via systemd-run --user. A run the cap stops (status 137) is not a verdict: raise

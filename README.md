@@ -208,7 +208,7 @@ access (GitHub and the Mathlib build cache); about 9 GB of free disk (8 GB in `.
 silicon). `make install` fetches the Mathlib build cache, runs `lake build` (proofs and axiom
 gate) and builds `zrdtd`: about 4.5 minutes from a fresh clone on a 32-core Linux machine
 (measured with the Mathlib cache already in `~/.cache/mathlib`; downloading it adds about
-1 GB). `make run` re-runs the axiom gate, replays the 133 test vectors against `zrdtd` and
+1 GB). `make run` re-runs the axiom gate, replays the 281 test vectors against `zrdtd` and
 round-trips a 1000-record chat through it, in about 10 seconds. The GUI demo (Signal Desktop with zrdt) is in [`l-adic/signal-desktop-zrdt`](https://github.com/l-adic/signal-desktop-zrdt), branch
 `zrdt`: `make install && make run` there (macOS on Apple silicon).
 
@@ -216,7 +216,7 @@ round-trips a 1000-record chat through it, in about 10 seconds. The GUI demo (Si
 
 ```
 make install            # fetch the Mathlib cache, lake build (runs the axiom gate), build zrdtd
-make run                # axiom gate, the 133 test vectors and a 1000-record smoke against zrdtd
+make run                # axiom gate, the 281 test vectors and a 1000-record smoke against zrdtd
 lake build              # build the spec and proofs; the axiom gate runs as part of it
 lake lean Test/Axioms.lean   # run the axiom gate again (silent if it passes; make run does this)
 lake exe axiom_check    # prints "axiom gate passed: ..." (links Mathlib's C: slow the first time)
