@@ -251,15 +251,8 @@ theorem bindCtx_of {sg : GroupId} {app : ByteArray} {A : Rec} {o : ByteArray} {h
   rfl
 
 /-- The app message of an opening is that of its committed bytes. -/
-theorem appOf_append (n : Nonce) (m : ByteArray) : appOf (n.bytes ++ m) = appHeader m := by
+theorem appOf_opening (n : Nonce) (m : ByteArray) : appOf (n.bytes ++ m) = appHeader m := by
   simp [appOf, splitOpening_append]
-
-/-- A piece record reads only the context's channel, author, store nonce and audience. -/
-theorem pieceRecord_congr {c c' : PieceCtx} (h1 : c.channel = c'.channel)
-    (h2 : c.author = c'.author) (h3 : c.desc.nonce = c'.desc.nonce)
-    (h4 : c.header.audience = c'.header.audience) (i : Nat) (b : ByteArray) :
-    pieceRecord c i b = pieceRecord c' i b := by
-  simp [pieceRecord, PieceCtx.storeId, h1, h2, h3, h4]
 
 /-- `readsBack` means the descriptor's bytes parse to it. -/
 theorem readsBack_spec {d : Descriptor} (h : Torrent.readsBack d = true) :
@@ -359,7 +352,7 @@ theorem btBuild_binds {ch sg : GroupId} {a : Aci} {nc n : Nonce} {e : Nat}
     unfold openingMatches
     rw [splitOpening_append]
     simp [hc, commit, commitOf]
-  · rw [appOf_append, hh]
+  · rw [appOf_opening, hh]
   · simp [header, hch]
 
 /-- **The author's own announcement makes her file fetchable** (BUILD_M1 §C.2, advertised). Any
@@ -374,7 +367,7 @@ theorem btBuild_complete {ch sg : GroupId} {a : Aci} {nc n : Nonce} {e : Nat}
     assembleOk ctx s = true ∧ ctx.desc.ordered = ord := by
   obtain ⟨seats, hs, hord, -, -, hw, hh, -, hr⟩ := btBuild_spec hb
   obtain ⟨-, hd, db, d, seats', ha, -, -, hdb, hp, -, hs', rfl⟩ := bindCtx_ok hbind
-  rw [appOf_append, hh, Option.some.injEq] at ha
+  rw [appOf_opening, hh, Option.some.injEq] at ha
   subst ha
   simp only [header, Option.some.injEq] at hdb
   subst hdb
