@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+# git remote helper for zrdt::<group>/<repo> remotes (SHA-256 repositories only). See README.md.
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from zrdt_git.helper import main  # noqa: E402
+
+sys.exit(main())
