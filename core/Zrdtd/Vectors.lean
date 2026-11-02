@@ -8,7 +8,7 @@ The vectors and their checks live in `Zrdt.Vectors`, which the library imports, 
 and is in no library, so its `main` never meets `zrdtd`'s.
 
 The build text in the file is the one `zrdtd` reports when it is built from the same sources: it
-covers `Zrdtd/Main.lean` too (`Proto.buildIdOf`). This file reads `Main.lean` itself, each time it
+covers `Zrdtd/Main.lean` too (`Apps.buildIdOf`). This file reads `Main.lean` itself, each time it
 runs.
 -/
 
@@ -16,7 +16,7 @@ runs.
 def main : IO UInt32 := do
   match Zrdt.Vectors.failures with
   | [] =>
-    let build := Zrdt.Proto.buildIdOf (include_str "Main.lean")
+    let build := Zrdt.Apps.buildIdOf (include_str "Main.lean")
     IO.println ((Zrdt.Vectors.vectors build).render "")
     return 0
   | bad =>

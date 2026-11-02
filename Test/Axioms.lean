@@ -650,5 +650,21 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 #guard_msgs in #print axioms Zrdt.Examples.selfRel_get
 
 
+-- The apps (docs/apps/BUILD_M1.md §C): one block per lane, pinning its advertised statements
+-- (`Crdt/Merkle/Api.lean`, Part 6) and its proof obligations to the standard axioms. A lane
+-- edits only its own block, between its `BEGIN` and `END` lines.
+
+-- [BEGIN lane base]
+
+-- [END lane base]
+
+-- [BEGIN lane torrent]
+
+-- [END lane torrent]
+
+-- [BEGIN lane git]
+
+-- [END lane git]
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"

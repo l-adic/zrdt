@@ -1,10 +1,11 @@
-import Zrdt.Proto
+import Zrdt.Apps
 
 /-!
 # `zrdtd`: the stdin/stdout loop (docs/PLAN.md §3.3)
 
 Reads request frames (`length (u32, big-endian) ‖ payload`) from stdin, answers each with
-`Zrdt.Proto.handle`, and writes the reply frame to stdout before reading the next request, so
+`Zrdt.Apps.handle` (protocol 5's dispatcher: protocol-4 requests get `Zrdt.Proto.run`'s replies),
+and writes the reply frame to stdout before reading the next request, so
 replies come in request order. Diagnostics go to stderr.
 
 - A read may return fewer bytes than asked; `readExact` reads until the frame is complete.
@@ -14,13 +15,13 @@ replies come in request order. Diagnostics go to stderr.
 - The host runs it with `LEAN_ABORT_ON_PANIC=1`, so a `panic!` stops it instead of going on with
   a default value. Without it, `zrdtd` warns on stderr at start.
 - `VERSION` reports `buildText`: a hash over the sources of the library modules and of this file
-  (`Proto.buildIdOf`). This file imports them all, so a change to any of them rebuilds it.
+  (`Apps.buildIdOf`). This file imports them all, so a change to any of them rebuilds it.
 -/
 
 open Zrdt
 
 /-- The build text of `VERSION`, over the library sources and this file's own source. -/
-def buildText : String := Proto.buildIdOf (include_str "Main.lean")
+def buildText : String := Apps.buildIdOf (include_str "Main.lean")
 
 /-- The most bytes one read asks for. -/
 def chunkSize : Nat := 65536
@@ -72,7 +73,7 @@ partial def loop (input output err : IO.FS.Stream) : IO UInt32 := do
     err.putStrLn s!"zrdtd: {why}; exiting"
     return 1
   | .frame payload =>
-    let reply ← Proto.handle buildText payload
+    let reply ← Apps.handle buildText payload
     if let some line := describeRefusal payload reply then err.putStrLn line
     output.write (u32be reply.size ++ reply)
     output.flush

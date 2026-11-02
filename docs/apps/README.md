@@ -17,6 +17,17 @@ on top:
 The rule carried over from JOIN (R1): a member who joins later gets nothing older unless someone
 shares it again on purpose. R2: nothing is signed. R3: Signal's own mechanisms do the transport.
 
+## The build plan
+
+[BUILD_M1.md](BUILD_M1.md) is the plan being built (milestone 1, the mock-server MVP of both apps,
+decided 2026-11-02). It overrides the three designs below where they disagree. Its main changes:
+- bulk data for both apps goes as piece stores;
+- git objects travel raw, with no pack;
+- each Signal group has one git channel, and the root rule needs a complete table (G-F1);
+- protocol 5 has eleven ops.
+
+It also fixes the lanes and the file ownership.
+
 ## The three documents
 
 | Document | What it decides | Chosen design, score |

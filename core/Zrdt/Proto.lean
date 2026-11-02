@@ -85,6 +85,12 @@ All numbers are unsigned and big-endian.
 | `0x09` | `NO_AUDIENCE` | empty |
 | `0x0A` | `EPHEMERAL` | empty (only as an `ACCEPT_VIEW` result) |
 | `0x0B` | `IGNORED` | empty (only as an `ACCEPT_VIEW` result) |
+| `0x0C` | `BAD_PIECE` | protocol 5, lane base (section below) |
+| `0x0D` | `BAD_APP` | protocol 5, lane base: reason (`u8`) |
+| `0x0E` | `BAD_NAME` | protocol 5, lane torrent |
+| `0x10` | `PUSH_REFUSED` | protocol 5, lane git |
+| `0x11` | `BAD_OBJECTS` | protocol 5, lane git |
+| `0x12` | `OPENINGS_MISSING` | protocol 5, lane git: `digests` |
 | `0x80` | `BAD_REQUEST` | empty |
 | `0x81` | `UNKNOWN_OP` | empty |
 | `0x82` | `NO_CHAT` | empty |
@@ -291,6 +297,35 @@ openings it holds (a stored record is accepted again, and its audience recorded)
 change it, and put the result back. For `ACCEPT` the table then holds no second reference to the
 store, so `accept` updates it in place. `MERGE` keeps the original to put back if the merge fails;
 the merged store shares most of its tree with it.
+
+## Protocol 5: the apps (docs/apps/BUILD_M1.md)
+
+`zrdtd` answers with `Zrdt.Apps.handle`, which runs every protocol-4 request as above (on a piece
+key, see `Zrdt.Apps`) and sends op bytes `0x17`-`0x2F` to the apps: lane base `0x17`-`0x1F`
+(`Zrdt.AppBase`), lane torrent `0x20`-`0x27` (`Zrdt.Torrent`), lane git `0x28`-`0x2F`
+(`Zrdt.Git`). Op bytes `0x00` and `0x30`-`0xFF` stay unknown. Until lane base switches
+`protocolVersion` to 5, `VERSION` says 4 and no protocol-5 op is defined.
+
+Each lane writes the byte layouts of its ops here, in its own section, when its code lands; this
+header is then authoritative for them. Until then docs/apps/BUILD_M1.md §B is the reference.
+
+### [BEGIN lane base] protocol-5 field types; `BAD_PIECE`, `BAD_APP`; ops `0x17`-`0x1F`
+
+(Not yet written.)
+
+### [END lane base]
+
+### [BEGIN lane torrent] `BAD_NAME`; ops `0x20`-`0x27`
+
+(Not yet written.)
+
+### [END lane torrent]
+
+### [BEGIN lane git] `PUSH_REFUSED`, `BAD_OBJECTS`, `OPENINGS_MISSING`; ops `0x28`-`0x2F`
+
+(Not yet written.)
+
+### [END lane git]
 -/
 
 namespace Zrdt.Proto
@@ -301,6 +336,8 @@ namespace Zrdt.Proto
 inductive Code
   | ok | missing | collision | wrongChat | tooLarge | malformed | unverifiable | notFound
   | badOpening | noAudience | ephemeral | ignored | badRequest | unknownOp | noChat | chatOpen
+  -- Protocol 5 (docs/apps/BUILD_M1.md §B.4): fixed here for all lanes; changed only by lane base.
+  | badPiece | badApp | badName | pushRefused | badObjects | openingsMissing
 deriving DecidableEq, Repr
 
 /-- The byte of each status. -/
@@ -309,6 +346,8 @@ def Code.byte : Code → UInt8
   | .tooLarge => 0x04 | .malformed => 0x05 | .unverifiable => 0x06 | .notFound => 0x07
   | .badOpening => 0x08 | .noAudience => 0x09 | .ephemeral => 0x0A | .ignored => 0x0B
   | .badRequest => 0x80 | .unknownOp => 0x81 | .noChat => 0x82 | .chatOpen => 0x83
+  | .badPiece => 0x0C | .badApp => 0x0D | .badName => 0x0E | .pushRefused => 0x10
+  | .badObjects => 0x11 | .openingsMissing => 0x12
 
 /-- The name of each status, as in the module header. -/
 def Code.name : Code → String
@@ -318,11 +357,19 @@ def Code.name : Code → String
   | .noAudience => "NO_AUDIENCE" | .ephemeral => "EPHEMERAL" | .ignored => "IGNORED"
   | .badRequest => "BAD_REQUEST"
   | .unknownOp => "UNKNOWN_OP" | .noChat => "NO_CHAT" | .chatOpen => "CHAT_OPEN"
+  | .badPiece => "BAD_PIECE" | .badApp => "BAD_APP" | .badName => "BAD_NAME"
+  | .pushRefused => "PUSH_REFUSED" | .badObjects => "BAD_OBJECTS"
+  | .openingsMissing => "OPENINGS_MISSING"
 
 /-- Every status. -/
 def Code.all : List Code :=
   [.ok, .missing, .collision, .wrongChat, .tooLarge, .malformed, .unverifiable, .notFound,
-    .badOpening, .noAudience, .ephemeral, .ignored, .badRequest, .unknownOp, .noChat, .chatOpen]
+    .badOpening, .noAudience, .ephemeral, .ignored, .badRequest, .unknownOp, .noChat, .chatOpen,
+    .badPiece, .badApp, .badName, .pushRefused, .badObjects, .openingsMissing]
+
+/-- The protocol-5 statuses (docs/apps/BUILD_M1.md §B.4). -/
+def Code.v5 : List Code :=
+  [.badPiece, .badApp, .badName, .pushRefused, .badObjects, .openingsMissing]
 
 /-- The status with this byte, if any. -/
 def Code.ofByte? (b : UInt8) : Option Code := Code.all.find? (·.byte == b)
@@ -331,7 +378,8 @@ def Code.ofByte? (b : UInt8) : Option Code := Code.all.find? (·.byte == b)
 #guard Code.ofByte? 0x08 == some .badOpening
 #guard Code.ofByte? 0x09 == some .noAudience
 #guard Code.ofByte? 0x0B == some .ignored
-#guard Code.ofByte? 0x0C == none
+#guard Code.ofByte? 0x0C == some .badPiece && Code.ofByte? 0x12 == some .openingsMissing
+#guard Code.ofByte? 0x0F == none && Code.ofByte? 0x13 == none
 -- Every status has its own byte.
 #guard (Code.all.map Code.byte).eraseDups.length == Code.all.length
 
@@ -341,14 +389,41 @@ def opNames : Array String :=
     "REACH_SET", "MERGE", "CLASSIFY", "ENCODE", "CLOSE", "ACCEPT_RECORD", "AUDIENCE", "SERVE",
     "ADDRESSED", "ACCEPT_VIEW", "LINKABLE", "NEW_RELATIVE"]
 
-/-- The name of the op with this byte, if any. -/
-def opName? (b : UInt8) : Option String := if b = 0 then none else opNames[b.toNat - 1]?
+/-! ### Protocol-5 op names (docs/apps/BUILD_M1.md §B)
+
+One list per lane, `(op byte, name)`, each in its own section; only the owning lane edits it. The
+`#guard` in each section keeps the lane inside its range. -/
+
+-- [BEGIN lane base] op names, 0x17-0x1F
+/-- Lane base's op names (`Zrdt.AppBase`). -/
+def baseOpNames : List (UInt8 × String) := []
+#guard baseOpNames.all fun (b, _) => 0x17 ≤ b && b ≤ 0x1F
+-- [END lane base]
+
+-- [BEGIN lane torrent] op names, 0x20-0x27
+/-- Lane torrent's op names (`Zrdt.Torrent`). -/
+def torrentOpNames : List (UInt8 × String) := []
+#guard torrentOpNames.all fun (b, _) => 0x20 ≤ b && b ≤ 0x27
+-- [END lane torrent]
+
+-- [BEGIN lane git] op names, 0x28-0x2F
+/-- Lane git's op names (`Zrdt.Git`). -/
+def gitOpNames : List (UInt8 × String) := []
+#guard gitOpNames.all fun (b, _) => 0x28 ≤ b && b ≤ 0x2F
+-- [END lane git]
+
+/-- Every protocol-5 op name. -/
+def v5OpNames : List (UInt8 × String) := baseOpNames ++ torrentOpNames ++ gitOpNames
+
+/-- The name of the op with this byte, if any: protocol 4's, or a lane's. -/
+def opName? (b : UInt8) : Option String :=
+  if b = 0 then none else (opNames[b.toNat - 1]?).orElse fun _ => v5OpNames.lookup b
 
 #guard opName? 0x0B == some "REACH_SET"
 #guard opName? 0x10 == some "ACCEPT_RECORD"
 #guard opName? 0x13 == some "ADDRESSED"
 #guard opName? 0x14 == some "ACCEPT_VIEW" && opName? 0x16 == some "NEW_RELATIVE"
-#guard opName? 0x00 == none && opName? 0x17 == none
+#guard opName? 0x00 == none && opName? 0x30 == none
 
 /-- The protocol version. It changes when a request or reply layout changes. Version 2: the
 `ACCEPT` and `COMMIT` replies carry the record bytes and the opening; `ACCEPT_RECORD` is new.

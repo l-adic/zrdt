@@ -12,6 +12,9 @@ import Crdt.Merkle.EncodeProofs
 import Crdt.Merkle.LoadApi
 import Crdt.Merkle.ServeAbs
 import Crdt.Merkle.ServeAbsRel
+import Crdt.Merkle.AppsBase
+import Crdt.Merkle.AppsTorrent
+import Crdt.Merkle.AppsGit
 
 set_option linter.unusedSectionVars false
 
@@ -78,6 +81,11 @@ statement says (examples in Part 5):
   records collide.
 * `RelStore.classify_spec`: `CLASSIFY` on a relative store without a cycle gives each stored
   record the spec's `status`, and nothing else a status.
+
+The apps (docs/apps/BUILD_M1.md §C), Part 6: one section per lane (`[lane base]`,
+`[lane torrent]`, `[lane git]`), each listing its advertised statements in its own doc comment.
+Each lane edits only its own section; the proofs live in `Crdt/Merkle/Apps*.lean` and
+`core/Zrdt/{AppBase,Torrent,Git,Apps}.lean`.
 * `encode_injective` is about the encoding of one record: no store, so no boundary, enters, and
   it holds for records of a relative store as stated.
 
@@ -1026,5 +1034,21 @@ example : ¬ ∃ aud, Serve.audienceOf Serve.Examples.selfMsg.2 = some aud ∧
   have hno : (Serve.audienceOf Serve.Examples.selfMsg.2).any
       (Serve.seats · Examples.carol Serve.Examples.keyCarol) = false := by decide +kernel
   simp [ha, hs] at hno
+
+/-! ## Part 6: the apps (docs/apps/BUILD_M1.md §C)
+
+One section per lane. A lane edits only its own section, between its `BEGIN` and `END` lines. -/
+
+-- [BEGIN lane base] Part 6a: app messages and piece stores (BUILD_M1 §C.1)
+
+-- [END lane base]
+
+-- [BEGIN lane torrent] Part 6b: torrent (BUILD_M1 §C.2)
+
+-- [END lane torrent]
+
+-- [BEGIN lane git] Part 6c: git (BUILD_M1 §C.3)
+
+-- [END lane git]
 
 end Zrdt

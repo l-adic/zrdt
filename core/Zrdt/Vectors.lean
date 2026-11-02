@@ -1,4 +1,5 @@
 import Zrdt.Proto
+import Zrdt.Apps
 
 /-!
 # Test vectors (docs/PLAN.md §4 C, rungs 6 and 7)
@@ -34,6 +35,12 @@ The file holds:
 
 Each step states the status it must get; the `#guard`s below check them, and pin some reply
 bodies, when this file is built.
+
+**Protocol 5** (docs/apps/BUILD_M1.md). Every session runs through `Zrdt.Apps.session`, the
+dispatcher `zrdtd` runs; on protocol-4 requests it gives protocol 4's replies. Each lane owns two
+sections of this file, marked `[BEGIN lane <x>]` and `[END lane <x>]`: its sessions (before
+`sessions`) and its checks (after). A lane edits only its own sections; `sessions` already lists
+`baseSessions`, `torrentSessions` and `gitSessions`.
 -/
 
 namespace Zrdt.Vectors
@@ -1004,7 +1011,7 @@ def ffff : ByteArray := ⟨#[0xff, 0xff, 0xff, 0xff]⟩
 def fuzz : Array Step := #[
   raw "an empty payload" .empty .badRequest,
   raw "op 0x00" ⟨#[0x00]⟩ .unknownOp,
-  raw "op 0x17" ⟨#[0x17]⟩ .unknownOp,
+  raw "op 0x30" ⟨#[0x30]⟩ .unknownOp,
   raw "AUDIENCE with no body" ⟨#[0x11]⟩ .badRequest,
   raw "op 0xff with a body" ⟨#[0xff, 1, 2, 3]⟩ .unknownOp,
   raw "VERSION with a byte left over" ⟨#[0x01, 0x00]⟩ .badRequest,
@@ -1108,14 +1115,49 @@ def fuzz : Array Step := #[
     .badRequest,
   ask "HEADS c: the store is still empty" (.heads "c") .ok (some (.digests #[]))]
 
-/-- The sessions, each run on a fresh `zrdtd`. -/
+/-! ## Protocol-5 sessions (docs/apps/BUILD_M1.md §E)
+
+Each lane's sessions, and the protocol-5 statuses its sessions do not produce yet (`uncovered`:
+the lane empties its list as its sessions cover them; all three lists are empty at
+integration). -/
+
+-- [BEGIN lane base] sessions
+/-- Lane base's sessions (`pieces`: `CHANNEL`, `PIECES_BIND`, `PIECE_ACCEPT`, `PIECE_OPENING`,
+`PIECES_COMPLETE`, `ASSEMBLE`, the piece-key guard, and the torrent beat's repair at the frame
+level). -/
+def baseSessions : Array (String × Array Step) := #[]
+
+/-- Lane base's statuses that no session produces yet. -/
+def baseUncovered : List Code := [.badPiece, .badApp]
+-- [END lane base]
+
+-- [BEGIN lane torrent] sessions
+/-- Lane torrent's sessions (`torrent`: `BT_BUILD`, `BT_FILE`, and the torrent beat end to end). -/
+def torrentSessions : Array (String × Array Step) := #[]
+
+/-- Lane torrent's statuses that no session produces yet. -/
+def torrentUncovered : List Code := [.badName]
+-- [END lane torrent]
+
+-- [BEGIN lane git] sessions
+/-- Lane git's sessions (`git`: `GIT_PREPARE`, `GIT_OBJECTS`, `GIT_VIEW`, and the git beat: P1,
+forced P2, equal views, `GATE`, the share S, P3, and `ROOT`). -/
+def gitSessions : Array (String × Array Step) := #[]
+
+/-- Lane git's statuses that no session produces yet. -/
+def gitUncovered : List Code := [.pushRefused, .badObjects, .openingsMissing]
+-- [END lane git]
+
+/-- The sessions, each run on a fresh `zrdtd`: protocol 4's, then each lane's. -/
 def sessions : Array (String × Array Step) :=
   #[("tour", tour), ("tooLarge", tooLargeSteps), ("acceptRecord", acceptRecordSteps),
-    ("join", joinSteps), ("view", viewSteps), ("boundary", boundarySteps), ("fuzz", fuzz)]
+    ("join", joinSteps), ("view", viewSteps), ("boundary", boundarySteps), ("fuzz", fuzz)] ++
+    baseSessions ++ torrentSessions ++ gitSessions
 
-/-- The replies of a session's steps; `build` is the build text of `VERSION`. -/
-def replies (steps : Array Step) (build : String := buildId) : List ByteArray :=
-  session (steps.map (·.request)).toList build
+/-- The replies of a session's steps, from the protocol-5 dispatcher `zrdtd` runs; `build` is the
+build text of `VERSION`. -/
+def replies (steps : Array Step) (build : String := Apps.buildId) : List ByteArray :=
+  Apps.session (steps.map (·.request)).toList build
 
 /-- Whether every step of a session gets its status, and its whole reply where one is pinned. -/
 def sessionOk (steps : Array Step) : Bool :=
@@ -1135,9 +1177,28 @@ def failures : List String :=
   sessions.any fun (_, steps) => steps.any fun s => s.request[0]? == some (i + 1).toUInt8
 
 -- Every status except `COLLISION` appears in some session: as the status of a reply, or for
--- `EPHEMERAL` and `IGNORED`, as the result of an `ACCEPT_VIEW` entry.
-#guard (Code.all.filter (· ∉ [.collision, .ephemeral, .ignored])).all fun c =>
+-- `EPHEMERAL` and `IGNORED`, as the result of an `ACCEPT_VIEW` entry. Protocol-5 statuses a lane
+-- has not covered yet are listed in its `uncovered` list.
+#guard (Code.all.filter (· ∉ [.collision, .ephemeral, .ignored] ++ baseUncovered ++
+    torrentUncovered ++ gitUncovered)).all fun c =>
   sessions.any fun (_, steps) => steps.any (·.expect == c)
+#guard (baseUncovered ++ torrentUncovered ++ gitUncovered).all (· ∈ Code.v5)
+
+-- [BEGIN lane base] checks
+-- Every base op appears in some session.
+#guard baseOpNames.all fun (b, _) => sessions.any fun (_, steps) => steps.any (·.request[0]? == some b)
+-- [END lane base]
+
+-- [BEGIN lane torrent] checks
+-- Every torrent op appears in some session.
+#guard torrentOpNames.all fun (b, _) =>
+  sessions.any fun (_, steps) => steps.any (·.request[0]? == some b)
+-- [END lane torrent]
+
+-- [BEGIN lane git] checks
+-- Every git op appears in some session.
+#guard gitOpNames.all fun (b, _) => sessions.any fun (_, steps) => steps.any (·.request[0]? == some b)
+-- [END lane git]
 #guard [Code.ephemeral, .ignored].all fun c =>
   (replies viewSteps).any fun r => r[0]? == some 0 && containsBytes r c.write
 
