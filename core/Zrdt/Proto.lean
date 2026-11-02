@@ -317,7 +317,30 @@ header is then authoritative for them. Until then docs/apps/BUILD_M1.md §B is t
 
 ### [BEGIN lane torrent] `BAD_NAME`; ops `0x20`-`0x27`
 
-(Not yet written.)
+Lane torrent, `Zrdt.Torrent`. A torrent is one file in a Signal group's channel `bt/files`
+(`AppBase.channelId sg "bt" "files"`): an announcement A with body `"zbt1"` and a piece store of
+its bytes. The **app manifest** (the descriptor's last field) is `"zbtF1"` ‖ name (`str`) ‖ `u64` L.
+A **name** is one path component (`Torrent.safeComponent`): 1-255 bytes of UTF-8; not `.` or `..`;
+no `/ \ : < > " | ? *`, NUL, byte below `0x20` or DEL; no leading or trailing space or dot; not
+CON, PRN, AUX, NUL, COM1-9 or LPT1-9 in any case, with or without an extension.
+
+`BAD_NAME` (`0x0E`): empty body; the name is not a safe path component.
+
+| Op | Name | Request body | Reply |
+|---|---|---|---|
+| `0x20` | `BT_BUILD` | channel (`group`) ‖ author (`aci`) ‖ store `nonce` ‖ `u8` k ‖ audience (`bytes`) ‖ name (`str`) ‖ pointers (`bytes`) ‖ stream (`bytes`) | `OK`: A's committed bytes (`bytes`) ‖ the piece digests in index order (`u32` N ‖ N `digest`s); `BAD_NAME`; `BAD_APP` 6 |
+| `0x21` | `BT_FILE` | piece key (`str`) | `OK`: name (`str`) ‖ `u64` L; `BAD_APP` 7 (another app's store), 5 (the manifest does not parse, or is not exactly that of its name and of the descriptor's L); `BAD_NAME`; `NO_CHAT` |
+
+`0x22`-`0x27` are reserved. Both ops only read the state.
+
+**`BT_BUILD`** is pure. It refuses an unsafe name (`BAD_NAME`), then (`BAD_APP` 6) k ∉ {20, 10},
+an empty stream or one over 64 pieces, pointers over 16 KiB, and an audience `ACCEPT` would refuse.
+Its message is `AppBase.appMessage` of: the audience; app `"bt"`; channel `"files"`; body `"zbt1"`;
+the descriptor (store nonce, L, k, the piece digests, the app manifest); the pointers if not empty.
+The digest of piece i is that of `AppBase.pieceRecord` of slice i under the context any bind of A
+gives (channel, author, store nonce, audience). Before it answers, it reads the message back as
+`PIECES_BIND` will (`appHeader`, `committedBytes`, `Descriptor.parse`, the limits) and refuses
+(`BAD_APP` 6) if any check fails, so an `OK` always binds.
 
 ### [END lane torrent]
 
@@ -402,7 +425,7 @@ def baseOpNames : List (UInt8 × String) := []
 
 -- [BEGIN lane torrent] op names, 0x20-0x27
 /-- Lane torrent's op names (`Zrdt.Torrent`). -/
-def torrentOpNames : List (UInt8 × String) := []
+def torrentOpNames : List (UInt8 × String) := [(0x20, "BT_BUILD"), (0x21, "BT_FILE")]
 #guard torrentOpNames.all fun (b, _) => 0x20 ≤ b && b ≤ 0x27
 -- [END lane torrent]
 

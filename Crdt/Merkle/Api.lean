@@ -1045,6 +1045,47 @@ One section per lane. A lane edits only its own section, between its `BEGIN` and
 
 -- [BEGIN lane torrent] Part 6b: torrent (BUILD_M1 §C.2)
 
+/-! ### Part 6b: piece stores and the torrent (lane torrent)
+
+The advertised statements of BUILD_M1 §C.4 for lane torrent, in the namespace `Zrdt.Apps`, each a
+restatement of a theorem about the shipped code (`core/Zrdt/PieceProofs.lean`) with the collision
+spelled out:
+
+* `Apps.assemble_unique`: everyone who completes holds the same bytes. Two streams that pass
+  `assembleOk` under contexts bound (`bindCtx`) from announcements with one digest are equal, or
+  SHA-256 has a collision.
+* `Apps.btBuild_complete`: the author's own announcement makes her file fetchable. Any bind of
+  the announcement that `BT_BUILD` built accepts exactly her stream, under the piece digests
+  `BT_BUILD` returned.
+
+What they mean depends on, beyond Part 4's list: `bindCtx`, `assembleOk`, `pieceOk`,
+`pieceRecord`, `pieceMessage`, `slice`, `pieceLen`, `pieceCount`, `appOf`, `appHeader`,
+`Descriptor.parse` (`core/Zrdt/AppBase.lean`) and `btBuild` (`core/Zrdt/Torrent.lean`). -/
+
+/-- **Everyone who completes holds the same bytes** (BUILD_M1 §A.1, §C.2). Two devices bind
+announcements with one digest, each with whatever Signal group, app and opening it was given, and
+each accepts a stream with `assembleOk` (every slice is the piece the announcement committed for
+its index, and the length is L). Then the two streams are equal, or SHA-256 has a collision. -/
+theorem Apps.assemble_unique {sg₁ sg₂ : GroupId} {p₁ p₂ o₁ o₂ s₁ s₂ : ByteArray} {A₁ A₂ : Rec}
+    {c₁ c₂ : AppBase.PieceCtx} (hA : hashRecord A₁ = hashRecord A₂)
+    (h₁ : AppBase.bindCtx sg₁ p₁ A₁ o₁ = .ok c₁) (h₂ : AppBase.bindCtx sg₂ p₂ A₂ o₂ = .ok c₂)
+    (hs₁ : AppBase.assembleOk c₁ s₁ = true) (hs₂ : AppBase.assembleOk c₂ s₂ = true) :
+    s₁ = s₂ ∨ ∃ x y : ByteArray, x ≠ y ∧ sha256 x = sha256 y :=
+  PieceProofs.assemble_unique hA h₁ h₂ hs₁ hs₂
+
+/-- **The author's own announcement makes her file fetchable** (BUILD_M1 §B.6, §C.2). `BT_BUILD`
+returned A's committed bytes `msg` and the piece digests `ord` for the stream `s` (channel `ch`,
+author `a`, store nonce `nc`, pieces of 2^`e` bytes). Commit `msg` with any nonce `n` and any
+links `ls` (A's record), and bind it in any Signal group: the context accepts `s`, and its piece
+digests are `ord`. -/
+theorem Apps.btBuild_complete {ch sg : GroupId} {a : Aci} {nc n : Nonce} {e : Nat}
+    {aud ptrs s msg : ByteArray} {name : String} {ord : Array Digest} {ls : Array Digest}
+    {ctx : AppBase.PieceCtx} (hb : Torrent.btBuild ch a nc e aud name ptrs s = .ok (msg, ord))
+    (hbind : AppBase.bindCtx sg AppBase.appTorrent
+      (Rec.make ch (AppBase.commitOf ch a n msg) ls a) (n.bytes ++ msg) = .ok ctx) :
+    AppBase.assembleOk ctx s = true ∧ ctx.desc.ordered = ord :=
+  Torrent.btBuild_complete hb hbind
+
 -- [END lane torrent]
 
 -- [BEGIN lane git] Part 6c: git (BUILD_M1 §C.3)
