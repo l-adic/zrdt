@@ -277,9 +277,9 @@ Replies (every op can also reply `BAD_REQUEST`):
   record stored in the merged store that has none recorded; a recorded audience stays
   (`run_merge_audiences`). `ENCODE` writes only well-formed audiences, which is every one `zrdtd`
   records (`Serve.audienceOf_valid`).
-- `VERSION`: the protocol is 4. The build text names the package version and the first 16 hex
-  digits of SHA-256 over the Lean sources of the modules `zrdtd` runs, `Zrdtd/Main.lean`
-  included (`buildIdOf`).
+- `VERSION`: the protocol is 5 (protocol 4's layouts unchanged, and the apps' below). The build
+  text names the package version and the first 16 hex digits of SHA-256 over the Lean sources of
+  the modules `zrdtd` runs, `Zrdtd/Main.lean` included (`buildIdOf`).
 
 ## The table of open stores
 
@@ -303,8 +303,8 @@ the merged store shares most of its tree with it.
 `zrdtd` answers with `Zrdt.Apps.handle`, which runs every protocol-4 request as above (on a piece
 key, see `Zrdt.Apps`) and sends op bytes `0x17`-`0x2F` to the apps: lane base `0x17`-`0x1F`
 (`Zrdt.AppBase`), lane torrent `0x20`-`0x27` (`Zrdt.Torrent`), lane git `0x28`-`0x2F`
-(`Zrdt.Git`). Op bytes `0x00` and `0x30`-`0xFF` stay unknown. Until lane base switches
-`protocolVersion` to 5, `VERSION` says 4 and no protocol-5 op is defined.
+(`Zrdt.Git`). Op bytes `0x00` and `0x30`-`0xFF` stay unknown, and so does an op byte of a lane's
+range that the lane does not define. `VERSION` says 5.
 
 Each lane writes the byte layouts of its ops here, in its own section, when its code lands; this
 header is then authoritative for them. Until then docs/apps/BUILD_M1.md §B is the reference.
@@ -396,7 +396,9 @@ One list per lane, `(op byte, name)`, each in its own section; only the owning l
 
 -- [BEGIN lane base] op names, 0x17-0x1F
 /-- Lane base's op names (`Zrdt.AppBase`). -/
-def baseOpNames : List (UInt8 × String) := []
+def baseOpNames : List (UInt8 × String) :=
+  [(0x17, "CHANNEL"), (0x18, "PIECES_BIND"), (0x19, "PIECE_ACCEPT"), (0x1A, "PIECE_OPENING"),
+    (0x1B, "PIECES_COMPLETE"), (0x1C, "ASSEMBLE")]
 #guard baseOpNames.all fun (b, _) => 0x17 ≤ b && b ≤ 0x1F
 -- [END lane base]
 
@@ -431,8 +433,10 @@ Version 3 (docs/JOIN_PLAN.md §10.2): an opening must carry an audience (`NO_AUD
 `AUDIENCE`, `SERVE`, `ADDRESSED`, `ACCEPT_VIEW`, `LINKABLE` and `NEW_RELATIVE` are new; store
 blobs are `zrdtS3`. Version 4: `ACCEPT` always takes the opening (a live record always has its
 audience recorded); `ACCEPT_VIEW` takes a mode (catch-up or per-digest) and the host's pending
-records, and in per-digest mode keeps only the boundary digests a stored record links. -/
-def protocolVersion : Nat := 4
+records, and in per-digest mode keeps only the boundary digests a stored record links. Version 5
+(docs/apps/BUILD_M1.md): the apps' ops from `0x17` and statuses `0x0C`-`0x12`; every protocol-4
+layout is unchanged. -/
+def protocolVersion : Nat := 5
 
 /-! ## Writing fields -/
 

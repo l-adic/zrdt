@@ -76,7 +76,9 @@ def Request.parse (payload : ByteArray) : Except Proto.Code Request :=
       | none => .error .badRequest
   else .error .badRequest
 
-#guard (match Request.parse ⟨#[0x17]⟩ with | .error .unknownOp => true | _ => false)
+-- A base op with no body cannot be read; a reserved base op byte, and 0x30, are unknown.
+#guard (match Request.parse ⟨#[0x17]⟩ with | .error .badRequest => true | _ => false)
+#guard (match Request.parse ⟨#[0x1D]⟩ with | .error .unknownOp => true | _ => false)
 #guard (match Request.parse ⟨#[0x30]⟩ with | .error .unknownOp => true | _ => false)
 #guard (match Request.parse ⟨#[0x01]⟩ with | .ok (.v4 .version) => true | _ => false)
 
@@ -121,13 +123,62 @@ def step (build : String) (s : State) (payload : ByteArray) : ByteArray × State
   | .ok q => let (r, s') := run build s q; (r.write, s')
   | .error c => (c.write, s)
 
+/-! ## What the dispatcher guarantees (BUILD_M1 §C.1) -/
+
+/-- **The dispatcher keeps protocol 4.** A protocol-4 request that names no piece key runs on the
+chats exactly as `Proto.run` runs it, so every protocol-4 theorem (`Proto.run_serve_content`,
+`Proto.accept_accepted`, ...) holds under protocol 5. -/
+theorem runV4_chats {build : String} {s : AppBase.State} {q : Proto.Request}
+    (h : ∀ c b, chatKey? q = some (c, b) → s.pieces.contains c = false) :
+    runV4 build s q =
+      ((Proto.run build s.chats q).1, { s with chats := (Proto.run build s.chats q).2 }) := by
+  unfold runV4
+  split
+  · rename_i c ro hk
+    rw [h c ro hk]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+  · rfl
+
+/-- **The piece-key guard.** A protocol-4 request that would change a store, on a piece key, changes
+nothing, unless it is `CLOSE`: only lane base's ops fill a piece store. -/
+theorem runV4_pieces_mutating {build : String} {s : AppBase.State} {q : Proto.Request} {c : String}
+    (hk : chatKey? q = some (c, false)) (hp : s.pieces.contains c = true)
+    (hc : ∀ c', q ≠ .close c') : (runV4 build s q).2 = s := by
+  unfold runV4
+  rw [hk]
+  simp only [hp, ↓reduceIte, Bool.false_eq_true]
+  split
+  · rename_i c'; exact absurd rfl (hc c')
+  all_goals rfl
+
+/-- A read-only protocol-4 request on a piece key runs on the piece stores, as `Proto.run` runs it,
+and changes nothing (piece repair is per-digest `SERVE` on the piece key). -/
+theorem runV4_pieces_reading {build : String} {s : AppBase.State} {q : Proto.Request} {c : String}
+    (hk : chatKey? q = some (c, true)) (hp : s.pieces.contains c = true) :
+    runV4 build s q = ((Proto.run build s.pieces q).1, s) := by
+  unfold runV4
+  rw [hk]
+  simp only [hp, ↓reduceIte]
+
+/-- **`CHANNEL` is `channelId`**, and changes nothing. -/
+theorem run_channel {build : String} {s s' : AppBase.State} {sg g : GroupId} {p n : String}
+    (h : run build s (.base (.channel sg p n)) = (.base (.channel g), s')) :
+    g = AppBase.channelId sg p.toUTF8 n.toUTF8 ∧ s' = s := by
+  simp only [run] at h
+  cases hr : AppBase.run s (.channel sg p n) with
+  | mk r t =>
+    rw [hr] at h
+    simp only [Prod.mk.injEq, Reply.base.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact AppBase.run_channel hr
+
 /-! ## The build -/
 
 /-- The Lean sources of the protocol-5 modules, read when this file is compiled. It imports them
 all, so a change to any of them rebuilds it. -/
 def sources : List String := [
-  include_str "AppBase.lean", include_str "Torrent.lean", include_str "Git.lean",
-  include_str "Apps.lean"]
+  include_str "AppBase/Wire.lean", include_str "AppBase.lean", include_str "Torrent.lean",
+  include_str "Git.lean", include_str "Apps.lean"]
 
 /-- The build text of `VERSION`: `Proto.buildIdOf` over these sources and then `mainSource` (the
 source of `Zrdtd/Main.lean`), so it covers every module `zrdtd` runs. -/
@@ -141,14 +192,14 @@ def session (payloads : List ByteArray) (build : String := buildId) : List ByteA
   (payloads.foldl (fun (out, s) p => let (r, s') := step build s p; (r :: out, s'))
     (([] : List ByteArray), ({} : State))).1.reverse
 
--- Protocol-4 payloads get protocol 4's replies.
+-- Protocol-4 payloads get protocol 4's replies (but `VERSION`'s, whose protocol is 5).
 open Examples in
 #guard session [(Proto.Request.new "c" group).write,
     (Proto.Request.acceptRecord "c" (encode a1) none).write,
-    (Proto.Request.heads "c").write, ⟨#[0x17]⟩, ⟨#[0x2A, 1]⟩] ==
+    (Proto.Request.heads "c").write, ⟨#[0x1D]⟩, ⟨#[0x30, 1]⟩] ==
   Proto.session [(Proto.Request.new "c" group).write,
     (Proto.Request.acceptRecord "c" (encode a1) none).write, (Proto.Request.heads "c").write,
-    ⟨#[0x17]⟩, ⟨#[0x2A, 1]⟩] buildId
+    ⟨#[0x1D]⟩, ⟨#[0x30, 1]⟩] buildId
 
 /-! ## The daemon's state -/
 
