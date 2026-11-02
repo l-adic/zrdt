@@ -1293,11 +1293,106 @@ def baseUncovered : List Code := []
 -- [END lane base]
 
 -- [BEGIN lane torrent] sessions
+/-! ### Lane torrent: the `torrent` session
+
+Group "Camping": Alice shares `trip.mp4`, 5600 bytes in pieces of 1 KiB (k = 10, so the vectors
+stay small): six pieces, the last one 480 bytes. Every request body is written by
+`Torrent.Request.write`; the replies are pinned where the session is the reference for the host
+(`BT_BUILD`'s message and digests, `COMMIT`, `ACCEPT`, the refusals' bodies). -/
+
+/-- A step from a torrent request. -/
+def askT (name : String) (q : Torrent.Request) (expect : Code)
+    (reply? : Option Torrent.Reply := none) : Step :=
+  { name, request := q.write, expect, reply? := reply?.map (·.write) }
+
+/-- Dave's identity key. -/
+def keyDave : ByteArray := Serve.Examples.idKey 4
+
+/-- Camping's members, each with the key Alice holds for them. -/
+def campers : Array (Aci × Option ByteArray) :=
+  #[(alice, some keyAlice), (bob, some keyBob), (carol, some keyCarol),
+    (Serve.Examples.dave, some keyDave)]
+
+/-- `AUDIENCE`'s value for Camping. -/
+def campAud : ByteArray :=
+  match audienceReply campers with
+  | .audience b => b
+  | _ => .empty
+
+/-- Camping's torrent channel: `channelId(group, "bt", "files")`. -/
+def campChannel : GroupId := AppBase.channelId group AppBase.appTorrent AppBase.channelTorrent
+
+/-- The file: 5600 bytes. -/
+def tripStream : ByteArray := ⟨(Array.range 5600).map fun i => (i * 7 + i / 256).toUInt8⟩
+
+/-- The store nonce Alice's host picks. -/
+def tripStoreNonce : Nonce := Serve.Examples.nonceOf 0x51
+
+/-- The commitment nonce of A (`ZrdtMeta.nonce`). -/
+def tripNonce : Nonce := Serve.Examples.nonceOf 0x52
+
+/-- `BT_BUILD`'s answer for the file. -/
+def tripBuilt : ByteArray × Array Digest :=
+  match Torrent.btBuild campChannel alice tripStoreNonce AppBase.testPieceExp campAud "trip.mp4"
+      .empty tripStream with
+  | .ok r => r
+  | .error _ => (.empty, #[])
+
+/-- A's committed bytes. -/
+def tripMsg : ByteArray := tripBuilt.1
+
+/-- A's piece digests, in index order. -/
+def tripOrd : Array Digest := tripBuilt.2
+
+/-- A's commitment and opening (`COMMIT`). -/
+def tripOpened : Digest × ByteArray :=
+  (commitWithOpening campChannel alice tripNonce tripMsg).getD (Digest.zero, .empty)
+
+/-- The announcement record A: in Camping's torrent channel, no links (the channel is empty). -/
+def tripA : Rec := Rec.make campChannel tripOpened.1 #[] alice
+
+#guard tripOrd.size == 6 && tripMsg.size > 0 && tripOpened.2.size > 32
+
+/-- The torrent beat at the frame level: `BT_BUILD`, the announcement in the channel, and every
+refusal of `BT_BUILD` and `BT_FILE` that needs no piece store. -/
+def torrentSteps : Array Step := #[
+  ask "AUDIENCE Camping: Alice, Bob, Carol, Dave" (.audience campers) .ok
+    (some (.audience campAud)),
+  askT "BT_BUILD trip.mp4 (5600 bytes, k = 10): A's committed bytes and six piece digests"
+    (.build campChannel alice tripStoreNonce 10 campAud "trip.mp4" .empty tripStream) .ok
+    (some (.built tripMsg tripOrd)),
+  ask "COMMIT A's committed bytes, as the host passes field 205" (.commit campChannel alice tripNonce
+    tripMsg) .ok (some (.committed tripOpened.1 tripOpened.2)),
+  ask "NEW alice/bt: Camping's torrent channel" (.new "alice/bt" campChannel) .ok,
+  ask "ACCEPT A with its opening into the channel" (.accept "alice/bt" (.ofRec tripA) tripOpened.2)
+    .ok (some (.accept tripA (.accepted (hashRecord tripA)))),
+  askT "BT_FILE on a channel key: no piece store" (.file "alice/bt") .noChat
+    (some .noChat),
+  askT "BT_FILE on an unknown key" (.file "nobody") .noChat,
+  askT "BT_BUILD a/b: a slash" (.build campChannel alice tripStoreNonce 10 campAud "a/b" .empty
+    tripStream) .badName (some .badName),
+  askT "BT_BUILD Con.txt: a reserved name of Windows" (.build campChannel alice tripStoreNonce 10
+    campAud "Con.txt" .empty tripStream) .badName,
+  askT "BT_BUILD .trip: a leading dot" (.build campChannel alice tripStoreNonce 10 campAud ".trip"
+    .empty tripStream) .badName,
+  askT "BT_BUILD with k = 12: limits" (.build campChannel alice tripStoreNonce 12 campAud
+    "trip.mp4" .empty tripStream) .badApp (some (.badApp .limits)),
+  askT "BT_BUILD of an empty file: limits" (.build campChannel alice tripStoreNonce 10 campAud
+    "trip.mp4" .empty .empty) .badApp (some (.badApp .limits)),
+  askT "BT_BUILD with an audience ACCEPT would refuse: limits" (.build campChannel alice
+    tripStoreNonce 10 (campAud.extract 0 31) "trip.mp4" .empty tripStream) .badApp,
+  raw "BT_BUILD cut short: bad request"
+    ((Torrent.Request.build campChannel alice tripStoreNonce 10 campAud "x" .empty
+      ⟨#[1, 2, 3]⟩).write.extract 0 200) .badRequest,
+  raw "BT_FILE with a byte left over: bad request"
+    ((Torrent.Request.file "alice/bt").write.push 0) .badRequest,
+  raw "op 0x22 (reserved for torrent): unknown op" ⟨#[0x22]⟩ .unknownOp]
+
 /-- Lane torrent's sessions (`torrent`: `BT_BUILD`, `BT_FILE`, and the torrent beat end to end). -/
-def torrentSessions : Array (String × Array Step) := #[]
+def torrentSessions : Array (String × Array Step) := #[("torrent", torrentSteps)]
 
 /-- Lane torrent's statuses that no session produces yet. -/
-def torrentUncovered : List Code := [.badName]
+def torrentUncovered : List Code := []
 -- [END lane torrent]
 
 -- [BEGIN lane git] sessions

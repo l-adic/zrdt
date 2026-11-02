@@ -660,6 +660,34 @@ info: 'Crdt.AuthorityFrontier.ccca_safe_world_no_double_availability' depends on
 
 -- [BEGIN lane torrent]
 
+-- Lane torrent's advertised statements (`Crdt/Merkle/Api.lean`, Part 6b).
+
+/-- info: 'Zrdt.Apps.assemble_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Apps.assemble_unique
+
+/-- info: 'Zrdt.Apps.btBuild_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Apps.btBuild_complete
+
+-- Lane torrent's proof obligations (BUILD_M1 §C.2), about the shipped code (`core/`).
+
+/-- info: 'Zrdt.PieceProofs.pieceOk_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.PieceProofs.pieceOk_unique
+
+/-- info: 'Zrdt.PieceProofs.bindCtx_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.PieceProofs.bindCtx_unique
+
+/-- info: 'Zrdt.PieceProofs.assemble_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.PieceProofs.assemble_unique
+
+/-- info: 'Zrdt.Torrent.btBuild_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Torrent.btBuild_complete
+
+/-- info: 'Zrdt.Torrent.btBuild_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Torrent.btBuild_binds
+
+/-- info: 'Zrdt.Torrent.run_btFile' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Zrdt.Torrent.run_btFile
+
 -- [END lane torrent]
 
 -- [BEGIN lane git]

@@ -7,13 +7,16 @@ import Zrdt.Torrent
 import Zrdt.PieceProofs
 
 /-!
-# The apps, lane torrent: proofs with Mathlib (docs/apps/BUILD_M1.md §C.2)
+# The apps, lane torrent: the bridge to the proofs package (docs/apps/BUILD_M1.md §C.2)
 
-**Owner: lane torrent.** Proofs about torrent and piece stores that need the spec model (`abs`,
-`fetched_agree`, the `RelStore` model) or `Zrdt.encode_injective`. Statements for which Init and Std
-suffice live in `core/Zrdt/Torrent.lean` and `core/Zrdt/PieceProofs.lean`. `Crdt/Merkle/Api.lean`
-imports this file and states lane torrent's advertised statements in its section `[lane torrent]` (a
-proof that needs `CheckedStore.agree` or another statement of `Api.lean` goes there), so this file
-must not import `Api.lean`. Add `import Mathlib` and the `Crdt.Merkle` modules you need.
-Empty in the skeleton.
+**Owner: lane torrent.** Every statement of lane torrent is proved about the shipped code in
+`core/` with Init and Std only (`core/Zrdt/PieceProofs.lean`, namespaces `Zrdt.PieceProofs` and
+`Zrdt.Torrent`), so none needs Mathlib or the spec model. `Crdt/Merkle/Api.lean` (Part 6b)
+restates the advertised ones in the namespace `Zrdt.Apps` with the collision spelled out, and
+`Test/Axioms.lean` pins them; this module only brings `core`'s torrent modules into the root
+package for `Api.lean`.
+
+A piece store is a `CheckedStore` like any chat, so the spec-level statements of Parts 1 to 3
+(`fetched`, `agree`, ...) hold of it unchanged. A complete store's heads are `{F}`, whose digest
+the announcement A already fixes, so `agree` adds nothing beyond `assemble_unique` (BUILD_M1 §A.1).
 -/
