@@ -15,6 +15,15 @@ of the history. The checks are written in Lean 4 without Mathlib, proved in Lean
 and compiled into `zrdtd`, a small program that runs beside a Signal-Desktop fork and checks every
 record the fork sends or receives.
 
+**The Signal integration happens in a separate repository:
+[l-adic/signal-desktop-zrdt](https://github.com/l-adic/signal-desktop-zrdt)** (branch `zrdt`), a
+fork of Signal-Desktop v8.33.0 that includes this repository as its `zrdt` submodule. The fork
+hooks every group message on send and receive, hands it to `zrdtd`, and shows the result: the
+short codes, the compare dialog, the gap rows, the "relayed by" and "confirmed by" labels, and the
+restore and import screens. The GUI demo with the villain server runs there too
+(`make install && make run` in the fork). This repository holds the Lean spec, the proofs and
+`zrdtd` itself.
+
 Late joiners are included (protocol 4): a member added after the chat starts holds bare
 digests, a boundary, for the older messages he was not sent (`Zrdt.RelStore`), each message
 commits to its author's list of recipients, and a member's reply carries content only to those
@@ -200,7 +209,7 @@ silicon). `make install` fetches the Mathlib build cache, runs `lake build` (pro
 gate) and builds `zrdtd`: about 4.5 minutes from a fresh clone on a 32-core Linux machine
 (measured with the Mathlib cache already in `~/.cache/mathlib`; downloading it adds about
 1 GB). `make run` re-runs the axiom gate, replays the 133 test vectors against `zrdtd` and
-round-trips a 1000-record chat through it, in about 10 seconds. The GUI demo (Signal Desktop with zrdt) is in `l-adic/signal-desktop-zrdt`, branch
+round-trips a 1000-record chat through it, in about 10 seconds. The GUI demo (Signal Desktop with zrdt) is in [`l-adic/signal-desktop-zrdt`](https://github.com/l-adic/signal-desktop-zrdt), branch
 `zrdt`: `make install && make run` there (macOS on Apple silicon).
 
 ## Build and check
